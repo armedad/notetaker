@@ -1,0 +1,1 @@
+"""Notetaker application package."""

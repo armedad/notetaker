@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notetaker</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <div class="title-row">
+          <h1>Notetaker</h1>
+          <span id="version-badge" class="version-badge">v0.0.0.0</span>
+        </div>
+        <p class="subtitle">Local audio capture configuration</p>
+      </header>
+
+      <section class="panel">
+        <h2>Audio Devices</h2>
+        <div class="row">
+          <label for="device-select">Input device</label>
+          <select id="device-select"></select>
+        </div>
+        <div class="row">
+          <label for="samplerate">Sample rate</label>
+          <input id="samplerate" type="number" value="48000" min="8000" step="1000" />
+        </div>
+        <div class="row">
+          <label for="channels">Channels</label>
+          <input id="channels" type="number" value="2" min="1" max="8" />
+        </div>
+        <div class="actions">
+          <button id="refresh-devices">Refresh devices</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Recording</h2>
+        <div class="status" id="recording-status">Status: unknown</div>
+        <div class="status error" id="status-error"></div>
+        <div class="actions">
+          <button id="start-recording">Start recording</button>
+          <button id="stop-recording" class="secondary">Stop recording</button>
+        </div>
+        <div class="output" id="recording-output"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Health</h2>
+        <div class="status" id="health-status">Checking...</div>
+      </section>
+
+      <section class="panel">
+        <h2>Console Errors</h2>
+        <div class="output" id="log-output">No errors yet.</div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
