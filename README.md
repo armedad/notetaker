@@ -7,11 +7,12 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 **Phase 0 complete** — basic FastAPI skeleton.
 
 **What works right now:**
-- Server starts on localhost:8000
-- Root endpoint returns a health message
+- Server starts on localhost:6684
+- Root endpoint returns a health message + version
 - `/api/health` returns status JSON
 - Audio devices listed via `/api/audio/devices`
 - Start/stop recording via `/api/recording/start` and `/api/recording/stop`
+- Local transcription via `/api/transcribe` (faster-whisper)
 
 **Try it:** `/Users/chee/projects/notetaker/notetaker.sh` → open http://localhost:6684
 
@@ -21,7 +22,7 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 
 **Launcher logs:** `/Users/chee/projects/notetaker/logs/launcher_YYYY-MM-DD_HH-MM-SS.log`
 
-**Next:** Phase 1 — audio capture foundation (verify + polish).
+**Next:** Phase 4 — live transcription during recording.
 
 ## Getting Started
 
@@ -37,4 +38,4 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 
 ## License
 
-Private
+Public

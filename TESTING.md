@@ -20,3 +20,19 @@
 5. Stop recording:
    - `curl -s -X POST http://127.0.0.1:6684/api/recording/stop`
 6. Verify a WAV file appears under `data/recordings/` and plays back with the recorded audio
+
+## Phase 3 — Transcription (API)
+
+1. Start the server: `/Users/chee/projects/notetaker/notetaker.sh`
+2. Record a short clip (Phase 1 steps) to produce a WAV file.
+3. Transcribe:
+   - `curl --max-time 120 -s -X POST http://127.0.0.1:6684/api/transcribe -H "Content-Type: application/json" -d '{"audio_path": "/Users/chee/projects/notetaker/data/recordings/<FILENAME>.wav"}'`
+4. Expected:
+   - JSON response with `segments` and timestamps
+
+## Phase 4 — Live Transcription (Planned)
+
+1. Start the server: `/Users/chee/projects/notetaker/notetaker.sh`
+2. Start recording with live transcription enabled.
+3. Speak and verify transcript updates within a few seconds.
+4. Stop recording and confirm final transcript completeness.

@@ -114,7 +114,31 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 
 ---
 
-## Phase 4: Speaker Diarization
+## Phase 4: Live Transcription During Recording
+
+**Goal:** Stream transcription while recording is in progress. Update UI as segments arrive.
+
+**Files to create/modify:**
+- `app/services/audio_capture.py` — add chunk export or tap
+- `app/services/transcription/live.py` — live transcription orchestrator
+- `app/routers/transcription.py` — start/stop live transcription endpoints
+- `app/static/app.js` — live transcript panel updates
+- `config.json` — live transcription settings (chunk size, model)
+
+**Done means:**
+- Can start recording + live transcription at the same time
+- Transcript updates incrementally while recording
+- Live transcription can be toggled on/off
+- Clean stop produces final transcript with timestamps
+
+**Test it:**
+1. Start live recording in UI
+2. Speak and verify transcript updates within a few seconds
+3. Stop recording; final transcript is complete and saved
+
+---
+
+## Phase 5: Speaker Diarization
 
 **Goal:** Identify different speakers in the transcript. Add speaker labels to segments.
 
@@ -136,7 +160,7 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 
 ---
 
-## Phase 5: SQLite Storage & Meeting Model
+## Phase 6: SQLite Storage & Meeting Model
 
 **Goal:** Persist meetings, transcripts, and metadata. Foundation for dashboard and history.
 
@@ -164,7 +188,7 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 
 ---
 
-## Phase 6: LLM Summarization
+## Phase 7: LLM Summarization
 
 **Goal:** Generate meeting summary and action items. Cloud when connected, local fallback.
 
@@ -197,7 +221,7 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 
 ---
 
-## Phase 7: Full Meeting UI
+## Phase 8: Full Meeting UI
 
 **Goal:** Complete web interface for viewing and managing meetings.
 
@@ -228,7 +252,7 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 
 ---
 
-## Phase 8: Markdown Export
+## Phase 9: Markdown Export
 
 **Goal:** Export meeting notes to markdown file for use outside the app.
 
@@ -251,7 +275,7 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 
 ---
 
-## Phase 9: Cloud Sharing
+## Phase 10: Cloud Sharing
 
 **Goal:** Generate shareable read-only links for meeting notes.
 
@@ -281,7 +305,7 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 
 ---
 
-## Phase 10: Polish & Robustness
+## Phase 11: Polish & Robustness
 
 **Goal:** Error handling, edge cases, logging, and overall polish.
 
@@ -312,7 +336,6 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 
 These are in the parking lot, to be planned when needed:
 
-- Live transcription during recording
 - Cloud transcription providers
 - Collaborative editing
 - Team workspaces
