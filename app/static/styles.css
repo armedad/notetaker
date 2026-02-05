@@ -118,3 +118,8 @@ button:disabled {
   white-space: pre-wrap;
   min-height: 32px;
 }
+
+.output.transcript {
+  max-height: 280px;
+  overflow-y: auto;
+}

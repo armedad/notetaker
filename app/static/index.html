@@ -47,6 +47,29 @@
       </section>
 
       <section class="panel">
+        <h2>Transcript</h2>
+        <div class="status" id="transcript-status">No transcript yet.</div>
+        <div class="row">
+          <label>
+            <input id="auto-transcribe" type="checkbox" checked />
+            Auto-transcribe after stop
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            <input id="stream-transcribe" type="checkbox" checked />
+            Stream transcript updates
+          </label>
+        </div>
+        <div class="actions">
+          <button id="transcribe-latest" class="secondary">
+            Transcribe latest recording
+          </button>
+        </div>
+        <div class="output transcript" id="transcript-output"></div>
+      </section>
+
+      <section class="panel">
         <h2>Health</h2>
         <div class="status" id="health-status">Checking...</div>
       </section>

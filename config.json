@@ -2,5 +2,11 @@
   "server": {
     "host": "127.0.0.1",
     "port": 6684
+  },
+  "transcription": {
+    "provider": "faster-whisper",
+    "model_size": "base",
+    "device": "cpu",
+    "compute_type": "int8"
   }
 }

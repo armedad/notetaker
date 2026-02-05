@@ -1,6 +1,7 @@
 const state = {
   devices: [],
   recording: false,
+  lastRecordingPath: null,
 };
 
 async function fetchJson(url, options = {}) {
@@ -25,6 +26,16 @@ function setStatus(message) {
 function setStatusError(message) {
   const statusError = document.getElementById("status-error");
   statusError.textContent = message;
+}
+
+function setTranscriptStatus(message) {
+  const status = document.getElementById("transcript-status");
+  status.textContent = message;
+}
+
+function setTranscriptOutput(message) {
+  const output = document.getElementById("transcript-output");
+  output.textContent = message;
 }
 
 function renderDevices() {
@@ -78,6 +89,9 @@ async function refreshRecordingStatus() {
   try {
     const data = await fetchJson("/api/recording/status");
     state.recording = data.recording;
+    if (data.file_path) {
+      state.lastRecordingPath = data.file_path;
+    }
     setStatus(
       data.recording
         ? `Recording ${data.recording_id} since ${data.started_at}`
@@ -126,11 +140,118 @@ async function startRecording() {
       }),
     });
     setOutput(`Recording started: ${data.recording_id}`);
+    if (data.file_path) {
+      state.lastRecordingPath = data.file_path;
+    }
     await refreshRecordingStatus();
   } catch (error) {
     setOutput(`Failed to start: ${error.message}`);
     setStatusError("Start recording failed. Check Console Errors below.");
   }
+}
+
+function buildTranscriptText(segments) {
+  return segments
+    .map((segment) => {
+      const start = segment.start.toFixed(2);
+      const end = segment.end.toFixed(2);
+      const speaker = segment.speaker ? `[${segment.speaker}] ` : "";
+      return `[${start}-${end}] ${speaker}${segment.text}`;
+    })
+    .join("\n");
+}
+
+async function transcribeLatest() {
+  const autoToggle = document.getElementById("auto-transcribe");
+  const streamToggle = document.getElementById("stream-transcribe");
+  if (!state.lastRecordingPath) {
+    setTranscriptStatus("No recording found yet.");
+    setTranscriptOutput("");
+    return;
+  }
+
+  setTranscriptStatus("Transcribing...");
+  setTranscriptOutput("");
+  try {
+    if (streamToggle.checked) {
+      await streamTranscription(state.lastRecordingPath);
+    } else {
+      const data = await fetchJson("/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio_path: state.lastRecordingPath }),
+      });
+      const transcriptText = buildTranscriptText(data.segments || []);
+      setTranscriptStatus(
+        `Transcript ready (${data.segments.length} segments, ${data.language || "unknown"}).`
+      );
+      setTranscriptOutput(transcriptText || "Transcript returned no segments.");
+    }
+  } catch (error) {
+    setTranscriptStatus(`Transcription failed: ${error.message}`);
+  } finally {
+    if (!autoToggle.checked) {
+      autoToggle.checked = false;
+    }
+  }
+}
+
+async function streamTranscription(audioPath) {
+  const segments = [];
+  let language = "unknown";
+  let done = false;
+
+  const response = await fetch("/api/transcribe/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ audio_path: audioPath }),
+  });
+
+  if (!response.ok || !response.body) {
+    const text = await response.text();
+    throw new Error(text || `Request failed: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  while (!done) {
+    const { value, done: streamDone } = await reader.read();
+    if (streamDone) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith("data:")) {
+        continue;
+      }
+      const payloadText = line.replace(/^data:\s*/, "");
+      if (!payloadText) {
+        continue;
+      }
+      const event = JSON.parse(payloadText);
+      if (event.type === "meta") {
+        language = event.language || "unknown";
+        setTranscriptStatus(`Transcribing... (${language})`);
+      } else if (event.type === "segment") {
+        segments.push(event);
+        setTranscriptOutput(buildTranscriptText(segments));
+      } else if (event.type === "done") {
+        done = true;
+      } else if (event.type === "error") {
+        throw new Error(event.message || "Transcription failed");
+      }
+    }
+  }
+
+  setTranscriptStatus(
+    `Transcript ready (${segments.length} segments, ${language}).`
+  );
 }
 
 async function stopRecording() {
@@ -141,7 +262,14 @@ async function stopRecording() {
       method: "POST",
     });
     setOutput(`Recording saved: ${data.file_path}`);
+    if (data.file_path) {
+      state.lastRecordingPath = data.file_path;
+    }
     await refreshRecordingStatus();
+    const autoToggle = document.getElementById("auto-transcribe");
+    if (autoToggle.checked) {
+      await transcribeLatest();
+    }
   } catch (error) {
     setOutput(`Failed to stop: ${error.message}`);
     setStatusError("Stop recording failed. Check Console Errors below.");
@@ -158,11 +286,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   document
     .getElementById("stop-recording")
     .addEventListener("click", stopRecording);
+  document
+    .getElementById("transcribe-latest")
+    .addEventListener("click", transcribeLatest);
 
   await refreshHealth();
   await refreshDevices();
   await refreshRecordingStatus();
   await refreshLogs();
+  setTranscriptStatus("No transcript yet.");
 
   setInterval(refreshLogs, 5000);
 });

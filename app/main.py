@@ -1,3 +1,4 @@
+import json
 import os
 
 from fastapi import FastAPI
@@ -6,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.routers.recording import create_recording_router
 from app.routers.logs import create_logs_router
+from app.routers.transcription import create_transcription_router
 from app.services.audio_capture import AudioCaptureService
 from app.services.logging_setup import configure_logging
 from app.services.crash_logging import enable_crash_logging
@@ -14,6 +16,11 @@ def create_app() -> FastAPI:
     configure_logging()
     enable_crash_logging()
     base_dir = os.path.dirname(__file__)
+    config_path = os.path.join(os.path.dirname(base_dir), "config.json")
+    config: dict = {}
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            config = json.load(config_file)
     version_path = os.path.join(os.path.dirname(base_dir), "VERSION.txt")
     version = "v0.0.0.0"
     if os.path.exists(version_path):
@@ -26,6 +33,7 @@ def create_app() -> FastAPI:
     audio_service = AudioCaptureService(recordings_dir=recordings_dir)
     app.include_router(create_recording_router(audio_service))
     app.include_router(create_logs_router())
+    app.include_router(create_transcription_router(config))
 
     @app.get("/")
     def root() -> dict:
