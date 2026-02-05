@@ -1,0 +1,120 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  background: #f4f6f8;
+  color: #111827;
+}
+
+.container {
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 0 24px;
+}
+
+header {
+  margin-bottom: 24px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 32px;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.version-badge {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1d4ed8;
+  background: #e0e7ff;
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+
+.subtitle {
+  margin: 0;
+  color: #6b7280;
+}
+
+.panel {
+  background: #ffffff;
+  padding: 20px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+input,
+select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  font-size: 14px;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+}
+
+button {
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button.secondary {
+  background: #6b7280;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.status {
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: #374151;
+}
+
+.status.error {
+  color: #b91c1c;
+  font-weight: 600;
+  min-height: 18px;
+}
+
+.output {
+  font-size: 13px;
+  color: #1f2937;
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 10px;
+  white-space: pre-wrap;
+  min-height: 32px;
+}
