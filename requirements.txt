@@ -3,5 +3,8 @@ uvicorn[standard]==0.30.6
 sounddevice==0.4.6
 soundfile==0.12.1
 numpy==1.26.4
-faster-whisper==1.0.3
+faster-whisper==1.1.0
+whisperx==3.3.1
 requests==2.32.4
+pyannote.audio==3.3.2
+python-multipart==0.0.9

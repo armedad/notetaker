@@ -28,13 +28,14 @@ echo "Version bumped to ${NEXT_VERSION}"
 
 mkdir -p "${DEST_DIR}"
 
-rsync -av \
+rsync -av --delete \
   --exclude ".git/" \
   --exclude "__pycache__/" \
   --exclude "*.pyc" \
   --exclude ".venv/" \
   --exclude "venv/" \
   --exclude "data/" \
+  --exclude "logs/" \
   "${SRC_DIR}/" "${DEST_DIR}/"
 
 echo "Deployed to ${DEST_DIR}"

@@ -47,4 +47,4 @@ curl --max-time 5 --connect-timeout 2 -s http://127.0.0.1:6684/api/recording/sta
    - `start_recording completed in ... ms`
    - `stop_recording received`
    - `stop_recording completed in ... ms`
-3. If missing, capture the new logs and follow `current-debug-session.md`.
+3. If missing, capture the new logs and follow `docs/debug/current-debug-session.md`.

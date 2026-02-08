@@ -1,6 +1,6 @@
 # Notetaker Implementation Plan
 
-Reference: `opportunity-assessment.md` for full spec and architecture.
+Reference: `docs/specs/opportunity-assessment.md` for full spec and architecture.
 
 ---
 
@@ -37,7 +37,7 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 - `app/services/audio_capture.py` — audio recording service
 - `app/routers/recording.py` — API endpoints for start/stop
 - `app/main.py` — register router
-- `README.md` — add audio device setup instructions
+- `docs/README.md` — add audio device setup instructions
 - `data/recordings/` — directory for audio files
 
 **Done means:**
@@ -160,20 +160,20 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 
 ---
 
-## Phase 6: SQLite Storage & Meeting Model
+## Phase 6: JSON Storage & Meeting Model
 
-**Goal:** Persist meetings, transcripts, and metadata. Foundation for dashboard and history.
+**Goal:** Persist meetings, transcripts, and metadata in JSON. Foundation for dashboard and history.
 
 **Files to create/modify:**
-- `app/models.py` — SQLAlchemy models (Meeting, TranscriptSegment)
-- `app/database.py` — database setup, session management
-- `app/services/meeting_service.py` — CRUD operations
+- `app/services/meeting_store.py` — JSON read/write store
 - `app/routers/meetings.py` — API endpoints
-- `app/main.py` — register router, init database
-- `data/notetaker.db` — SQLite database file
+- `app/routers/recording.py` — create meeting on stop
+- `app/routers/transcription.py` — attach transcript to meeting
+- `app/main.py` — register router
+- `data/meetings.json` — JSON storage file
 
 **Done means:**
-- Meetings saved to database after recording + transcription
+- Meetings saved to JSON after recording + transcription
 - Can list all meetings via API
 - Can retrieve single meeting with full transcript
 - Can update meeting title
@@ -314,7 +314,7 @@ Reference: `opportunity-assessment.md` for full spec and architecture.
 - `app/services/logging.py` — unified logging setup
 - `app/routers/*.py` — consistent error responses
 - `app/static/app.js` — error states in UI
-- `README.md` — complete setup and usage documentation
+- `docs/README.md` — complete setup and usage documentation
 
 **Done means:**
 - Graceful handling of: no audio device, transcription failure, LLM timeout, cloud upload failure
