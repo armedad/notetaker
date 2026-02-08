@@ -13,6 +13,10 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 - Audio devices listed via `/api/audio/devices`
 - Start/stop recording via `/api/recording/start` and `/api/recording/stop`
 - Local transcription via `/api/transcribe` (faster-whisper)
+- Optional diarization via config (WhisperX or pyannote)
+- JSON meeting storage via `/api/meetings`
+- Meeting summarization via `/api/meetings/{id}/summarize`
+- Markdown export via `/api/meetings/{id}/export`
 
 **Try it:** `/Users/chee/projects/notetaker/notetaker.sh` → open http://localhost:6684
 
@@ -22,7 +26,7 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 
 **Launcher logs:** `/Users/chee/projects/notetaker/logs/launcher_YYYY-MM-DD_HH-MM-SS.log`
 
-**Next:** Phase 4 — live transcription during recording.
+**Next:** Continue Phase 8 — full meeting UI + polish (cleanup main window complete).
 
 ## Getting Started
 
@@ -32,9 +36,9 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 
 ## Development
 
-- Source of truth: `opportunity-assessment.md`
-- Plan: `plan.md`
-- Agent instructions: `AGENTS.MD`
+- Source of truth: `docs/specs/opportunity-assessment.md`
+- Plan: `docs/plans/plan.md`
+- Agent instructions: `docs/AGENTS.MD`
 
 ## License
 

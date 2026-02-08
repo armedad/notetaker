@@ -8,6 +8,10 @@ PIDS=""
 PIDS="${PIDS} $(lsof -ti :6684 2>/dev/null || true)"
 PIDS="${PIDS} $(pgrep -f \"uvicorn run:app\" || true)"
 PIDS="${PIDS} $(pgrep -f \"run.py\" || true)"
+PIDS="${PIDS} $(pgrep -f \"notetaker\\.sh\" || true)"
+PIDS="${PIDS} $(pgrep -f \"bash .*notetaker\\.sh\" || true)"
+PIDS="${PIDS} $(pgrep -f \"sh .*notetaker\\.sh\" || true)"
+PIDS="${PIDS} $(pgrep -f \"zsh .*notetaker\\.sh\" || true)"
 
 PIDS="$(echo "${PIDS}" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')"
 

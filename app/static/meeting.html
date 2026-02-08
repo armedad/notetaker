@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meeting — Notetaker</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="container wide">
+      <header>
+        <div class="title-row">
+          <h1>Meeting</h1>
+          <span id="version-badge" class="version-badge">v0.0.0.0</span>
+        </div>
+        <p class="subtitle">Meeting view</p>
+        <div class="status error" id="global-error"></div>
+        <div class="status" id="global-busy"></div>
+      </header>
+
+      <section class="panel">
+        <div class="row">
+          <div class="meeting-nav">
+            <button id="back-home" class="secondary">Home</button>
+          </div>
+        </div>
+        <div class="row">
+          <label for="meeting-title">Meeting title</label>
+          <input id="meeting-title" type="text" placeholder="Meeting title" />
+        </div>
+        <div class="row">
+          <button id="save-title" class="secondary">Save title</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Attendees</h2>
+        <div class="row">
+          <label for="attendee-editor">Names (one per line)</label>
+          <textarea id="attendee-editor" rows="6" placeholder="Person 1&#10;Person 2"></textarea>
+        </div>
+        <div class="actions">
+          <button id="save-attendees" class="secondary">Save attendees</button>
+          <button id="export-meeting" class="secondary">Export Markdown</button>
+          <button id="delete-meeting" class="secondary">Delete meeting</button>
+        </div>
+      </section>
+
+      <section class="panel meeting-grid">
+        <div class="meeting-column">
+          <h2>Summary</h2>
+          <div class="status" id="summary-status">Summary will appear here.</div>
+          <div class="output" id="summary-output">No summary yet.</div>
+        </div>
+
+        <div class="meeting-column">
+          <h2>Transcript</h2>
+          <div class="status" id="transcript-status">No transcript yet.</div>
+          <div class="output transcript" id="transcript-output"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="row">
+          <button id="toggle-summary-debug" class="secondary">Debug summary parsing</button>
+        </div>
+        <div id="summary-debug-panel" class="summary-debug-panel" style="display: none;">
+          <div class="summary-debug-grid">
+            <div class="summary-debug-column">
+              <h3>Transcript streams</h3>
+              <label for="debug-done">Done</label>
+              <textarea id="debug-done" rows="6" readonly></textarea>
+              <label for="debug-draft">Draft</label>
+              <textarea id="debug-draft" rows="6" readonly></textarea>
+              <label for="debug-streaming">Streaming</label>
+              <textarea id="debug-streaming" rows="6" readonly></textarea>
+            </div>
+            <div class="summary-debug-column">
+              <h3>Summary streams</h3>
+              <label for="debug-summarized">Summarized</label>
+              <textarea id="debug-summarized" rows="6" readonly></textarea>
+              <label for="debug-interim">Interim</label>
+              <textarea id="debug-interim" rows="6" readonly></textarea>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/meeting.js"></script>
+  </body>
+</html>

@@ -12,61 +12,59 @@
         <div class="title-row">
           <h1>Notetaker</h1>
           <span id="version-badge" class="version-badge">v0.0.0.0</span>
+          <div class="header-actions">
+            <button id="settings-button" class="secondary">Settings</button>
+            <div class="header-menu-wrapper">
+              <button id="profile-toggle" class="secondary">Profile ▾</button>
+              <div class="header-menu" id="profile-menu">
+                <button id="menu-auth" class="secondary" disabled>Login (soon)</button>
+              </div>
+            </div>
+          </div>
         </div>
         <p class="subtitle">Local audio capture configuration</p>
+        <div class="status error" id="global-error"></div>
+        <div class="status" id="global-busy"></div>
       </header>
 
       <section class="panel">
-        <h2>Audio Devices</h2>
-        <div class="row">
-          <label for="device-select">Input device</label>
-          <select id="device-select"></select>
-        </div>
-        <div class="row">
-          <label for="samplerate">Sample rate</label>
-          <input id="samplerate" type="number" value="48000" min="8000" step="1000" />
-        </div>
-        <div class="row">
-          <label for="channels">Channels</label>
-          <input id="channels" type="number" value="2" min="1" max="8" />
-        </div>
-        <div class="actions">
-          <button id="refresh-devices">Refresh devices</button>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Recording</h2>
-        <div class="status" id="recording-status">Status: unknown</div>
-        <div class="status error" id="status-error"></div>
-        <div class="actions">
-          <button id="start-recording">Start recording</button>
-          <button id="stop-recording" class="secondary">Stop recording</button>
+        <div class="panel-header">
+          <div>
+            <h2>Recording</h2>
+            <div class="status" id="recording-status">Status: unknown</div>
+            <div class="status error" id="status-error"></div>
+            <div class="status" id="recording-settings-note"></div>
+          </div>
+          <div class="actions">
+            <button id="recording-toggle">Start recording</button>
+          </div>
         </div>
         <div class="output" id="recording-output"></div>
       </section>
 
       <section class="panel">
-        <h2>Transcript</h2>
-        <div class="status" id="transcript-status">No transcript yet.</div>
+        <h2>Recording source</h2>
         <div class="row">
-          <label>
-            <input id="auto-transcribe" type="checkbox" checked />
-            Auto-transcribe after stop
-          </label>
+          <label for="recording-source">Input source</label>
+          <select id="recording-source"></select>
         </div>
-        <div class="row">
-          <label>
-            <input id="stream-transcribe" type="checkbox" checked />
-            Stream transcript updates
-          </label>
-        </div>
-        <div class="actions">
-          <button id="transcribe-latest" class="secondary">
-            Transcribe latest recording
+        <div class="row" id="file-source-row">
+          <label for="test-audio-upload">Audio file</label>
+          <button id="file-picker-button" type="button" class="secondary">
+            Choose file
           </button>
+          <input id="test-audio-upload" type="file" class="file-input-hidden" />
+          <div class="status" id="test-audio-status">No file selected.</div>
         </div>
-        <div class="output transcript" id="transcript-output"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Meetings</h2>
+        </div>
+        <div class="row">
+          <div class="meeting-list" id="meeting-list"></div>
+        </div>
       </section>
 
       <section class="panel">

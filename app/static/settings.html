@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Settings — Notetaker</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <div class="title-row">
+          <h1>Settings</h1>
+          <span id="version-badge" class="version-badge">v0.0.0.0</span>
+        </div>
+        <p class="subtitle">Configure devices, transcription, and models</p>
+        <div class="status error" id="global-error"></div>
+        <div class="status" id="global-busy"></div>
+      </header>
+
+      <section class="panel">
+        <div class="actions">
+          <button id="back-home" class="secondary">Home</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Audio Devices</h2>
+        <div class="row">
+          <label for="device-select">Input device</label>
+          <select id="device-select"></select>
+        </div>
+        <div class="row">
+          <label for="samplerate">Sample rate</label>
+          <input id="samplerate" type="number" value="48000" min="8000" step="1000" />
+        </div>
+        <div class="row">
+          <label for="channels">Channels</label>
+          <input id="channels" type="number" value="2" min="1" max="8" />
+        </div>
+        <div class="actions">
+          <button id="refresh-devices">Refresh devices</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Transcription</h2>
+        <div class="row">
+          <label for="live-model-size">Live model size</label>
+          <select id="live-model-size">
+            <option value="tiny">tiny</option>
+            <option value="base" selected>base</option>
+            <option value="small">small</option>
+            <option value="medium">medium</option>
+            <option value="large-v3">large-v3</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="final-model-size">Final model size</label>
+          <select id="final-model-size">
+            <option value="tiny">tiny</option>
+            <option value="base">base</option>
+            <option value="small" selected>small</option>
+            <option value="medium">medium</option>
+            <option value="large-v3">large-v3</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>
+            <input id="auto-transcribe" type="checkbox" checked />
+            Auto-transcribe after stop
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            <input id="stream-transcribe" type="checkbox" checked />
+            Stream transcript updates
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            <input id="live-transcribe" type="checkbox" checked />
+            Live transcription during recording
+          </label>
+        </div>
+        <div class="output" id="transcription-output"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Diarization</h2>
+        <div class="row">
+          <label>
+            <input id="diarization-enabled" type="checkbox" />
+            Enable diarization (requires Hugging Face token)
+          </label>
+        </div>
+        <div class="row">
+          <label for="diarization-provider">Diarization provider</label>
+          <select id="diarization-provider">
+            <option value="whisperx">whisperx</option>
+            <option value="pyannote">pyannote</option>
+            <option value="none">none</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="hf-token">Hugging Face token</label>
+          <input id="hf-token" type="password" placeholder="hf_..." />
+        </div>
+        <div class="row">
+          <label for="diarization-model">Diarization model</label>
+          <input
+            id="diarization-model"
+            type="text"
+            value="pyannote/speaker-diarization-3.1"
+          />
+        </div>
+        <div class="row">
+          <label for="diarization-device">Device</label>
+          <select id="diarization-device">
+            <option value="cpu">cpu</option>
+            <option value="cuda">cuda</option>
+          </select>
+          <div class="hint" id="diarization-device-hint"></div>
+        </div>
+        <div class="row">
+          <label for="diarization-performance">Performance vs accuracy</label>
+          <input
+            id="diarization-performance"
+            type="range"
+            min="0"
+            max="100"
+            value="50"
+          />
+          <div class="hint" id="diarization-performance-value">Balanced</div>
+        </div>
+        <div class="output" id="diarization-output"></div>
+      </section>
+
+      <section class="panel">
+        <h2>AI Models</h2>
+        <div class="row">
+          <label for="model-choice">Choose model</label>
+          <input id="model-choice" type="text" placeholder="Select or type a model" list="model-options" />
+          <datalist id="model-options"></datalist>
+          <div class="hint" id="model-empty-hint">
+            No visible models yet. Enable models below.
+          </div>
+        </div>
+        <div class="row">
+          <label>Discovered models</label>
+          <input
+            id="model-filter"
+            type="text"
+            placeholder="Filter discovered models"
+          />
+          <div class="model-registry" id="model-registry"></div>
+          <div class="hint">
+            Models are hidden by default. Toggle visibility to make them selectable.
+          </div>
+        </div>
+
+        <div class="provider-block">
+          <h3>OpenAI</h3>
+          <div class="row">
+            <label for="openai-api-key">API key</label>
+            <input id="openai-api-key" type="password" placeholder="sk-..." />
+          </div>
+          <div class="row">
+            <label for="openai-base-url">Base URL</label>
+            <div class="row-inline">
+              <input id="openai-base-url" type="text" value="https://api.openai.com" />
+              <button id="openai-default" class="secondary">Default</button>
+              <button id="test-openai" class="secondary">Test</button>
+              <span id="openai-status" class="status-pill"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="provider-block">
+          <h3>Anthropic</h3>
+          <div class="row">
+            <label for="anthropic-api-key">API key</label>
+            <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." />
+          </div>
+          <div class="row">
+            <label for="anthropic-base-url">Base URL</label>
+            <div class="row-inline">
+              <input id="anthropic-base-url" type="text" value="https://api.anthropic.com" />
+              <button id="anthropic-default" class="secondary">Default</button>
+              <button id="test-anthropic" class="secondary">Test</button>
+              <span id="anthropic-status" class="status-pill"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="provider-block">
+          <h3>Gemini</h3>
+          <div class="row">
+            <label for="gemini-api-key">API key</label>
+            <input id="gemini-api-key" type="password" placeholder="AIza..." />
+          </div>
+          <div class="row">
+            <label for="gemini-base-url">Base URL</label>
+            <div class="row-inline">
+              <input id="gemini-base-url" type="text" value="https://generativelanguage.googleapis.com" />
+              <button id="gemini-default" class="secondary">Default</button>
+              <button id="test-gemini" class="secondary">Test</button>
+              <span id="gemini-status" class="status-pill"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="provider-block">
+          <h3>Grok</h3>
+          <div class="row">
+            <label for="grok-api-key">API key</label>
+            <input id="grok-api-key" type="password" placeholder="xai-..." />
+          </div>
+          <div class="row">
+            <label for="grok-base-url">Base URL</label>
+            <div class="row-inline">
+              <input id="grok-base-url" type="text" value="https://api.x.ai" />
+              <button id="grok-default" class="secondary">Default</button>
+              <button id="test-grok" class="secondary">Test</button>
+              <span id="grok-status" class="status-pill"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="provider-block">
+          <h3>Ollama</h3>
+          <div class="row">
+            <label for="ollama-api-key">API key (optional)</label>
+            <input id="ollama-api-key" type="password" placeholder="optional" />
+          </div>
+          <div class="row">
+            <label for="ollama-base-url">Base URL</label>
+            <div class="row-inline">
+              <input id="ollama-base-url" type="text" value="http://127.0.0.1:11434" />
+              <button id="ollama-default" class="secondary">Default</button>
+              <button id="test-ollama" class="secondary">Test</button>
+              <span id="ollama-status" class="status-pill"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="provider-block">
+          <h3>LM Studio</h3>
+          <div class="row">
+            <label for="lmstudio-api-key">API key (optional)</label>
+            <input id="lmstudio-api-key" type="password" placeholder="optional" />
+          </div>
+          <div class="row">
+            <label for="lmstudio-base-url">Base URL</label>
+            <div class="row-inline">
+              <input id="lmstudio-base-url" type="text" value="http://127.0.0.1:1234" />
+              <button id="lmstudio-default" class="secondary">Default</button>
+              <button id="test-lmstudio" class="secondary">Test</button>
+              <span id="lmstudio-status" class="status-pill"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="output" id="model-output"></div>
+      </section>
+    </main>
+
+    <script src="/static/settings.js"></script>
+  </body>
+</html>

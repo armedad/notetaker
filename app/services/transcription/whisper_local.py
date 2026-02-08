@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 from faster_whisper import WhisperModel
 
@@ -13,6 +14,7 @@ from app.services.transcription.base import (
     TranscriptionProviderError,
     TranscriptionResult,
 )
+from app.services.diarization import DiarizationService
 
 
 @dataclass(frozen=True)
@@ -23,10 +25,11 @@ class WhisperConfig:
 
 
 class FasterWhisperProvider(TranscriptionProvider):
-    def __init__(self, config: WhisperConfig) -> None:
+    def __init__(self, config: WhisperConfig, diarization: DiarizationService) -> None:
         self._config = config
         self._logger = logging.getLogger("notetaker.transcription.whisper")
-        self._model: WhisperModel | None = None
+        self._model: Optional[WhisperModel] = None
+        self._diarization = diarization
 
     def _get_model(self) -> WhisperModel:
         if self._model is None:
@@ -65,6 +68,13 @@ class FasterWhisperProvider(TranscriptionProvider):
             self._logger.exception("Transcription failed: %s", exc)
             raise TranscriptionProviderError("Transcription failed") from exc
 
+        if self._diarization.is_enabled():
+            try:
+                diarization_segments = self._diarization.run(audio_path)
+                segments = _apply_diarization(segments, diarization_segments)
+            except Exception as exc:
+                self._logger.exception("Diarization failed: %s", exc)
+
         duration = time.perf_counter() - start_time
         self._logger.info(
             "Transcription complete: segments=%s duration=%.2fs",
@@ -88,3 +98,27 @@ class FasterWhisperProvider(TranscriptionProvider):
         except Exception as exc:
             self._logger.exception("Transcription stream failed: %s", exc)
             raise TranscriptionProviderError("Transcription failed") from exc
+
+
+def _apply_diarization(
+    segments: list[TranscriptSegment], diarization_segments: list[dict]
+) -> list[TranscriptSegment]:
+    if not diarization_segments:
+        return segments
+    diarization_segments = sorted(diarization_segments, key=lambda seg: seg["start"])
+    result: list[TranscriptSegment] = []
+    for segment in segments:
+        speaker = None
+        for diarization in diarization_segments:
+            if diarization["start"] <= segment.start < diarization["end"]:
+                speaker = diarization["speaker"]
+                break
+        result.append(
+            TranscriptSegment(
+                start=segment.start,
+                end=segment.end,
+                text=segment.text,
+                speaker=speaker,
+            )
+        )
+    return result
