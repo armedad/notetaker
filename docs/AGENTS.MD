@@ -6,31 +6,38 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 
 ## Source of Truth
 
-- `opportunity-assessment.md` — full spec + architecture (source of truth)
-- `plan.md` — phased implementation plan
-- `README.md` — current status + how to run/test
+- `docs/specs/opportunity-assessment.md` — full spec + architecture (source of truth)
+- `docs/plans/plan.md` — phased implementation plan
+- `docs/README.md` — current status + how to run/test
 
 ## Getting Started
 
 ### For New AI Agent
 
+**Methodology:** Use `@thinking/from-thinking-to-coding/` for any large, multi-step feature with open questions before implementation. The flow is spec → plan → agent instructions → execution.
+
 **First, read these files in order:**
-1. `README.md` — current status and what's next
-2. `AGENTS.MD` — how to work here
-3. `opportunity-assessment.md` — spec + architecture
-4. `plan.md` — phases and done criteria
-5. `TESTING.md` — manual QA steps
-6. `test-automation.md` — automated curl checks with timeouts
+1. `docs/README.md` — current status and what's next
+2. `docs/AGENTS.MD` — how to work here
+3. `docs/specs/opportunity-assessment.md` — spec + architecture
+4. `docs/plans/plan.md` — phases and done criteria
+5. `docs/testing/TESTING.md` — manual QA steps
+6. `docs/testing/test-automation.md` — automated curl checks with timeouts
 
 **Then:**
 1. Run the app to verify current behavior
-2. Test current features (README + TESTING.md)
-3. Continue with the next phase in `plan.md`
+2. Test current features (`docs/README.md` + `docs/testing/TESTING.md`)
+3. Continue with the next phase in `docs/plans/plan.md`
 4. Update docs as you go (see Continuous Documentation)
 
 ## Working Directory
 
 Project root: `coding/notetaker/`
+
+## Deployment Boundary (CRITICAL)
+
+- Never edit files directly under `/Users/chee/projects/notetaker`.
+- Only modify files in the Cursor workspace (`/Users/chee/zapier ai project/coding/notetaker`) and deploy via `deploy.sh`.
 
 ## Tech Stack (Planned)
 
@@ -62,17 +69,17 @@ Default to stdlib first. For new packages, explain why and alternatives briefly 
 ## Continuous Documentation
 
 Update docs as you work, not just at wrap-up:
-- **README.md**: current status, how to run/test
-- **AGENTS.MD**: new gotchas, patterns, decisions
-- **opportunity-assessment.md**: when implementation differs from spec
-- **plan.md**: update done criteria if realities change
-- **TESTING.md**: manual QA steps for new features
+- **docs/README.md**: current status, how to run/test
+- **docs/AGENTS.MD**: new gotchas, patterns, decisions
+- **docs/specs/opportunity-assessment.md**: when implementation differs from spec
+- **docs/plans/plan.md**: update done criteria if realities change
+- **docs/testing/TESTING.md**: manual QA steps for new features
 
-**CRITICAL:** If you diverge from the spec, update `opportunity-assessment.md` immediately with the decision + rationale.
+**CRITICAL:** If you diverge from the spec, update `docs/specs/opportunity-assessment.md` immediately with the decision + rationale.
 
 ## Progress Tracking
 
-Keep a **Current Status** section at the top of `README.md`:
+Keep a **Current Status** section at the top of `docs/README.md`:
 - Which phases are complete
 - What works now (brief)
 - What's next
@@ -81,7 +88,7 @@ Keep a **Current Status** section at the top of `README.md`:
 ## Phase Wrap-Up Protocol (REQUIRED)
 
 Before calling any phase complete, you MUST:
-1. **Verify objectives** in `plan.md` line by line with evidence
+1. **Verify objectives** in `docs/plans/plan.md` line by line with evidence
 2. **Run tests and show output** (or clearly state if no tests yet)
 3. **Update docs**: README, TESTING, spec/plan if needed
 4. **Walk the user through manual QA** with exact steps
@@ -97,6 +104,7 @@ Never say "should work now" or "tests passed" without showing output.
 - Define new technical terms when first used
 - Use clear, small steps; keep code readable
 - Make reasonable assumptions when needed and state them explicitly
+- For large features, create or update spec/plan via `@thinking/from-thinking-to-coding/` before coding
 
 ## Code Review
 

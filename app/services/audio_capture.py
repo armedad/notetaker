@@ -28,12 +28,19 @@ class AudioCaptureService:
         self._state = RecordingState()
         self._lock = threading.RLock()
         self._audio_queue: "queue.Queue[bytes]" = queue.Queue()
+        self._live_queue: "queue.Queue[bytes]" = queue.Queue(maxsize=60)
         self._writer_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._stream: Optional[sd.RawInputStream] = None
         self._logger = logging.getLogger("notetaker.audio")
         self._callback_counter = 0
         self._first_callback_logged = False
+        self._live_enabled = False
+        self._config = {
+            "device_index": None,
+            "samplerate": 48000,
+            "channels": 2,
+        }
 
     def list_devices(self) -> list[dict]:
         self._logger.debug("Listing audio input devices")
@@ -60,8 +67,28 @@ class AudioCaptureService:
 
     def is_recording(self) -> bool:
         with self._lock:
-            self._logger.debug("start_recording lock acquired")
             return self._state.recording_id is not None
+
+    def enable_live_tap(self) -> None:
+        with self._lock:
+            self._logger.debug("Live tap enabled")
+            self._live_enabled = True
+
+    def disable_live_tap(self) -> None:
+        with self._lock:
+            self._logger.debug("Live tap disabled")
+            self._live_enabled = False
+            while not self._live_queue.empty():
+                try:
+                    self._live_queue.get_nowait()
+                except queue.Empty:
+                    break
+
+    def get_live_chunk(self, timeout: float = 0.5) -> Optional[bytes]:
+        try:
+            return self._live_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
 
     def current_status(self) -> dict:
         with self._lock:
@@ -90,6 +117,13 @@ class AudioCaptureService:
                 device_index,
                 samplerate,
                 channels,
+            )
+            self._config.update(
+                {
+                    "device_index": device_index,
+                    "samplerate": samplerate,
+                    "channels": channels,
+                }
             )
             # Pre-import numpy on the main thread to avoid callback-thread import crash on macOS.
             _ = np.__version__
@@ -179,6 +213,24 @@ class AudioCaptureService:
 
             return self.current_status()
 
+    def get_config(self) -> dict:
+        with self._lock:
+            return dict(self._config)
+
+    def update_config(
+        self,
+        device_index: Optional[int],
+        samplerate: Optional[int],
+        channels: Optional[int],
+    ) -> None:
+        with self._lock:
+            if device_index is not None:
+                self._config["device_index"] = device_index
+            if samplerate is not None:
+                self._config["samplerate"] = samplerate
+            if channels is not None:
+                self._config["channels"] = channels
+
     def stop_recording(self) -> dict:
         with self._lock:
             self._logger.debug("Stop request received")
@@ -220,7 +272,14 @@ class AudioCaptureService:
             self._first_callback_logged = True
         if self._callback_counter % 50 == 0:
             self._logger.debug("Audio callback frames=%s", frames)
-        self._audio_queue.put(bytes(indata))
+        payload = bytes(indata)
+        self._audio_queue.put(payload)
+        if self._live_enabled:
+            try:
+                self._live_queue.put_nowait(payload)
+            except queue.Full:
+                if self._callback_counter % 100 == 0:
+                    self._logger.warning("Live queue full; dropping chunk")
 
     def _writer_loop(self) -> None:
         file_path = self._state.file_path
