@@ -11,6 +11,18 @@ class DiarizationError(RuntimeError):
 
 
 class DiarizationService:
+    """Service for batch (offline) speaker diarization.
+    
+    Supports multiple providers:
+    - pyannote: Direct pyannote.audio diarization
+    - whisperx: WhisperX-based diarization
+    - diart: Diart-based diarization (also supports real-time via RealtimeDiarizationService)
+    - none: Disabled/null provider
+    
+    For real-time diarization during live recording, use RealtimeDiarizationService
+    with provider=diart.
+    """
+    
     def __init__(self, config: DiarizationConfig) -> None:
         self._config = config
         self._logger = logging.getLogger("notetaker.diarization")
@@ -22,11 +34,15 @@ class DiarizationService:
 
     def is_enabled(self) -> bool:
         return bool(self._config.enabled)
+    
+    def get_provider_name(self) -> str:
+        """Get the configured provider name."""
+        return (self._config.provider or "pyannote").lower()
 
     def _load_provider(self):
         if self._provider is not None:
             return self._provider
-        provider_name = (self._config.provider or "pyannote").lower()
+        provider_name = self.get_provider_name()
         if provider_name == "none":
             self._provider = NullProvider()
             return self._provider
@@ -35,6 +51,11 @@ class DiarizationService:
             return self._provider
         if provider_name == "whisperx":
             self._provider = WhisperXProvider(self._config)
+            return self._provider
+        if provider_name == "diart":
+            # Diart can also be used for batch processing
+            from app.services.diarization.providers.diart_provider import DiartProvider
+            self._provider = DiartProvider(self._config)
             return self._provider
         raise DiarizationError(f"Unsupported diarization provider: {provider_name}")
 
