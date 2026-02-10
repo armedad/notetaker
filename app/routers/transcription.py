@@ -306,6 +306,26 @@ def create_transcription_router(
                 meeting_store.append_live_segment(
                     meeting_id, payload_segment, getattr(info, "language", None)
                 )
+            
+            # Apply diarization if enabled (after all segments collected)
+            if collected_segments and diarization_service.is_enabled():
+                try:
+                    logger.info("Simulated diarization start: meeting_id=%s", meeting_id)
+                    diarization_segments = diarization_service.run(audio_path)
+                    if diarization_segments:
+                        diarization_segments = sorted(diarization_segments, key=lambda seg: seg["start"])
+                        for segment in collected_segments:
+                            for diar in diarization_segments:
+                                if diar["start"] <= segment["start"] < diar["end"]:
+                                    segment["speaker"] = diar["speaker"]
+                                    break
+                        # Update meeting with diarized segments
+                        meeting_store.update_transcript_speakers(meeting_id, collected_segments)
+                        logger.info("Simulated diarization complete: meeting_id=%s speakers=%s", 
+                                    meeting_id, len(set(s.get("speaker") for s in collected_segments if s.get("speaker"))))
+                except Exception as exc:
+                    logger.warning("Simulated diarization failed: %s", exc)
+            
             if collected_segments:
                 meeting_store.add_transcript(
                     audio_path, getattr(info, "language", None), collected_segments
