@@ -24,6 +24,7 @@ from app.services.transcription import (
 from app.services.summarization import SummarizationService
 from app.services.llm.base import LLMProviderError
 from app.services.transcription_pipeline import TranscriptionPipeline, apply_diarization
+from app.services.realtime_diarization import RealtimeDiarizationService
 
 class TranscribeRequest(BaseModel):
     audio_path: str = Field(..., description="Absolute path to audio file")
@@ -110,18 +111,20 @@ def create_transcription_router(
         raise RuntimeError(f"Unsupported transcription provider: {provider_name}")
 
     diarization_config = config.get("diarization", {})
-    diarization_service = DiarizationService(
-        DiarizationConfig(
-            enabled=bool(diarization_config.get("enabled", False)),
-            provider=diarization_config.get("provider", "pyannote"),
-            model=diarization_config.get(
-                "model", "pyannote/speaker-diarization-3.1"
-            ),
-            device=diarization_config.get("device", "cpu"),
-            hf_token=diarization_config.get("hf_token"),
-            performance_level=float(diarization_config.get("performance_level", 0.5)),
-        )
+    diarization_cfg = DiarizationConfig(
+        enabled=bool(diarization_config.get("enabled", False)),
+        provider=diarization_config.get("provider", "pyannote"),
+        model=diarization_config.get(
+            "model", "pyannote/speaker-diarization-3.1"
+        ),
+        device=diarization_config.get("device", "cpu"),
+        hf_token=diarization_config.get("hf_token"),
+        performance_level=float(diarization_config.get("performance_level", 0.5)),
     )
+    diarization_service = DiarizationService(diarization_cfg)
+    
+    # Real-time diarization service (for live transcription with diart)
+    realtime_diarization = RealtimeDiarizationService(diarization_cfg)
 
     live_device = transcription_config.get("live_device", "cpu")
     live_compute = transcription_config.get("live_compute_type", "int8")
@@ -472,7 +475,11 @@ def create_transcription_router(
 
     @router.post("/api/transcribe/live")
     def transcribe_live(payload: LiveTranscribeRequest) -> StreamingResponse:
-        """Live transcription from microphone using the unified pipeline."""
+        """Live transcription from microphone using the unified pipeline.
+        
+        If real-time diarization is enabled (provider=diart), speaker labels
+        will be assigned in real-time as audio is processed.
+        """
         logger.debug("transcribe_live received: %s", payload.model_dump())
         live_chunk_seconds = float(
             transcription_config.get("live_chunk_seconds", 5.0)
@@ -480,11 +487,29 @@ def create_transcription_router(
         model_size = payload.model_size or live_default_size
         pipeline = get_pipeline(model_size, live_device, live_compute)
 
-        def process_audio_chunk(temp_path: str, offset_seconds: float, meeting_id: Optional[str], last_language: Optional[str]):
-            """Process a single audio chunk through the pipeline."""
+        def process_audio_chunk(
+            temp_path: str,
+            offset_seconds: float,
+            meeting_id: Optional[str],
+            last_language: Optional[str],
+            audio_bytes: bytes,
+            samplerate: int,
+            channels: int,
+        ):
+            """Process a single audio chunk through the pipeline with real-time diarization."""
             segments, language, chunk_duration = pipeline.transcribe_chunk(temp_path, offset_seconds)
             
+            # Feed audio to real-time diarization if active
+            if realtime_diarization.is_active():
+                realtime_diarization.feed_audio(audio_bytes)
+            
             for segment in segments:
+                # Try to get speaker from real-time diarization
+                if realtime_diarization.is_active():
+                    speaker = realtime_diarization.get_speaker_at(segment["start"])
+                    if speaker:
+                        segment["speaker"] = speaker
+                
                 if meeting_id:
                     meeting_store.append_live_segment(meeting_id, segment, language or last_language)
                 yield f"data: {json.dumps(segment)}\n\n"
@@ -507,15 +532,20 @@ def create_transcription_router(
             offset_seconds = 0.0
             last_language = None
             audio_service.enable_live_tap()
+            
+            # Start real-time diarization if enabled
+            rt_diarization_active = realtime_diarization.start(samplerate, channels)
+            
             logger.info(
-                "Live transcription started: samplerate=%s channels=%s chunk_seconds=%.2f",
+                "Live transcription started: samplerate=%s channels=%s chunk_seconds=%.2f realtime_diarization=%s",
                 samplerate,
                 channels,
                 live_chunk_seconds,
+                rt_diarization_active,
             )
 
             try:
-                meta = {"type": "meta", "language": None}
+                meta = {"type": "meta", "language": None, "realtime_diarization": rt_diarization_active}
                 yield f"data: {json.dumps(meta)}\n\n"
                 tick_interval = 30.0
                 last_summary_tick = time.time()
@@ -530,11 +560,15 @@ def create_transcription_router(
 
                     if len(buffer) >= bytes_per_second * live_chunk_seconds:
                         temp_path = None
+                        audio_bytes = bytes(buffer)
                         try:
-                            temp_path, _ = _write_temp_wav(bytes(buffer), samplerate, channels)
+                            temp_path, _ = _write_temp_wav(audio_bytes, samplerate, channels)
                             
-                            # Use pipeline for chunk processing
-                            for event in process_audio_chunk(temp_path, offset_seconds, payload.meeting_id, last_language):
+                            # Use pipeline for chunk processing with real-time diarization
+                            for event in process_audio_chunk(
+                                temp_path, offset_seconds, payload.meeting_id, 
+                                last_language, audio_bytes, samplerate, channels
+                            ):
                                 yield event
                             
                             # Update offset (approximation based on buffer size)
@@ -564,10 +598,14 @@ def create_transcription_router(
                 # Process remaining buffer
                 if buffer:
                     temp_path = None
+                    audio_bytes = bytes(buffer)
                     try:
-                        temp_path, _ = _write_temp_wav(bytes(buffer), samplerate, channels)
+                        temp_path, _ = _write_temp_wav(audio_bytes, samplerate, channels)
                         
-                        for event in process_audio_chunk(temp_path, offset_seconds, payload.meeting_id, last_language):
+                        for event in process_audio_chunk(
+                            temp_path, offset_seconds, payload.meeting_id,
+                            last_language, audio_bytes, samplerate, channels
+                        ):
                             yield event
                             
                         if payload.meeting_id and time.time() - last_summary_tick >= tick_interval:
@@ -583,6 +621,11 @@ def create_transcription_router(
 
                 yield "data: {\"type\":\"done\"}\n\n"
             finally:
+                # Stop real-time diarization
+                if realtime_diarization.is_active():
+                    final_annotations = realtime_diarization.stop()
+                    logger.info("Real-time diarization final: %s annotations", len(final_annotations))
+                
                 audio_service.disable_live_tap()
                 logger.info("Live transcription ended")
 
@@ -591,16 +634,21 @@ def create_transcription_router(
     @router.post("/api/diarization/settings")
     def update_diarization_settings(payload: DiarizationSettingsRequest) -> dict:
         logger.debug("update_diarization_settings received: %s", payload.model_dump())
-        diarization_service.update_config(
-            DiarizationConfig(
-                enabled=payload.enabled,
-                provider=payload.provider,
-                model=payload.model,
-                device=payload.device,
-                hf_token=payload.hf_token,
-                performance_level=payload.performance_level,
-            )
+        new_config = DiarizationConfig(
+            enabled=payload.enabled,
+            provider=payload.provider,
+            model=payload.model,
+            device=payload.device,
+            hf_token=payload.hf_token,
+            performance_level=payload.performance_level,
         )
-        return {"status": "ok"}
+        # Update both batch and real-time diarization services
+        diarization_service.update_config(new_config)
+        realtime_diarization.update_config(new_config)
+        
+        return {
+            "status": "ok",
+            "realtime_enabled": payload.provider.lower() == "diart" and payload.enabled,
+        }
 
     return router
