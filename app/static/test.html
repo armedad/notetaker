@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Notetaker Test Harness</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <style>
+      .test-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      .test-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+      }
+
+      .test-header h1 {
+        margin: 0;
+      }
+
+      .test-actions {
+        display: flex;
+        gap: 12px;
+      }
+
+      .suite-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+
+      .suite-card {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 16px;
+      }
+
+      .suite-card h3 {
+        margin: 0 0 8px 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .suite-card .suite-id {
+        font-size: 12px;
+        color: #6b7280;
+        background: #f3f4f6;
+        padding: 2px 8px;
+        border-radius: 4px;
+      }
+
+      .suite-card p {
+        margin: 0 0 12px 0;
+        color: #6b7280;
+        font-size: 14px;
+      }
+
+      .suite-card .test-count {
+        font-size: 12px;
+        color: #9ca3af;
+      }
+
+      .suite-card button {
+        margin-top: 12px;
+      }
+
+      .results-panel {
+        background: #1f2937;
+        color: #f3f4f6;
+        border-radius: 8px;
+        padding: 16px;
+        font-family: monospace;
+        font-size: 13px;
+        min-height: 400px;
+        max-height: 600px;
+        overflow-y: auto;
+      }
+
+      .results-panel .log-line {
+        margin: 2px 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .results-panel .log-line.pass {
+        color: #34d399;
+      }
+
+      .results-panel .log-line.fail {
+        color: #f87171;
+      }
+
+      .results-panel .log-line.skip {
+        color: #fbbf24;
+      }
+
+      .results-panel .log-line.error {
+        color: #f87171;
+        font-weight: bold;
+      }
+
+      .results-panel .log-line.header {
+        color: #60a5fa;
+        font-weight: bold;
+      }
+
+      .summary-bar {
+        display: flex;
+        gap: 16px;
+        padding: 12px 16px;
+        background: #374151;
+        border-radius: 8px;
+        margin-bottom: 16px;
+      }
+
+      .summary-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .summary-item.passed {
+        color: #34d399;
+      }
+
+      .summary-item.failed {
+        color: #f87171;
+      }
+
+      .summary-item.skipped {
+        color: #fbbf24;
+      }
+
+      .summary-item.errors {
+        color: #f87171;
+      }
+
+      .running-indicator {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        color: #60a5fa;
+      }
+
+      .running-indicator.active {
+        display: flex;
+      }
+
+      .spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid #60a5fa;
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="test-container">
+      <div class="test-header">
+        <h1>Test Harness</h1>
+        <div class="test-actions">
+          <div class="running-indicator" id="running-indicator">
+            <div class="spinner"></div>
+            <span>Running tests...</span>
+          </div>
+          <button id="run-all-btn" class="btn btn-primary">Run All Tests</button>
+          <a href="/" class="btn">Back to App</a>
+        </div>
+      </div>
+
+      <h2>Available Test Suites</h2>
+      <div class="suite-list" id="suite-list">
+        <p>Loading suites...</p>
+      </div>
+
+      <h2>Results</h2>
+      <div class="summary-bar" id="summary-bar" style="display: none">
+        <div class="summary-item passed">
+          <span>✓</span>
+          <span id="summary-passed">0</span> passed
+        </div>
+        <div class="summary-item failed">
+          <span>✗</span>
+          <span id="summary-failed">0</span> failed
+        </div>
+        <div class="summary-item skipped">
+          <span>○</span>
+          <span id="summary-skipped">0</span> skipped
+        </div>
+        <div class="summary-item errors">
+          <span>!</span>
+          <span id="summary-errors">0</span> errors
+        </div>
+      </div>
+      <div class="results-panel" id="results-panel">
+        <div class="log-line">Ready to run tests.</div>
+        <div class="log-line">Select a suite or click "Run All Tests" to begin.</div>
+      </div>
+    </div>
+
+    <script src="/static/test.js"></script>
+  </body>
+</html>

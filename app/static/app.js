@@ -305,6 +305,9 @@ async function loadAudioSettings() {
   }
 }
 
+// Track the first server version we see to detect updates
+let initialServerVersion = null;
+
 async function refreshHealth() {
   const statusEl = document.getElementById("health-status");
   const versionBadge = document.getElementById("version-badge");
@@ -312,11 +315,60 @@ async function refreshHealth() {
     const data = await fetchJson("/api/health");
     statusEl.textContent = `Status: ${data.status} (${data.version})`;
     versionBadge.textContent = data.version;
+    
+    // Track version changes and show alert if server was updated
+    if (data.version) {
+      if (initialServerVersion === null) {
+        initialServerVersion = data.version;
+      } else if (data.version !== initialServerVersion) {
+        showVersionUpdateBanner();
+      }
+    }
   } catch (error) {
     statusEl.textContent = `Health check failed: ${error.message}`;
     versionBadge.textContent = "v?.?.?.?";
     setGlobalError("Health check failed.");
   }
+}
+
+function showVersionUpdateBanner() {
+  // Only show once
+  if (document.getElementById("version-update-banner")) return;
+  
+  const banner = document.createElement("div");
+  banner.id = "version-update-banner";
+  banner.innerHTML = `
+    <span>A new version is available.</span>
+    <button onclick="window.location.reload(true)">Refresh now</button>
+    <button onclick="this.parentElement.remove()">Dismiss</button>
+  `;
+  banner.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: #2563eb;
+    color: white;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: center;
+    font-size: 14px;
+    z-index: 9999;
+  `;
+  banner.querySelectorAll("button").forEach(btn => {
+    btn.style.cssText = `
+      background: white;
+      color: #2563eb;
+      border: none;
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+    `;
+  });
+  document.body.prepend(banner);
 }
 
 async function loadTranscriptionSettings() {
@@ -1175,58 +1227,7 @@ async function stopRecording() {
   }
 }
 
-async function startFileRecording() {
-  setTranscriptStatus("Transcribing file...");
-  setOutput(`Streaming file: ${state.testAudioName || state.testAudioPath}`);
-  state.testTranscribing = true;
-  setRecordingToggleLabel(true);
-  const controller = new AbortController();
-  state.testTranscribeController = controller;
-  try {
-    const response = await fetchJson("/api/transcribe/simulate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        audio_path: state.testAudioPath,
-      }),
-    });
-    state.fileMeetingId = response.meeting_id || null;
-    await streamTranscription(state.testAudioPath, controller, {
-      simulateLive: true,
-      meetingId: response.meeting_id,
-    });
-  } catch (error) {
-    if (error.name !== "AbortError") {
-      setStatusError(`File transcription failed: ${error.message}`);
-      setGlobalError("File transcription failed.");
-    }
-    debugError("file recording failed", error);
-  } finally {
-    state.testTranscribing = false;
-    state.testTranscribeController = null;
-    setRecordingToggleLabel(false);
-    await refreshMeetings();
-  }
-}
-
-async function stopFileRecording() {
-  setGlobalBusy("Stopping file transcription...");
-  try {
-    await fetchJson(
-      `/api/transcribe/simulate/stop?audio_path=${encodeURIComponent(
-        state.testAudioPath
-      )}`,
-      { method: "POST" }
-    );
-    stopTestTranscription();
-    setOutput("File transcription stopping...");
-  } catch (error) {
-    setStatusError(`Stop file transcription failed: ${error.message}`);
-    debugError("stopFileRecording failed", error);
-  } finally {
-    setGlobalBusy("");
-  }
-}
+// startFileRecording and stopFileRecording are defined earlier in the file
 
 async function startLiveTranscription() {
   if (!state.transcriptionSettings.live_transcribe) {

@@ -22,6 +22,11 @@
         <div class="row">
           <div class="meeting-nav">
             <button id="back-home" class="secondary">Home</button>
+            <div class="transcription-controls">
+              <button id="stop-transcription" class="secondary" style="display: none;">Stop transcription</button>
+              <button id="resume-transcription" class="secondary" style="display: none;">Resume transcription</button>
+              <span id="transcription-status-badge" class="status-badge"></span>
+            </div>
           </div>
         </div>
         <div class="row">
@@ -82,11 +87,27 @@
               <label for="debug-interim">Interim</label>
               <textarea id="debug-interim" rows="6" readonly></textarea>
             </div>
+            <div class="summary-debug-column debug-controls">
+              <h3>Timer Controls</h3>
+              <div class="debug-countdown">
+                <div class="countdown-display" id="countdown-display">--</div>
+                <div class="countdown-label">seconds until next summary</div>
+              </div>
+              <button id="do-it-now" class="primary">Do it now</button>
+              <div class="interval-control">
+                <label for="interval-slider">Interval: <span id="interval-value">30</span>s</label>
+                <input type="range" id="interval-slider" min="5" max="300" value="30" step="5" />
+                <div class="interval-range-labels">
+                  <span>5s</span>
+                  <span>300s</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
     </main>
 
-    <script src="/static/meeting.js"></script>
+    <script src="/static/meeting.js?v=130"></script>
   </body>
 </html>

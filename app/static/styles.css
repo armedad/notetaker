@@ -278,7 +278,7 @@ button:disabled {
 
 .summary-debug-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr auto;
   gap: 16px;
 }
 
@@ -292,6 +292,85 @@ button:disabled {
     "Courier New", monospace;
 }
 
+.summary-debug-column.debug-controls {
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.debug-countdown {
+  text-align: center;
+  padding: 16px;
+  background: #f3f4f6;
+  border-radius: 8px;
+}
+
+.countdown-display {
+  font-size: 48px;
+  font-weight: 700;
+  color: #2563eb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1;
+}
+
+.countdown-display.warning {
+  color: #f59e0b;
+}
+
+.countdown-display.imminent {
+  color: #ef4444;
+}
+
+.countdown-label {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+.debug-controls button#do-it-now {
+  padding: 12px 16px;
+  font-size: 14px;
+  background: #10b981;
+  border: none;
+  color: white;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.debug-controls button#do-it-now:hover {
+  background: #059669;
+}
+
+.debug-controls button#do-it-now:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.interval-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.interval-control label {
+  font-size: 13px;
+  color: #374151;
+}
+
+.interval-control input[type="range"] {
+  width: 100%;
+  cursor: pointer;
+}
+
+.interval-range-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
 .meeting-column h2 {
   margin-top: 0;
 }
@@ -299,6 +378,37 @@ button:disabled {
 .meeting-nav {
   display: flex;
   gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.transcription-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.status-badge {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.status-badge.in-progress {
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+.status-badge.completed {
+  background-color: #e5e7eb;
+  color: #374151;
+}
+
+.status-badge.blocked {
+  background-color: #fef3c7;
+  color: #92400e;
 }
 
 .model-registry {
@@ -359,6 +469,34 @@ button:disabled {
   font-size: 12px;
   color: #6b7280;
   margin-top: 6px;
+}
+
+.panel-description {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 0 0 16px 0;
+  line-height: 1.5;
+}
+
+.panel-description a {
+  color: #4f46e5;
+  text-decoration: none;
+}
+
+.panel-description a:hover {
+  text-decoration: underline;
+}
+
+#diarization-description {
+  margin-top: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #f3f4f6;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #374151;
+  line-height: 1.5;
+  min-height: 40px;
 }
 
 @media (max-width: 960px) {
