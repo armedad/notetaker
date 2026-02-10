@@ -339,6 +339,27 @@ class MeetingStore:
                     return meeting
             return None
 
+    def update_transcript_speakers(
+        self, meeting_id: str, segments: list[dict]
+    ) -> Optional[dict]:
+        """Update speaker labels in transcript segments after diarization."""
+        with self._lock:
+            data = self._read()
+            for meeting in data.get("meetings", []):
+                if meeting.get("id") == meeting_id:
+                    transcript = meeting.get("transcript", {})
+                    if isinstance(transcript, dict):
+                        existing_segments = transcript.get("segments", [])
+                        # Match by start time and update speaker
+                        segment_map = {s["start"]: s.get("speaker") for s in segments}
+                        for seg in existing_segments:
+                            if seg["start"] in segment_map:
+                                seg["speaker"] = segment_map[seg["start"]]
+                        self._write(data)
+                        self.publish_event("meeting_updated", meeting_id)
+                    return meeting
+            return None
+
     def update_attendee_name(
         self, meeting_id: str, attendee_id: str, name: str
     ) -> Optional[dict]:

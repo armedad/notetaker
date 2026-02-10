@@ -37,6 +37,20 @@ class WhisperXProvider(DiarizationProvider):
             )
             diarization = diarize_pipeline(audio_path)
         except Exception as exc:
+            error_str = str(exc).lower()
+            if "403" in error_str or "forbidden" in error_str or "gated" in error_str:
+                self._logger.error(
+                    "HuggingFace returned 403 Forbidden. The pyannote models "
+                    "require accepting license agreements. Please visit BOTH URLs, "
+                    "log in with your HuggingFace account, and accept the terms: "
+                    "(1) https://huggingface.co/pyannote/speaker-diarization-3.1 "
+                    "(2) https://huggingface.co/pyannote/segmentation-3.0"
+                )
+                raise RuntimeError(
+                    "HuggingFace 403: Accept pyannote licenses at "
+                    "https://huggingface.co/pyannote/speaker-diarization-3.1 AND "
+                    "https://huggingface.co/pyannote/segmentation-3.0"
+                ) from exc
             raise RuntimeError("WhisperX diarization failed") from exc
 
         segments: list[dict] = []
