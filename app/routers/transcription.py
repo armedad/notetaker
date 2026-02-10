@@ -201,10 +201,8 @@ def create_transcription_router(
                 provider = get_provider(model_size, final_device, final_compute)
                 meeting_id = payload.meeting_id
                 if payload.simulate_live and not meeting_id:
-                    existing_meeting = meeting_store.get_meeting_by_audio_path(audio_path)
-                    meeting = existing_meeting or meeting_store.create_simulated_meeting(
-                        audio_path
-                    )
+                    # Always create a new meeting for streaming transcription
+                    meeting = meeting_store.create_simulated_meeting(audio_path)
                     meeting_id = meeting.get("id")
                     logger.info(
                         "Simulated live transcription started: meeting_id=%s audio=%s",
@@ -363,14 +361,14 @@ def create_transcription_router(
         if existing:
             return {"status": "running", "meeting_id": existing.get("meeting_id")}
         meeting = None
-        existing_meeting = None
         if payload.meeting_id:
+            # Resuming an existing meeting - use the provided meeting_id
             meeting = meeting_store.get_meeting(payload.meeting_id)
             if not meeting:
                 raise HTTPException(status_code=404, detail="Meeting not found")
         else:
-            existing_meeting = meeting_store.get_meeting_by_audio_path(audio_path)
-            meeting = existing_meeting or meeting_store.create_simulated_meeting(audio_path)
+            # Starting fresh from main window - always create a new meeting
+            meeting = meeting_store.create_simulated_meeting(audio_path)
         meeting_id = meeting.get("id")
         if not meeting_id:
             raise HTTPException(status_code=500, detail="Failed to create meeting")
@@ -425,6 +423,97 @@ def create_transcription_router(
         if meeting_id:
             meeting_store.update_status(meeting_id, "completed")
         return {"status": "stopping", "meeting_id": job.get("meeting_id")}
+
+    @router.get("/api/transcribe/active")
+    def get_active_transcription() -> dict:
+        """Get currently active transcription job, if any."""
+        # Check for simulated (file) transcription
+        if simulate_jobs:
+            job = next(iter(simulate_jobs.values()))
+            return {
+                "active": True,
+                "type": "file",
+                "meeting_id": job.get("meeting_id"),
+                "audio_path": job.get("audio_path"),
+            }
+        # Check for live recording
+        status = audio_service.current_status()
+        if status.get("recording"):
+            return {
+                "active": True,
+                "type": "live",
+                "meeting_id": status.get("recording_id"),
+                "audio_path": status.get("file_path"),
+            }
+        return {"active": False, "type": None, "meeting_id": None, "audio_path": None}
+
+    @router.post("/api/transcribe/stop/{meeting_id}")
+    def stop_transcription_by_meeting(meeting_id: str) -> dict:
+        """Stop transcription for a specific meeting."""
+        # Check simulated jobs
+        job = next(
+            (job for job in simulate_jobs.values() if job.get("meeting_id") == meeting_id),
+            None,
+        )
+        if job:
+            cancel_event = job.get("cancel")
+            if cancel_event:
+                cancel_event.set()
+            meeting_store.update_status(meeting_id, "completed")
+            logger.info("Stopped file transcription: meeting_id=%s", meeting_id)
+            return {"status": "stopping", "meeting_id": meeting_id, "type": "file"}
+        # Check live recording
+        status = audio_service.current_status()
+        if status.get("recording") and status.get("recording_id") == meeting_id:
+            audio_service.stop_recording()
+            meeting_store.update_status(meeting_id, "completed")
+            logger.info("Stopped live transcription: meeting_id=%s", meeting_id)
+            return {"status": "stopping", "meeting_id": meeting_id, "type": "live"}
+        return {"status": "not_found", "meeting_id": meeting_id}
+
+    @router.post("/api/transcribe/resume/{meeting_id}")
+    def resume_transcription(meeting_id: str) -> dict:
+        """Resume transcription for a meeting that was stopped."""
+        # Check if any transcription is already running
+        if simulate_jobs:
+            raise HTTPException(
+                status_code=409,
+                detail="Another transcription is already in progress"
+            )
+        status = audio_service.current_status()
+        if status.get("recording"):
+            raise HTTPException(
+                status_code=409,
+                detail="A live recording is already in progress"
+            )
+        # Get meeting and its audio path
+        meeting = meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        audio_path = meeting.get("audio_path")
+        if not audio_path:
+            raise HTTPException(status_code=400, detail="Meeting has no audio file")
+        if not os.path.exists(audio_path):
+            raise HTTPException(status_code=400, detail="Audio file not found")
+        # Update meeting status back to in_progress
+        meeting_store.update_status(meeting_id, "in_progress")
+        # Start transcription
+        model_size = transcription_config.get("model_size", "medium")
+        cancel_event = threading.Event()
+        thread = threading.Thread(
+            target=_run_simulated_transcription,
+            args=(meeting_id, meeting_id, audio_path, model_size, cancel_event),
+            daemon=True,
+        )
+        simulate_jobs[meeting_id] = {
+            "meeting_id": meeting_id,
+            "audio_path": audio_path,
+            "thread": thread,
+            "cancel": cancel_event,
+        }
+        logger.info("Resumed transcription: meeting_id=%s audio=%s", meeting_id, audio_path)
+        thread.start()
+        return {"status": "resumed", "meeting_id": meeting_id}
 
     @router.post("/api/transcribe/live")
     def transcribe_live(payload: LiveTranscribeRequest) -> StreamingResponse:

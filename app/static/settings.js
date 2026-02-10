@@ -17,6 +17,7 @@ const state = {
     lmstudio: "http://127.0.0.1:1234",
   },
   modelFilter: "",
+  gpuAvailable: false,
 };
 
 let saveTimeout = null;
@@ -79,39 +80,53 @@ function setGlobalBusy(message) {
   busyEl.textContent = message || "";
 }
 
+function getDiarizationDescription(choice) {
+  const descriptions = {
+    none: "Speaker identification is disabled. Transcripts will not distinguish between speakers.",
+    "pyannote-3.1":
+      "Best accuracy, optimized for GPU. Uses pyannote/speaker-diarization-3.1. " +
+      (state.gpuAvailable
+        ? "GPU detected — this is the recommended choice for your system."
+        : "Note: No GPU detected. This will be slow on CPU. Consider pyannote 3.0 instead."),
+    "pyannote-3.0":
+      "Good accuracy, faster on CPU. Uses pyannote/speaker-diarization@2.1. " +
+      (state.gpuAvailable
+        ? "You have a GPU, so pyannote 3.1 would be faster and more accurate."
+        : "Recommended for your system (no GPU detected). About 2x faster than 3.1 on CPU."),
+    whisperx:
+      "Alternative diarization using WhisperX. Also requires Hugging Face token. " +
+      "Good integration with Whisper transcription but may be less accurate than pyannote.",
+  };
+  return descriptions[choice] || "";
+}
+
+const DIARIZATION_MODELS = {
+  "pyannote-3.1": "pyannote/speaker-diarization-3.1",
+  "pyannote-3.0": "pyannote/speaker-diarization@2.1",
+  whisperx: "",
+  none: "",
+};
+
 function setDiarizationOutput(message) {
   const output = document.getElementById("diarization-output");
   output.textContent = message;
 }
 
-function setDiarizationDeviceState(hasGpu) {
-  const deviceSelect = document.getElementById("diarization-device");
-  const hint = document.getElementById("diarization-device-hint");
-  if (!deviceSelect) {
-    return;
-  }
-  const gpuOption = deviceSelect.querySelector("option[value='cuda']");
-  if (gpuOption) {
-    gpuOption.disabled = !hasGpu;
-  }
-  if (hint) {
-    hint.textContent = hasGpu
-      ? "GPU available."
-      : "GPU not detected. CUDA option disabled.";
-  }
-}
+function updateDiarizationUI() {
+  const provider = document.getElementById("diarization-provider").value;
+  const tokenRow = document.getElementById("diarization-token-row");
+  const descriptionEl = document.getElementById("diarization-description");
 
-function setPerformanceLabel(value) {
-  const label = document.getElementById("diarization-performance-value");
-  if (!label) {
-    return;
+  // Show/hide token field based on provider
+  if (tokenRow) {
+    tokenRow.style.display = provider === "none" ? "none" : "block";
   }
-  if (value <= 33) {
-    label.textContent = "Faster";
-  } else if (value >= 67) {
-    label.textContent = "More accurate";
-  } else {
-    label.textContent = "Balanced";
+
+  // Update description with GPU-aware text
+  if (descriptionEl) {
+    descriptionEl.textContent = getDiarizationDescription(provider);
+    // Hide description box when diarization is off
+    descriptionEl.style.display = provider === "none" ? "none" : "block";
   }
 }
 
@@ -369,13 +384,17 @@ async function saveAudioSettings() {
 }
 
 async function saveDiarizationSettings() {
-  const enabled = document.getElementById("diarization-enabled").checked;
-  const provider = document.getElementById("diarization-provider").value;
+  const providerChoice = document.getElementById("diarization-provider").value;
   const hfToken = document.getElementById("hf-token").value.trim();
-  const model = document.getElementById("diarization-model").value.trim();
-  const device = document.getElementById("diarization-device").value;
-  const performanceRaw = document.getElementById("diarization-performance").value;
-  const performanceLevel = Number(performanceRaw) / 100;
+
+  // Map UI choice to backend provider and model
+  let backendProvider = providerChoice;
+  let model = DIARIZATION_MODELS[providerChoice] || "";
+  let enabled = providerChoice !== "none";
+
+  if (providerChoice === "pyannote-3.1" || providerChoice === "pyannote-3.0") {
+    backendProvider = "pyannote";
+  }
 
   setDiarizationOutput("Saving diarization settings...");
   setGlobalBusy("Saving diarization settings...");
@@ -385,11 +404,11 @@ async function saveDiarizationSettings() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         enabled,
-        provider,
+        provider: backendProvider,
         model,
-        device,
+        device: "cpu", // Default to CPU for simplicity
         hf_token: hfToken || null,
-        performance_level: performanceLevel,
+        performance_level: 0.5,
       }),
     });
     setDiarizationOutput("Diarization settings saved.");
@@ -478,24 +497,32 @@ async function loadModelRegistry() {
 async function loadDiarizationSettings() {
   try {
     const data = await fetchJson("/api/settings/diarization");
+
+    // Store GPU availability for recommendations
+    state.gpuAvailable = data?.gpu_available ?? false;
+
     if (!data || Object.keys(data).length === 0) {
+      updateDiarizationUI();
       return;
     }
-    document.getElementById("diarization-enabled").checked = !!data.enabled;
-    document.getElementById("diarization-provider").value = data.provider || "whisperx";
-    document.getElementById("diarization-model").value =
-      data.model || "pyannote/speaker-diarization-3.1";
-    document.getElementById("diarization-device").value = data.device || "cpu";
-    document.getElementById("hf-token").value = data.hf_token || "";
-    const performanceValue = Math.round(
-      (data.performance_level ?? 0.5) * 100
-    );
-    const performanceSlider = document.getElementById("diarization-performance");
-    if (performanceSlider) {
-      performanceSlider.value = String(performanceValue);
-      setPerformanceLabel(performanceValue);
+
+    // Map backend provider + model to UI choice
+    let uiChoice = "none";
+    if (data.enabled) {
+      if (data.provider === "pyannote") {
+        if (data.model && data.model.includes("3.1")) {
+          uiChoice = "pyannote-3.1";
+        } else {
+          uiChoice = "pyannote-3.0";
+        }
+      } else if (data.provider === "whisperx") {
+        uiChoice = "whisperx";
+      }
     }
-    setDiarizationDeviceState(!!data.gpu_available);
+
+    document.getElementById("diarization-provider").value = uiChoice;
+    document.getElementById("hf-token").value = data.hf_token || "";
+    updateDiarizationUI();
   } catch (error) {
     setGlobalError(`Failed to load diarization settings: ${error.message}`);
   }
@@ -581,27 +608,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     .getElementById("channels")
     .addEventListener("change", () => scheduleSave(saveAudioSettings));
   document
-    .getElementById("diarization-enabled")
-    .addEventListener("change", () => scheduleSave(saveDiarizationSettings));
-  document
     .getElementById("diarization-provider")
-    .addEventListener("change", () => scheduleSave(saveDiarizationSettings));
+    .addEventListener("change", () => {
+      updateDiarizationUI();
+      scheduleSave(saveDiarizationSettings);
+    });
   document
     .getElementById("hf-token")
     .addEventListener("input", () => scheduleSave(saveDiarizationSettings, 800));
-  document
-    .getElementById("diarization-model")
-    .addEventListener("input", () => scheduleSave(saveDiarizationSettings, 800));
-  document
-    .getElementById("diarization-device")
-    .addEventListener("change", () => scheduleSave(saveDiarizationSettings));
-  document
-    .getElementById("diarization-performance")
-    .addEventListener("input", (event) => {
-      const value = Number(event.target.value);
-      setPerformanceLabel(value);
-      scheduleSave(saveDiarizationSettings, 800);
-    });
   document
     .getElementById("live-model-size")
     .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));

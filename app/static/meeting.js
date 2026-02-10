@@ -8,6 +8,8 @@ const state = {
   summaryInFlight: false,
   summaryIntervalMs: 30000,
   titleSaveTimer: null,
+  countdownTimer: null,
+  countdownSeconds: 30,
 };
 
 function debugLog(message, data = {}) {
@@ -119,6 +121,13 @@ function loadMeetingId() {
 }
 
 async function refreshMeeting() {
+  // Log immediately at start of function
+  fetch("/api/logs/client", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ level: "info", message: "[refreshMeeting] START", context: { meetingId: state.meetingId } }),
+  }).catch(() => {});
+  
   if (!state.meetingId) {
     return;
   }
@@ -165,14 +174,31 @@ async function refreshMeeting() {
       updateSummaryDebugPanel(null);
     }
 
-    if (meeting.status === "in_progress" && !meeting.simulated) {
-      startLiveTranscript();
+    if (meeting.status === "in_progress") {
+      // Start live transcript only for real recordings (not simulated file transcription)
+      if (!meeting.simulated) {
+        startLiveTranscript();
+      }
+      // Start summary refresh for all in-progress meetings
       startSummaryRefresh();
     } else {
       stopLiveTranscript();
       stopSummaryRefresh();
     }
+    
+    // Update transcription controls (stop/resume buttons)
+    fetch("/api/logs/client", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level: "info", message: "[refreshMeeting] about to call updateTranscriptionControls" }),
+    }).catch(() => {});
+    await updateTranscriptionControls();
   } catch (error) {
+    fetch("/api/logs/client", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level: "error", message: "[refreshMeeting] error: " + error.message }),
+    }).catch(() => {});
     setGlobalError(`Failed to load meeting: ${error.message}`);
   } finally {
     setGlobalBusy("");
@@ -357,22 +383,24 @@ async function summarizeMeetingAuto() {
   if (!state.meetingId || state.summaryInFlight) {
     return;
   }
-  if (!state.meeting?.transcript?.segments?.length) {
+  if (!state.meeting?.transcript?.segments?.length && !state.meeting?.summary_state?.streaming_text) {
     debugLog("Skip auto summary (no transcript yet)");
     return;
   }
   state.summaryInFlight = true;
-  debugLog("Auto summary start");
+  debugLog("Auto summary start (step_summary_state)");
   try {
-    await fetchJson(`/api/meetings/${state.meetingId}/summarize`, {
+    // Use the smart real-time summary step endpoint instead of full summarize
+    await fetchJson(`/api/meetings/${state.meetingId}/summary-state/step`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
     await refreshMeeting();
-    debugLog("Auto summary complete");
+    debugLog("Auto summary step complete");
   } catch (error) {
-    debugError("Auto summary failed", error);
-    setGlobalError(`Auto summary failed: ${error.message}`);
+    debugError("Auto summary step failed", error);
+    // Don't show error to user for summary ticks - they're non-critical
+    debugLog("Summary tick error (non-critical): " + error.message);
   } finally {
     state.summaryInFlight = false;
   }
@@ -385,10 +413,12 @@ function startSummaryRefresh() {
   debugLog("Starting summary refresh timer", {
     intervalMs: state.summaryIntervalMs,
   });
-  state.summaryTimer = setInterval(
-    summarizeMeetingAuto,
-    state.summaryIntervalMs
-  );
+  resetCountdown();
+  state.summaryTimer = setInterval(() => {
+    summarizeMeetingAuto();
+    resetCountdown();
+  }, state.summaryIntervalMs);
+  startCountdown();
 }
 
 function stopSummaryRefresh() {
@@ -398,6 +428,102 @@ function stopSummaryRefresh() {
   debugLog("Stopping summary refresh timer");
   clearInterval(state.summaryTimer);
   state.summaryTimer = null;
+  stopCountdown();
+}
+
+function resetCountdown() {
+  state.countdownSeconds = Math.round(state.summaryIntervalMs / 1000);
+  updateCountdownDisplay();
+}
+
+function startCountdown() {
+  if (state.countdownTimer) {
+    return;
+  }
+  state.countdownTimer = setInterval(() => {
+    if (state.countdownSeconds > 0) {
+      state.countdownSeconds--;
+      updateCountdownDisplay();
+    }
+  }, 1000);
+}
+
+function stopCountdown() {
+  if (state.countdownTimer) {
+    clearInterval(state.countdownTimer);
+    state.countdownTimer = null;
+  }
+  const display = document.getElementById("countdown-display");
+  if (display) {
+    display.textContent = "--";
+    display.className = "countdown-display";
+  }
+}
+
+function updateCountdownDisplay() {
+  const display = document.getElementById("countdown-display");
+  if (!display) return;
+  
+  display.textContent = state.countdownSeconds;
+  
+  // Update color based on urgency
+  display.className = "countdown-display";
+  if (state.countdownSeconds <= 5) {
+    display.classList.add("imminent");
+  } else if (state.countdownSeconds <= 10) {
+    display.classList.add("warning");
+  }
+}
+
+function doItNow() {
+  if (state.summaryInFlight) {
+    debugLog("Summary already in flight, skipping do-it-now");
+    return;
+  }
+  debugLog("Do it now triggered");
+  
+  // Stop the current timer
+  if (state.summaryTimer) {
+    clearInterval(state.summaryTimer);
+    state.summaryTimer = null;
+  }
+  
+  // Run summary immediately
+  summarizeMeetingAuto();
+  
+  // Restart the timer with reset countdown
+  resetCountdown();
+  state.summaryTimer = setInterval(() => {
+    summarizeMeetingAuto();
+    resetCountdown();
+  }, state.summaryIntervalMs);
+}
+
+function updateSummaryInterval(seconds) {
+  const newIntervalMs = seconds * 1000;
+  if (newIntervalMs === state.summaryIntervalMs) {
+    return;
+  }
+  
+  debugLog("Updating summary interval", { seconds, newIntervalMs });
+  state.summaryIntervalMs = newIntervalMs;
+  
+  // Update the display
+  const valueEl = document.getElementById("interval-value");
+  if (valueEl) {
+    valueEl.textContent = seconds;
+  }
+  
+  // If timer is running, restart it with new interval
+  if (state.summaryTimer) {
+    clearInterval(state.summaryTimer);
+    state.summaryTimer = null;
+    resetCountdown();
+    state.summaryTimer = setInterval(() => {
+      summarizeMeetingAuto();
+      resetCountdown();
+    }, state.summaryIntervalMs);
+  }
 }
 
 function updateSummaryDebugPanel(summaryState) {
@@ -471,13 +597,184 @@ function exportMeeting() {
   window.open(`/api/meetings/${state.meetingId}/export`, "_blank");
 }
 
+// Track the first server version we see to detect updates
+let initialServerVersion = null;
+
 async function refreshVersion() {
   try {
     const data = await fetchJson("/api/health");
     const badge = document.getElementById("version-badge");
     badge.textContent = data.version;
+    
+    // Track version changes and show alert if server was updated
+    if (data.version) {
+      if (initialServerVersion === null) {
+        initialServerVersion = data.version;
+      } else if (data.version !== initialServerVersion) {
+        showVersionUpdateBanner();
+      }
+    }
   } catch (error) {
     setGlobalError("Health check failed.");
+  }
+}
+
+function showVersionUpdateBanner() {
+  // Only show once
+  if (document.getElementById("version-update-banner")) return;
+  
+  const banner = document.createElement("div");
+  banner.id = "version-update-banner";
+  banner.innerHTML = `
+    <span>A new version is available.</span>
+    <button onclick="window.location.reload(true)">Refresh now</button>
+    <button onclick="this.parentElement.remove()">Dismiss</button>
+  `;
+  banner.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: #2563eb;
+    color: white;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: center;
+    font-size: 14px;
+    z-index: 9999;
+  `;
+  banner.querySelectorAll("button").forEach(btn => {
+    btn.style.cssText = `
+      background: white;
+      color: #2563eb;
+      border: none;
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+    `;
+  });
+  document.body.prepend(banner);
+}
+
+async function getActiveTranscription() {
+  try {
+    return await fetchJson("/api/transcribe/active");
+  } catch (error) {
+    debugError("Failed to get active transcription", error);
+    return { active: false, type: null, meeting_id: null };
+  }
+}
+
+async function updateTranscriptionControls() {
+  const stopBtn = document.getElementById("stop-transcription");
+  const resumeBtn = document.getElementById("resume-transcription");
+  const statusBadge = document.getElementById("transcription-status-badge");
+  
+  const logToServer = (message, context) => {
+    fetch("/api/logs/client", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level: "info", message: `[TranscriptionControls] ${message}`, context }),
+    }).catch(() => {});
+  };
+  
+  logToServer("called", { 
+    stopBtn: !!stopBtn, 
+    resumeBtn: !!resumeBtn, 
+    statusBadge: !!statusBadge 
+  });
+  
+  if (!stopBtn || !resumeBtn || !statusBadge) {
+    logToServer("missing elements, returning");
+    return;
+  }
+  
+  const meeting = state.meeting;
+  if (!meeting) {
+    logToServer("no meeting");
+    stopBtn.style.display = "none";
+    resumeBtn.style.display = "none";
+    statusBadge.textContent = "";
+    statusBadge.className = "status-badge";
+    return;
+  }
+  
+  const active = await getActiveTranscription();
+  const isThisMeetingActive = active.active && active.meeting_id === state.meetingId;
+  const isAnyActive = active.active;
+  const meetingStatus = meeting.status;
+  
+  logToServer("state", {
+    meetingStatus,
+    audioPath: meeting.audio_path,
+    isThisMeetingActive,
+    isAnyActive,
+    active
+  });
+  
+  // Show stop button only if this meeting is currently transcribing
+  if (isThisMeetingActive) {
+    logToServer("showing stop (this meeting active)");
+    stopBtn.style.display = "inline-block";
+    resumeBtn.style.display = "none";
+    statusBadge.textContent = "Transcribing";
+    statusBadge.className = "status-badge in-progress";
+  } else if (meetingStatus === "in_progress") {
+    // Meeting is in_progress but transcription stopped (shouldn't happen normally)
+    logToServer("in_progress but not active, showing resume");
+    stopBtn.style.display = "none";
+    resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
+    statusBadge.textContent = isAnyActive ? "Paused (another active)" : "Paused";
+    statusBadge.className = isAnyActive ? "status-badge blocked" : "status-badge in-progress";
+  } else if (meetingStatus === "completed" && meeting.audio_path) {
+    // Meeting is completed but has audio - can resume
+    logToServer("completed with audio, showing resume");
+    stopBtn.style.display = "none";
+    resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
+    statusBadge.textContent = isAnyActive ? "Completed (another active)" : "Completed";
+    statusBadge.className = isAnyActive ? "status-badge blocked" : "status-badge completed";
+  } else {
+    // No audio path or other state
+    logToServer("else branch - hiding all", { meetingStatus, audioPath: meeting.audio_path });
+    stopBtn.style.display = "none";
+    resumeBtn.style.display = "none";
+    statusBadge.textContent = meetingStatus === "completed" ? "Completed" : "";
+    statusBadge.className = "status-badge completed";
+  }
+}
+
+async function stopTranscription() {
+  if (!state.meetingId) return;
+  
+  setGlobalBusy("Stopping transcription...");
+  try {
+    await fetchJson(`/api/transcribe/stop/${state.meetingId}`, { method: "POST" });
+    debugLog("Transcription stopped", { meetingId: state.meetingId });
+    await refreshMeeting();
+  } catch (error) {
+    setGlobalError(`Failed to stop transcription: ${error.message}`);
+    debugError("Stop transcription failed", error);
+  } finally {
+    setGlobalBusy("");
+  }
+}
+
+async function resumeTranscription() {
+  if (!state.meetingId) return;
+  
+  setGlobalBusy("Resuming transcription...");
+  try {
+    await fetchJson(`/api/transcribe/resume/${state.meetingId}`, { method: "POST" });
+    debugLog("Transcription resumed", { meetingId: state.meetingId });
+    await refreshMeeting();
+  } catch (error) {
+    setGlobalError(`Failed to resume transcription: ${error.message}`);
+    debugError("Resume transcription failed", error);
+  } finally {
+    setGlobalBusy("");
   }
 }
 
@@ -509,6 +806,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("back-home").addEventListener("click", () => {
     window.location.href = "/";
   });
+  
+  // Transcription controls
+  const stopBtn = document.getElementById("stop-transcription");
+  if (stopBtn) {
+    stopBtn.addEventListener("click", stopTranscription);
+  }
+  const resumeBtn = document.getElementById("resume-transcription");
+  if (resumeBtn) {
+    resumeBtn.addEventListener("click", resumeTranscription);
+  }
+  
   document
     .getElementById("toggle-summary-debug")
     .addEventListener("click", () => {
@@ -518,8 +826,42 @@ document.addEventListener("DOMContentLoaded", async () => {
       panel.style.display = isHidden ? "block" : "none";
       if (isHidden) {
         updateSummaryDebugPanel(state.meeting?.summary_state || null);
+        // Initialize countdown display when panel opens
+        if (state.summaryTimer) {
+          updateCountdownDisplay();
+        }
       }
     });
+
+  // Do it now button
+  const doItNowButton = document.getElementById("do-it-now");
+  if (doItNowButton) {
+    doItNowButton.addEventListener("click", doItNow);
+  }
+
+  // Interval slider
+  const intervalSlider = document.getElementById("interval-slider");
+  if (intervalSlider) {
+    // Initialize slider to current value
+    intervalSlider.value = Math.round(state.summaryIntervalMs / 1000);
+    const valueEl = document.getElementById("interval-value");
+    if (valueEl) {
+      valueEl.textContent = intervalSlider.value;
+    }
+    
+    intervalSlider.addEventListener("input", (e) => {
+      const seconds = parseInt(e.target.value, 10);
+      const valueEl = document.getElementById("interval-value");
+      if (valueEl) {
+        valueEl.textContent = seconds;
+      }
+    });
+    
+    intervalSlider.addEventListener("change", (e) => {
+      const seconds = parseInt(e.target.value, 10);
+      updateSummaryInterval(seconds);
+    });
+  }
   window.addEventListener("beforeunload", () => {
     stopLiveTranscript();
     stopSummaryRefresh();

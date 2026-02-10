@@ -87,51 +87,31 @@
       </section>
 
       <section class="panel">
-        <h2>Diarization</h2>
+        <h2>Speaker Diarization</h2>
+        <p class="panel-description">
+          Identifies who is speaking in your recordings. Requires a free
+          <a href="https://huggingface.co/settings/tokens" target="_blank">Hugging Face account</a>
+          to download the models (runs locally on your machine).
+        </p>
         <div class="row">
-          <label>
-            <input id="diarization-enabled" type="checkbox" />
-            Enable diarization (requires Hugging Face token)
-          </label>
-        </div>
-        <div class="row">
-          <label for="diarization-provider">Diarization provider</label>
+          <label for="diarization-provider">Diarization</label>
           <select id="diarization-provider">
+            <option value="none">Off</option>
+            <option value="pyannote-3.1">pyannote 3.1 (recommended)</option>
+            <option value="pyannote-3.0">pyannote 3.0 (faster on CPU)</option>
             <option value="whisperx">whisperx</option>
-            <option value="pyannote">pyannote</option>
-            <option value="none">none</option>
           </select>
         </div>
-        <div class="row">
+        <div class="hint" id="diarization-description"></div>
+        <div id="diarization-token-row" class="row" style="display: none;">
           <label for="hf-token">Hugging Face token</label>
           <input id="hf-token" type="password" placeholder="hf_..." />
-        </div>
-        <div class="row">
-          <label for="diarization-model">Diarization model</label>
-          <input
-            id="diarization-model"
-            type="text"
-            value="pyannote/speaker-diarization-3.1"
-          />
-        </div>
-        <div class="row">
-          <label for="diarization-device">Device</label>
-          <select id="diarization-device">
-            <option value="cpu">cpu</option>
-            <option value="cuda">cuda</option>
-          </select>
-          <div class="hint" id="diarization-device-hint"></div>
-        </div>
-        <div class="row">
-          <label for="diarization-performance">Performance vs accuracy</label>
-          <input
-            id="diarization-performance"
-            type="range"
-            min="0"
-            max="100"
-            value="50"
-          />
-          <div class="hint" id="diarization-performance-value">Balanced</div>
+          <div class="hint">
+            Get your free token at
+            <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>.
+            You must also accept the model terms at
+            <a href="https://huggingface.co/pyannote/speaker-diarization-3.1" target="_blank">pyannote model page</a>.
+          </div>
         </div>
         <div class="output" id="diarization-output"></div>
       </section>
@@ -262,6 +242,16 @@
         </div>
 
         <div class="output" id="model-output"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Developer Tools</h2>
+        <p class="panel-description">
+          Tools for debugging and testing the application.
+        </p>
+        <div class="actions">
+          <a href="/test" class="button-link">Open Test Harness</a>
+        </div>
       </section>
     </main>
 
