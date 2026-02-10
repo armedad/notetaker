@@ -174,7 +174,7 @@ class OpenAIProvider(LLMProvider):
         prompt = (
             "Split the transcript into topic blocks. For each block, return JSON with "
             "keys: topic (string), summary (string), transcript (string). "
-            "Return JSON array only.\n\n"
+            "Return ONLY a valid JSON array, no markdown code blocks, no explanation.\n\n"
             f"Transcript:\n{transcript}"
         )
         try:
@@ -187,10 +187,11 @@ class OpenAIProvider(LLMProvider):
                 json={
                     "model": self._model,
                     "messages": [
-                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "system", "content": "You are a JSON-only assistant. Return only valid JSON arrays, no markdown formatting."},
                         {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.1,
+                    "response_format": {"type": "json_object"},
                 },
                 timeout=90,
             )
@@ -205,10 +206,34 @@ class OpenAIProvider(LLMProvider):
         if not choices:
             raise LLMProviderError("OpenAI response missing choices")
         content = choices[0].get("message", {}).get("content", "")
+        
+        # Try to extract JSON from content (may be wrapped in markdown)
+        text = content.strip()
+        if text.startswith("```"):
+            # Remove markdown code blocks
+            lines = text.split("\n")
+            json_lines = []
+            in_block = False
+            for line in lines:
+                if line.startswith("```"):
+                    in_block = not in_block
+                    continue
+                if in_block or not line.startswith("```"):
+                    json_lines.append(line)
+            text = "\n".join(json_lines).strip()
+        
         try:
-            parsed = json.loads(content)
+            parsed = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise LLMProviderError("OpenAI returned non-JSON for topic segmentation") from exc
+            raise LLMProviderError(f"OpenAI returned non-JSON for topic segmentation: {text[:200]}") from exc
+        
+        # Handle JSON object wrapper (response_format: json_object returns {"topics": [...]})
+        if isinstance(parsed, dict):
+            if "topics" in parsed:
+                parsed = parsed["topics"]
+            elif len(parsed) == 1:
+                parsed = list(parsed.values())[0]
+        
         if not isinstance(parsed, list):
             raise LLMProviderError("Topic segmentation response is not a list")
         return parsed

@@ -1,11 +1,17 @@
-import json
-import logging
 import os
 import sys
 
-from fastapi import FastAPI
+# Workaround for tqdm threading issue in huggingface_hub downloads
+# This MUST be set before importing any libraries that use huggingface_hub
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
+import json
+import logging
+
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Module import trace (stderr) for boot debugging.
 print(f"[boot] app.main module import cwd={os.getcwd()} pid={os.getpid()}", file=sys.stderr)
@@ -17,6 +23,7 @@ from app.routers.meetings import create_meetings_router
 from app.routers.settings import create_settings_router
 from app.routers.summarization import create_summarization_router
 from app.routers.uploads import create_uploads_router
+from app.routers.testing import create_testing_router
 from app.services.audio_capture import AudioCaptureService
 from app.services.meeting_store import MeetingStore
 from app.services.summarization import SummarizationConfig, SummarizationService
@@ -115,6 +122,25 @@ def create_app() -> FastAPI:
         )
     )
     logger.info("Boot: uploads router mounted")
+
+    logs_dir = os.path.join(cwd, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    app.include_router(create_testing_router(logs_dir, static_dir))
+    logger.info("Boot: testing router mounted")
+
+    # Middleware to prevent caching of HTML and JS files
+    class NoCacheMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            response = await call_next(request)
+            path = request.url.path
+            if path.endswith(('.html', '.js', '.css')) or path in ('/', '/meeting', '/settings', '/test-harness'):
+                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
+            return response
+    
+    app.add_middleware(NoCacheMiddleware)
+    logger.info("Boot: no-cache middleware added")
 
     @app.get("/")
     def root() -> dict:

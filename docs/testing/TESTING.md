@@ -1,5 +1,44 @@
 # Testing
 
+## E2E Test Harness
+
+The test harness provides automated end-to-end testing for in-progress features.
+
+### Running Tests
+
+**Via Web UI:**
+- Navigate to `http://localhost:6684/test`
+- Click individual suite buttons or "Run All Tests"
+
+**Via URL (for automation):**
+- Run specific suite: `http://localhost:6684/api/test/run?suite=<suite-id>`
+- Run all suites: `http://localhost:6684/api/test/run?all=true`
+
+**Available Suites:**
+| Suite ID | Feature | Description |
+|----------|---------|-------------|
+| `auto-title` | Auto Meeting Title | Tests title generation lifecycle |
+| `smart-summary` | Smart Real Time Summary | Tests summary parsing pipeline |
+| `debug-ui` | Debug UI | Tests debug panel rendering |
+| `diarization` | Diarization | Tests speaker identification |
+
+### Test Output
+
+- Results returned as JSON with pass/fail/skip counts
+- Detailed logs written to `logs/test_<suite>_<timestamp>.log`
+- Each test includes: test_id, name, status, duration, message, details
+
+### Adding New Tests
+
+1. Create or edit a suite in `app/tests/suites/`
+2. Register tests in `_register_tests()` method
+3. Implement test functions that return `TestResult` or dict with `passed` key
+4. Tests marked with `skip=True` will be skipped (use for unimplemented features)
+
+---
+
+## Manual Testing
+
 ## Phase 0 — Server Skeleton
 
 1. Start the server: `/Users/chee/projects/notetaker/notetaker.sh`

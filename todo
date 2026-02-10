@@ -6,6 +6,8 @@ update the status of each of the items below.  mrak them as "in progress" once y
 
 when it's fully working, move it to a todo-done.md file
 
+# in the meetings page for attendees, the system should detect the people in the call.  if there's a new person detected, add that person in this section.  
+
 # auto meeting title generation
   - Type: new feature
   - Size: medium
@@ -57,7 +59,7 @@ change the file storage to be structured for multiple users and load the meeting
 * cleanup main window
   - Type: new feature
   - Size: medium
-  - Status: implemented
+  - Status: done
   - Docs: docs/specs/cleanup-main-window-spec.md, docs/plans/cleanup-main-window-plan.md
 
 move the 3 transcript settings to the settings page
@@ -76,7 +78,7 @@ on the meeting list, make a click on the meeting open the meeting page for the s
 * meeting mode:
   - Type: new feature
   - Size: large (multi-step, open questions: live summary cadence, in-progress transcript refresh rules, meeting status definition)
-  - Status: implemented
+  - Status: done
   - Docs: docs/specs/meeting-mode-spec.md, docs/plans/meeting-mode-plan.md
 
 create a meeting view page.  this should be a dedicated web page - one per meeting.  this should be able to handle existing meetings in progress as well as meetings that have concluded.
@@ -90,7 +92,7 @@ it should have all the meeting attendees at the top
 * settings page
   - Type: new feature
   - Size: medium
-  - Status: implemented
+  - Status: done
   - Docs: docs/specs/model-chooser-settings-spec.md
 
 create a settings page that lets the user configure different necessary settings.  
@@ -99,7 +101,7 @@ move all of the settings that are currently in the main page into this settings 
 * ai model specification
   - Type: new feature
   - Size: large
-  - Status: implemented
+  - Status: done
   - Docs: docs/specs/model-chooser-settings-spec.md
 
 add the ability for users to set the api key or lm studio local server to know what ai model to use.  
@@ -109,7 +111,7 @@ enumerate all the available models.  let the user pick which model they want.  a
 * set live transcript as default "on"
   - Type: new feature
   - Size: small
-  - Status: implemented
+  - Status: done
   - Docs: none
 
 * for diarization, let's start with whisperx
@@ -119,3 +121,12 @@ enumerate all the available models.  let the user pick which model they want.  a
   - Docs: docs/specs/diarization-whisperx-spec.md, docs/plans/diarization-whisperx-plan.md
 update the install script to properly install it.
 implement the diarization to identify different speakers
+
+* e2e test harness
+  - Type: new feature
+  - Size: medium
+  - Status: implemented
+  - Docs: docs/specs/e2e-test-harness-spec.md, docs/plans/e2e-test-harness-plan.md
+end-to-end test harness for automated testing of in-progress features.
+trigger via URL: /test?suite=<id> or /test?all=true
+outputs detailed logs to logs/test_*.log

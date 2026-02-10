@@ -6,6 +6,10 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+# Workaround for tqdm threading issue in huggingface_hub downloads
+# This must be set before importing faster_whisper
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
 from faster_whisper import WhisperModel
 
 from app.services.transcription.base import (

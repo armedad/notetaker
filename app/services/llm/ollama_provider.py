@@ -130,9 +130,10 @@ class OllamaProvider(LLMProvider):
 
     def segment_topics(self, transcript: str) -> list[dict]:
         prompt = (
+            "You are a JSON-only assistant. Return only valid JSON arrays, no markdown formatting.\n\n"
             "Split the transcript into topic blocks. For each block, return JSON with "
             "keys: topic (string), summary (string), transcript (string). "
-            "Return JSON array only.\n\n"
+            "Return ONLY a valid JSON array, no markdown code blocks, no explanation.\n\n"
             f"Transcript:\n{transcript}"
         )
         try:
@@ -142,6 +143,7 @@ class OllamaProvider(LLMProvider):
                     "model": self._model,
                     "prompt": prompt,
                     "stream": False,
+                    "format": "json",
                 },
                 timeout=90,
             )
@@ -153,10 +155,32 @@ class OllamaProvider(LLMProvider):
 
         data = response.json()
         text = data.get("response", "").strip()
+        
+        # Try to extract JSON from content (may be wrapped in markdown)
+        if text.startswith("```"):
+            lines = text.split("\n")
+            json_lines = []
+            in_block = False
+            for line in lines:
+                if line.startswith("```"):
+                    in_block = not in_block
+                    continue
+                if in_block or not line.startswith("```"):
+                    json_lines.append(line)
+            text = "\n".join(json_lines).strip()
+        
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise LLMProviderError("Ollama returned non-JSON for topic segmentation") from exc
+            raise LLMProviderError(f"Ollama returned non-JSON for topic segmentation: {text[:200]}") from exc
+        
+        # Handle object wrapper
+        if isinstance(parsed, dict):
+            if "topics" in parsed:
+                parsed = parsed["topics"]
+            elif len(parsed) == 1:
+                parsed = list(parsed.values())[0]
+        
         if not isinstance(parsed, list):
             raise LLMProviderError("Topic segmentation response is not a list")
         return parsed
