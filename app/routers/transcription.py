@@ -23,6 +23,7 @@ from app.services.transcription import (
 )
 from app.services.summarization import SummarizationService
 from app.services.llm.base import LLMProviderError
+from app.services.transcription_pipeline import TranscriptionPipeline, apply_diarization
 
 class TranscribeRequest(BaseModel):
     audio_path: str = Field(..., description="Absolute path to audio file")
@@ -144,6 +145,16 @@ def create_transcription_router(
             )
         return provider_cache[key]
 
+    def get_pipeline(model_size: str, device: str, compute_type: str) -> TranscriptionPipeline:
+        """Get a transcription pipeline with the specified provider configuration."""
+        provider = get_provider(model_size, device, compute_type)
+        return TranscriptionPipeline(
+            provider=provider,
+            diarization_service=diarization_service,
+            meeting_store=meeting_store,
+            summarization_service=summarization_service,
+        )
+
     @router.post("/api/transcribe", response_model=TranscribeResponse)
     def transcribe(payload: TranscribeRequest) -> TranscribeResponse:
         start_time = time.perf_counter()
@@ -154,9 +165,15 @@ def create_transcription_router(
             raise HTTPException(status_code=400, detail="audio_path must be absolute")
 
         model_size = payload.model_size or final_default_size
-        provider = get_provider(model_size, final_device, final_compute)
+        pipeline = get_pipeline(model_size, final_device, final_compute)
+        
         try:
-            result = provider.transcribe(audio_path)
+            segments, language = pipeline.process_audio_file(
+                audio_path,
+                meeting_id=payload.meeting_id,
+                apply_diarization=True,
+                update_meeting_live=False,
+            )
         except TranscriptionProviderError as exc:
             logger.warning("transcribe failed: %s", exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -167,28 +184,15 @@ def create_transcription_router(
         duration_ms = (time.perf_counter() - start_time) * 1000
         logger.info("transcribe completed in %.2f ms", duration_ms)
 
-        response = TranscribeResponse(
-            language=result.language,
-            duration=result.duration,
-            segments=[
-                {
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": segment.text,
-                    "speaker": segment.speaker,
-                }
-                for segment in result.segments
-            ],
+        return TranscribeResponse(
+            language=language,
+            duration=duration_ms / 1000.0,
+            segments=segments,
         )
-        meeting_store.add_transcript(
-            audio_path,
-            result.language,
-            response.segments,
-        )
-        return response
 
     @router.post("/api/transcribe/stream")
     def transcribe_stream(payload: TranscribeRequest) -> StreamingResponse:
+        """Streaming file transcription using the unified pipeline."""
         logger.debug("transcribe_stream received: %s", payload.model_dump())
         audio_path = payload.audio_path
         if not os.path.isabs(audio_path):
@@ -196,75 +200,48 @@ def create_transcription_router(
 
         def event_stream():
             try:
-                collected_segments: list[dict] = []
                 model_size = payload.model_size or final_default_size
-                provider = get_provider(model_size, final_device, final_compute)
+                pipeline = get_pipeline(model_size, final_device, final_compute)
                 meeting_id = payload.meeting_id
+                
                 if payload.simulate_live and not meeting_id:
-                    # Always create a new meeting for streaming transcription
                     meeting = meeting_store.create_simulated_meeting(audio_path)
                     meeting_id = meeting.get("id")
                     logger.info(
-                        "Simulated live transcription started: meeting_id=%s audio=%s",
+                        "Streaming transcription started: meeting_id=%s audio=%s",
                         meeting_id,
                         audio_path,
                     )
-                segments_iter, info = provider.stream_segments(audio_path)
-                meta = {
-                    "type": "meta",
-                    "language": getattr(info, "language", None),
-                }
+                
+                # Use pipeline for transcription
+                segments, language = pipeline.transcribe_and_format(audio_path)
+                
+                # Stream metadata
+                meta = {"type": "meta", "language": language}
                 if meeting_id and payload.simulate_live:
-                    meeting_store.append_live_meta(meeting_id, meta.get("language"))
+                    meeting_store.append_live_meta(meeting_id, language)
                 yield f"data: {json.dumps(meta)}\n\n"
-                for segment in segments_iter:
-                    payload_segment = {
-                        "type": "segment",
-                        "start": float(segment.start),
-                        "end": float(segment.end),
-                        "text": segment.text.strip(),
-                        "speaker": None,
-                    }
-                    collected_segments.append(payload_segment)
+                
+                # Stream segments
+                for segment in segments:
                     if meeting_id and payload.simulate_live:
-                        meeting_store.append_live_segment(
-                            meeting_id, payload_segment, meta.get("language")
-                        )
-                    yield f"data: {json.dumps(payload_segment)}\n\n"
-                meeting_store.add_transcript(audio_path, meta.get("language"), collected_segments)
+                        meeting_store.append_live_segment(meeting_id, segment, language)
+                    yield f"data: {json.dumps(segment)}\n\n"
+                
+                # Apply diarization (after all segments streamed)
+                segments = pipeline.run_diarization(audio_path, segments)
+                if diarization_service.is_enabled() and meeting_id:
+                    meeting_store.update_transcript_speakers(meeting_id, segments)
+                
+                # Save transcript
+                meeting_store.add_transcript(audio_path, language, segments)
+                
+                # Finalize if simulating live
                 if meeting_id and payload.simulate_live:
-                    meeting_store.update_status(meeting_id, "completed")
-                    summary_text = "\n".join(
-                        segment.get("text", "")
-                        for segment in collected_segments
-                        if isinstance(segment, dict)
-                    )
-                    if summary_text.strip():
-                        try:
-                            logger.info(
-                                "Simulated summary start: meeting_id=%s segments=%s",
-                                meeting_id,
-                                len(collected_segments),
-                            )
-                            result = summarization_service.summarize(summary_text)
-                            meeting_store.add_summary(
-                                meeting_id,
-                                summary=result.get("summary", ""),
-                                action_items=result.get("action_items", []),
-                                provider="default",
-                            )
-                            meeting_store.maybe_auto_title(
-                                meeting_id,
-                                result.get("summary", ""),
-                                summarization_service,
-                                force=True,
-                            )
-                            logger.info("Simulated summary complete: meeting_id=%s", meeting_id)
-                        except LLMProviderError as exc:
-                            logger.warning("Simulated summary failed: %s", exc)
-                        except Exception as exc:
-                            logger.exception("Simulated summary error: %s", exc)
+                    pipeline.finalize_meeting(meeting_id, segments)
+                
                 yield "data: {\"type\":\"done\"}\n\n"
+                
             except TranscriptionProviderError as exc:
                 logger.warning("transcribe_stream failed: %s", exc)
                 yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
@@ -281,86 +258,44 @@ def create_transcription_router(
         model_size: str,
         cancel_event: threading.Event,
     ) -> None:
+        """Run simulated transcription using the unified pipeline."""
         try:
             if cancel_event.is_set():
                 logger.info("Simulated transcription cancelled before start: meeting_id=%s", meeting_id)
                 meeting_store.update_status(meeting_id, "completed")
                 return
-            provider = get_provider(model_size, final_device, final_compute)
-            segments_iter, info = provider.stream_segments(audio_path)
-            meeting_store.append_live_meta(meeting_id, getattr(info, "language", None))
-            collected_segments: list[dict] = []
-            for segment in segments_iter:
+            
+            pipeline = get_pipeline(model_size, final_device, final_compute)
+            
+            # Use pipeline for transcription with live updates
+            # Note: We need to handle cancellation during transcription, so we do it in stages
+            
+            # Stage 1: Transcribe and format (with live segment updates)
+            segments, language = pipeline.transcribe_and_format(audio_path)
+            
+            # Update meeting store with segments as they're processed
+            meeting_store.append_live_meta(meeting_id, language)
+            for segment in segments:
                 if cancel_event.is_set():
                     logger.info("Simulated transcription cancelled: meeting_id=%s", meeting_id)
                     meeting_store.update_status(meeting_id, "completed")
                     break
-                payload_segment = {
-                    "type": "segment",
-                    "start": float(segment.start),
-                    "end": float(segment.end),
-                    "text": segment.text.strip(),
-                    "speaker": None,
-                }
-                collected_segments.append(payload_segment)
-                meeting_store.append_live_segment(
-                    meeting_id, payload_segment, getattr(info, "language", None)
-                )
+                meeting_store.append_live_segment(meeting_id, segment, language)
             
-            # Apply diarization if enabled (after all segments collected)
-            if collected_segments and diarization_service.is_enabled():
-                try:
-                    logger.info("Simulated diarization start: meeting_id=%s", meeting_id)
-                    diarization_segments = diarization_service.run(audio_path)
-                    if diarization_segments:
-                        diarization_segments = sorted(diarization_segments, key=lambda seg: seg["start"])
-                        for segment in collected_segments:
-                            for diar in diarization_segments:
-                                if diar["start"] <= segment["start"] < diar["end"]:
-                                    segment["speaker"] = diar["speaker"]
-                                    break
-                        # Update meeting with diarized segments
-                        meeting_store.update_transcript_speakers(meeting_id, collected_segments)
-                        logger.info("Simulated diarization complete: meeting_id=%s speakers=%s", 
-                                    meeting_id, len(set(s.get("speaker") for s in collected_segments if s.get("speaker"))))
-                except Exception as exc:
-                    logger.warning("Simulated diarization failed: %s", exc)
+            if cancel_event.is_set():
+                return
             
-            if collected_segments:
-                meeting_store.add_transcript(
-                    audio_path, getattr(info, "language", None), collected_segments
-                )
-            meeting_store.update_status(meeting_id, "completed")
-            summary_text = "\n".join(
-                segment.get("text", "")
-                for segment in collected_segments
-                if isinstance(segment, dict)
-            )
-            if summary_text.strip():
-                try:
-                    logger.info(
-                        "Simulated summary start: meeting_id=%s segments=%s",
-                        meeting_id,
-                        len(collected_segments),
-                    )
-                    result = summarization_service.summarize(summary_text)
-                    meeting_store.add_summary(
-                        meeting_id,
-                        summary=result.get("summary", ""),
-                        action_items=result.get("action_items", []),
-                        provider="default",
-                    )
-                    meeting_store.maybe_auto_title(
-                        meeting_id,
-                        result.get("summary", ""),
-                        summarization_service,
-                        force=True,
-                    )
-                    logger.info("Simulated summary complete: meeting_id=%s", meeting_id)
-                except LLMProviderError as exc:
-                    logger.warning("Simulated summary failed: %s", exc)
-                except Exception as exc:
-                    logger.exception("Simulated summary error: %s", exc)
+            # Stage 2: Apply diarization
+            segments = pipeline.run_diarization(audio_path, segments)
+            if diarization_service.is_enabled():
+                meeting_store.update_transcript_speakers(meeting_id, segments)
+            
+            # Stage 3: Save transcript
+            meeting_store.add_transcript(audio_path, language, segments)
+            
+            # Stage 4: Finalize (summarize + title)
+            pipeline.finalize_meeting(meeting_id, segments)
+            
         except TranscriptionProviderError as exc:
             logger.warning("Simulated transcription failed: %s", exc)
         except Exception as exc:
@@ -537,12 +472,27 @@ def create_transcription_router(
 
     @router.post("/api/transcribe/live")
     def transcribe_live(payload: LiveTranscribeRequest) -> StreamingResponse:
+        """Live transcription from microphone using the unified pipeline."""
         logger.debug("transcribe_live received: %s", payload.model_dump())
         live_chunk_seconds = float(
             transcription_config.get("live_chunk_seconds", 5.0)
         )
         model_size = payload.model_size or live_default_size
-        provider = get_provider(model_size, live_device, live_compute)
+        pipeline = get_pipeline(model_size, live_device, live_compute)
+
+        def process_audio_chunk(temp_path: str, offset_seconds: float, meeting_id: Optional[str], last_language: Optional[str]):
+            """Process a single audio chunk through the pipeline."""
+            segments, language, chunk_duration = pipeline.transcribe_chunk(temp_path, offset_seconds)
+            
+            for segment in segments:
+                if meeting_id:
+                    meeting_store.append_live_segment(meeting_id, segment, language or last_language)
+                yield f"data: {json.dumps(segment)}\n\n"
+            
+            if language:
+                yield f"data: {json.dumps({'type': 'meta', 'language': language})}\n\n"
+            
+            return offset_seconds + chunk_duration, language or last_language
 
         def event_stream():
             status = audio_service.current_status()
@@ -555,6 +505,7 @@ def create_transcription_router(
             bytes_per_second = int(samplerate * channels * 2)
             buffer = bytearray()
             offset_seconds = 0.0
+            last_language = None
             audio_service.enable_live_tap()
             logger.info(
                 "Live transcription started: samplerate=%s channels=%s chunk_seconds=%.2f",
@@ -568,6 +519,7 @@ def create_transcription_router(
                 yield f"data: {json.dumps(meta)}\n\n"
                 tick_interval = 30.0
                 last_summary_tick = time.time()
+                
                 while True:
                     if not audio_service.is_recording() and not buffer:
                         break
@@ -579,38 +531,23 @@ def create_transcription_router(
                     if len(buffer) >= bytes_per_second * live_chunk_seconds:
                         temp_path = None
                         try:
-                            temp_path, duration = _write_temp_wav(
-                                bytes(buffer), samplerate, channels
-                            )
-                            segments_iter, info = provider.stream_segments(
-                                temp_path
-                            )
-                            for segment in segments_iter:
-                                payload_segment = {
-                                    "type": "segment",
-                                    "start": float(segment.start) + offset_seconds,
-                                    "end": float(segment.end) + offset_seconds,
-                                    "text": segment.text.strip(),
-                                    "speaker": None,
-                                }
-                                if payload.meeting_id:
-                                    meeting_store.append_live_segment(
-                                        payload.meeting_id,
-                                        payload_segment,
-                                        info.language if info else None,
-                                    )
-                                yield f"data: {json.dumps(payload_segment)}\n\n"
-                            offset_seconds += duration
-                            if info and getattr(info, "language", None):
-                                yield f"data: {json.dumps({'type': 'meta', 'language': info.language})}\n\n"
+                            temp_path, _ = _write_temp_wav(bytes(buffer), samplerate, channels)
+                            
+                            # Use pipeline for chunk processing
+                            for event in process_audio_chunk(temp_path, offset_seconds, payload.meeting_id, last_language):
+                                yield event
+                            
+                            # Update offset (approximation based on buffer size)
+                            offset_seconds += len(buffer) / bytes_per_second
+                            
+                            # Periodic summary tick
                             if payload.meeting_id and time.time() - last_summary_tick >= tick_interval:
                                 last_summary_tick = time.time()
                                 try:
-                                    meeting_store.step_summary_state(
-                                        payload.meeting_id, summarization_service
-                                    )
+                                    meeting_store.step_summary_state(payload.meeting_id, summarization_service)
                                 except Exception as exc:
                                     logger.warning("Summary tick failed: %s", exc)
+                                    
                         except TranscriptionProviderError as exc:
                             logger.warning("live transcription failed: %s", exc)
                             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
@@ -624,37 +561,18 @@ def create_transcription_router(
                                 os.unlink(temp_path)
                         buffer.clear()
 
+                # Process remaining buffer
                 if buffer:
                     temp_path = None
                     try:
-                        temp_path, duration = _write_temp_wav(
-                            bytes(buffer), samplerate, channels
-                        )
-                        segments_iter, info = provider.stream_segments(temp_path)
-                        for segment in segments_iter:
-                            payload_segment = {
-                                "type": "segment",
-                                "start": float(segment.start) + offset_seconds,
-                                "end": float(segment.end) + offset_seconds,
-                                "text": segment.text.strip(),
-                                "speaker": None,
-                            }
-                            if payload.meeting_id:
-                                meeting_store.append_live_segment(
-                                    payload.meeting_id,
-                                    payload_segment,
-                                    info.language if info else None,
-                                )
-                            yield f"data: {json.dumps(payload_segment)}\n\n"
-                        offset_seconds += duration
-                        if info and getattr(info, "language", None):
-                            yield f"data: {json.dumps({'type': 'meta', 'language': info.language})}\n\n"
+                        temp_path, _ = _write_temp_wav(bytes(buffer), samplerate, channels)
+                        
+                        for event in process_audio_chunk(temp_path, offset_seconds, payload.meeting_id, last_language):
+                            yield event
+                            
                         if payload.meeting_id and time.time() - last_summary_tick >= tick_interval:
-                            last_summary_tick = time.time()
                             try:
-                                meeting_store.step_summary_state(
-                                    payload.meeting_id, summarization_service
-                                )
+                                meeting_store.step_summary_state(payload.meeting_id, summarization_service)
                             except Exception as exc:
                                 logger.warning("Summary tick failed: %s", exc)
                     except Exception as exc:
