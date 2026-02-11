@@ -39,14 +39,24 @@ Project root: `coding/notetaker/`
 - Never edit files directly under `/Users/chee/projects/notetaker`.
 - Only modify files in the Cursor workspace (`/Users/chee/zapier ai project/coding/notetaker`) and deploy via `deploy.sh`.
 
-## Tech Stack (Planned)
+## Tech Stack (Implemented)
 
 - Backend: Python + FastAPI
-- Storage: SQLite
-- Transcription: local Whisper (modular provider interface)
-- Diarization: pyannote-audio (or equivalent)
-- Summarization: cloud when available, local fallback
-- Frontend: static web UI served by backend
+- Storage: JSON file-based (meetings.json in data/)
+- Transcription: faster-whisper (local Whisper with modular provider interface)
+- Diarization: WhisperX, pyannote-audio (batch), Diart (real-time)
+- LLM/Summarization: Unified model selection supporting OpenAI, Anthropic, Gemini, Grok, Ollama, LMStudio
+- Frontend: Vanilla JS web UI served by backend
+
+## LLM Provider Architecture (CRITICAL)
+
+- **Single model selection:** User picks ONE model in Settings > AI Models
+- **Format:** `provider:model_id` (e.g., `openai:gpt-4o`, `anthropic:claude-3-5-sonnet`)
+- **Config location:** `config.json` → `models.selected_model`
+- **Provider credentials:** `config.json` → `providers.<provider>` (api_key, base_url)
+- **Service:** `SummarizationService` reads config dynamically, NOT at boot time
+- **DO NOT** hardcode models or providers anywhere
+- **DO NOT** use separate summarization config — use the unified model selection
 
 ## Dependencies
 
@@ -61,10 +71,19 @@ Default to stdlib first. For new packages, explain why and alternatives briefly 
 ## Framework/OS Gotchas (CRITICAL)
 
 - Audio capture requires **virtual audio device** setup:
-  - macOS: BlackHole
+  - macOS: BlackHole, ZoomAudioDevice (for Zoom calls)
   - Windows: VB-Cable
 - Device permissions may require OS prompts; document steps in README
 - If audio capture seems silent, verify system output is routed to the virtual device
+- **ZoomAudioDevice caveat:** May capture silence if Zoom audio routing is not configured properly in Zoom settings
+
+## Transcription Architecture (CRITICAL)
+
+- **TranscriptionPipeline:** Centralizes all post-audio processing in `app/services/transcription_pipeline.py`
+- **Simulated transcription:** Uses `stream_transcribe_and_format()` for cancellation support
+- **Cancellation:** `threading.Event` checked after each segment, not just at start/end
+- **Finalization on stop:** When user stops transcription, ALWAYS run summarization and title generation with whatever segments exist
+- **Audio source:** Configured in `config.json` → `audio.source` ("device" for live, "file" for simulated)
 
 ## Continuous Documentation
 

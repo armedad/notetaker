@@ -6,12 +6,47 @@ import time
 from app.services.diarization.providers.base import DiarizationConfig, DiarizationProvider
 
 
+def _patch_torch_load() -> None:
+    """Patch torch.load to use weights_only=False for pyannote model compatibility.
+    
+    PyTorch 2.6+ defaults to weights_only=True which breaks pyannote.audio model loading.
+    This patch must be applied before importing whisperx/pyannote.
+    """
+    import torch
+    import torch.serialization
+    
+    if getattr(torch, "_notetaker_load_patched", False):
+        return  # Already patched
+    
+    _original_load = torch.serialization.load
+    
+    def _patched_load(f, *args, **kwargs):
+        # Force weights_only=False for pyannote compatibility
+        kwargs["weights_only"] = False
+        return _original_load(f, *args, **kwargs)
+    
+    torch.serialization.load = _patched_load
+    torch.load = _patched_load
+    
+    # Also patch lightning_fabric if already imported
+    try:
+        import lightning_fabric.utilities.cloud_io as cloud_io
+        cloud_io.torch.load = _patched_load
+    except ImportError:
+        pass
+    
+    torch._notetaker_load_patched = True
+
+
 class WhisperXProvider(DiarizationProvider):
     def __init__(self, config: DiarizationConfig) -> None:
         self._config = config
         self._logger = logging.getLogger("notetaker.diarization.whisperx")
 
     def diarize(self, audio_path: str) -> list[dict]:
+        # Apply torch.load patch before importing whisperx (which imports pyannote)
+        _patch_torch_load()
+        
         try:
             import whisperx
         except Exception as exc:  # pragma: no cover
@@ -38,16 +73,20 @@ class WhisperXProvider(DiarizationProvider):
             diarization = diarize_pipeline(audio_path)
         except Exception as exc:
             error_str = str(exc).lower()
-            if "403" in error_str or "forbidden" in error_str or "gated" in error_str:
+            # Check for license/access issues (various error formats from HuggingFace/pyannote)
+            if any(keyword in error_str for keyword in [
+                "403", "forbidden", "gated", "accept", "user conditions", 
+                "could not download", "access to model"
+            ]):
                 self._logger.error(
-                    "HuggingFace returned 403 Forbidden. The pyannote models "
+                    "HuggingFace model access denied. The pyannote models "
                     "require accepting license agreements. Please visit BOTH URLs, "
                     "log in with your HuggingFace account, and accept the terms: "
                     "(1) https://huggingface.co/pyannote/speaker-diarization-3.1 "
                     "(2) https://huggingface.co/pyannote/segmentation-3.0"
                 )
                 raise RuntimeError(
-                    "HuggingFace 403: Accept pyannote licenses at "
+                    "HuggingFace access denied: Accept pyannote licenses at "
                     "https://huggingface.co/pyannote/speaker-diarization-3.1 AND "
                     "https://huggingface.co/pyannote/segmentation-3.0"
                 ) from exc

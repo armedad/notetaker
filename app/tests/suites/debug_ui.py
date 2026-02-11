@@ -5,11 +5,11 @@ from app.tests.base import TestSuite, TestResult, TestStatus
 
 
 class DebugUISuite(TestSuite):
-    """Tests for the smart summary debug UI."""
+    """Tests for the manual summarization UI."""
 
     suite_id = "debug-ui"
-    name = "Smart Real Time Summary Debug UI"
-    description = "Tests the debug panel in the meeting UI"
+    name = "Manual Summarization UI"
+    description = "Tests the manual summarization section in the meeting UI"
 
     def _register_tests(self):
         self.add_test(
@@ -70,12 +70,10 @@ class DebugUISuite(TestSuite):
                     html = await resp.text()
 
                 # Check for debug button in HTML
-                # Look for button with debug-related id or class
+                # Look for the manual summarization toggle button.
                 has_debug_button = (
-                    'id="debug-btn"' in html
-                    or 'id="debug-button"' in html
-                    or 'class="debug-btn"' in html
-                    or "debug" in html.lower()
+                    'id="toggle-summary-debug"' in html
+                    and "Manual summarization" in html
                 )
 
                 if has_debug_button:

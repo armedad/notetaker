@@ -1,44 +1,118 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
 import re
 import threading
+import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
 class MeetingStore:
-    def __init__(self, path: str) -> None:
-        self._path = path
+    def __init__(self, meetings_dir: str) -> None:
+        self._meetings_dir = meetings_dir
         self._lock = threading.RLock()
         self._events_lock = threading.RLock()
         self._events: list[dict] = []
         self._logger = logging.getLogger("notetaker.meetings")
-        os.makedirs(os.path.dirname(self._path), exist_ok=True)
-        if not os.path.exists(self._path):
-            self._write({"meetings": []})
+        self._trace = logging.getLogger("notetaker.trace")
+        os.makedirs(self._meetings_dir, exist_ok=True)
+
+    def _trace_log(self, stage: str, **fields) -> None:
+        payload = " ".join(f"{k}={fields[k]!r}" for k in sorted(fields.keys()))
+        self._trace.info("TRACE stage=%s ts=%s %s", stage, datetime.utcnow().isoformat(), payload)
+
+    def _list_meeting_paths(self) -> list[str]:
+        try:
+            names = os.listdir(self._meetings_dir)
+        except OSError as exc:
+            self._logger.warning("Failed to list meetings dir: %s", exc)
+            return []
+        paths: list[str] = []
+        for name in names:
+            if not name.endswith(".json"):
+                continue
+            paths.append(os.path.join(self._meetings_dir, name))
+        return sorted(paths)
+
+    def _find_meeting_path(self, meeting_id: str) -> Optional[str]:
+        suffix = f"__{meeting_id}.json"
+        for path in self._list_meeting_paths():
+            if os.path.basename(path).endswith(suffix):
+                return path
+        return None
+
+    @staticmethod
+    def _parse_created_at(created_at: str) -> datetime:
+        # created_at is historically stored as naive UTC isoformat without timezone.
+        dt = datetime.fromisoformat(created_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    @classmethod
+    def _format_local_filename_dt(cls, created_at: str) -> str:
+        dt_utc = cls._parse_created_at(created_at)
+        dt_local = dt_utc.astimezone()  # local tz
+        # Example: 20260211T093012-0800
+        return dt_local.strftime("%Y%m%dT%H%M%S%z")
+
+    @classmethod
+    def _meeting_filename(cls, created_at: str, meeting_id: str) -> str:
+        return f"{cls._format_local_filename_dt(created_at)}__{meeting_id}.json"
+
+    def _meeting_path_for_new(self, created_at: str, meeting_id: str) -> str:
+        return os.path.join(self._meetings_dir, self._meeting_filename(created_at, meeting_id))
+
+    def _read_meeting_file(self, path: str) -> Optional[dict]:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError) as exc:
+            self._logger.warning("Failed to read meeting file: %s error=%s", path, exc)
+        return None
+
+    def _write_meeting_file(self, path: str, meeting: dict) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        temp_path = f"{path}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(meeting, f, indent=2)
+        os.replace(temp_path, path)
 
     def list_meetings(self) -> list[dict]:
         with self._lock:
-            data = self._read()
-            meetings = data.get("meetings", [])
-            updated = False
-            for meeting in meetings:
+            meetings: list[dict] = []
+            for path in self._list_meeting_paths():
+                meeting = self._read_meeting_file(path)
+                if not meeting:
+                    continue
+                updated = False
                 if not meeting.get("summary_state"):
                     meeting["summary_state"] = self._default_summary_state()
                     updated = True
+                if "manual_notes" not in meeting:
+                    meeting["manual_notes"] = ""
+                    updated = True
+                if "manual_summary" not in meeting:
+                    meeting["manual_summary"] = ""
+                    updated = True
                 updated = self._ensure_title_fields(meeting) or updated
-            if updated:
-                self._write({"meetings": meetings})
-            return sorted(
-                meetings,
-                key=lambda meeting: meeting.get("created_at") or "",
-                reverse=True,
-            )
+                if "schema_version" not in meeting:
+                    meeting["schema_version"] = 1
+                    updated = True
+                if updated:
+                    self._write_meeting_file(path, meeting)
+                meetings.append(meeting)
+            return sorted(meetings, key=lambda m: m.get("created_at") or "", reverse=True)
 
     def get_storage_path(self) -> str:
-        return self._path
+        # Kept for compatibility with existing callers; now returns the directory.
+        return self._meetings_dir
 
     def publish_event(self, event_type: str, meeting_id: Optional[str]) -> None:
         with self._events_lock:
@@ -58,39 +132,63 @@ class MeetingStore:
 
     def get_meeting(self, meeting_id: str) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") == meeting_id:
-                    if not meeting.get("summary_state"):
-                        meeting["summary_state"] = self._default_summary_state()
-                        self._write(data)
-                    if self._ensure_title_fields(meeting):
-                        self._write(data)
-                    return meeting
-            return None
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            updated = False
+            if not meeting.get("summary_state"):
+                meeting["summary_state"] = self._default_summary_state()
+                updated = True
+            if "manual_notes" not in meeting:
+                meeting["manual_notes"] = ""
+                updated = True
+            if "manual_summary" not in meeting:
+                meeting["manual_summary"] = ""
+                updated = True
+            updated = self._ensure_title_fields(meeting) or updated
+            if "schema_version" not in meeting:
+                meeting["schema_version"] = 1
+                updated = True
+            if updated:
+                self._write_meeting_file(path, meeting)
+            return meeting
 
     def get_meeting_by_audio_path(self, audio_path: str) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
+            for path in self._list_meeting_paths():
+                meeting = self._read_meeting_file(path)
+                if not meeting:
+                    continue
                 if meeting.get("audio_path") == audio_path:
+                    updated = False
                     if not meeting.get("summary_state"):
                         meeting["summary_state"] = self._default_summary_state()
-                        self._write(data)
-                    if self._ensure_title_fields(meeting):
-                        self._write(data)
+                        updated = True
+                    if "manual_notes" not in meeting:
+                        meeting["manual_notes"] = ""
+                        updated = True
+                    if "manual_summary" not in meeting:
+                        meeting["manual_summary"] = ""
+                        updated = True
+                    updated = self._ensure_title_fields(meeting) or updated
+                    if "schema_version" not in meeting:
+                        meeting["schema_version"] = 1
+                        updated = True
+                    if updated:
+                        self._write_meeting_file(path, meeting)
                     return meeting
             return None
 
     def create_from_recording(self, recording: dict, status: str = "in_progress") -> dict:
         with self._lock:
             meeting_id = recording.get("recording_id") or str(uuid.uuid4())
-            meetings = self._read().get("meetings", [])
-            existing = next(
-                (meeting for meeting in meetings if meeting.get("id") == meeting_id),
-                None,
-            )
-            if existing:
+            existing_path = self._find_meeting_path(meeting_id)
+            if existing_path:
+                existing = self._read_meeting_file(existing_path) or {}
+                existing["schema_version"] = existing.get("schema_version", 1)
                 existing["audio_path"] = recording.get("file_path")
                 existing["recording_id"] = recording.get("recording_id")
                 existing["samplerate"] = recording.get("samplerate")
@@ -98,11 +196,16 @@ class MeetingStore:
                 existing["status"] = status
                 if not existing.get("summary_state"):
                     existing["summary_state"] = self._default_summary_state()
+                if "manual_notes" not in existing:
+                    existing["manual_notes"] = ""
+                if "manual_summary" not in existing:
+                    existing["manual_summary"] = ""
                 if status == "completed":
                     existing["ended_at"] = datetime.utcnow().isoformat()
                 if status == "in_progress":
                     existing["ended_at"] = None
-                self._write({"meetings": meetings})
+                self._ensure_title_fields(existing)
+                self._write_meeting_file(existing_path, existing)
                 self.publish_event(
                     "meeting_completed" if status == "completed" else "meeting_started",
                     existing.get("id"),
@@ -111,6 +214,7 @@ class MeetingStore:
 
             created_at = recording.get("started_at") or datetime.utcnow().isoformat()
             meeting = {
+                "schema_version": 1,
                 "id": meeting_id,
                 "title": f"Meeting {created_at}",
                 "title_source": "default",
@@ -127,11 +231,13 @@ class MeetingStore:
                 "summary": None,
                 "action_items": [],
                 "summary_state": self._default_summary_state(),
+                "manual_notes": "",
+                "manual_summary": "",
             }
             if status == "completed":
                 meeting["ended_at"] = datetime.utcnow().isoformat()
-            meetings.append(meeting)
-            self._write({"meetings": meetings})
+            path = self._meeting_path_for_new(created_at, meeting_id)
+            self._write_meeting_file(path, meeting)
             self._logger.info("Meeting created: id=%s", meeting_id)
             self.publish_event(
                 "meeting_completed" if status == "completed" else "meeting_started",
@@ -144,6 +250,7 @@ class MeetingStore:
             meeting_id = str(uuid.uuid4())
             created_at = datetime.utcnow().isoformat()
             meeting = {
+                "schema_version": 1,
                 "id": meeting_id,
                 "title": f"Meeting {created_at}",
                 "title_source": "default",
@@ -160,12 +267,12 @@ class MeetingStore:
                 "summary": None,
                 "action_items": [],
                 "summary_state": self._default_summary_state(),
+                "manual_notes": "",
+                "manual_summary": "",
                 "simulated": True,
             }
-            data = self._read()
-            meetings = data.get("meetings", [])
-            meetings.append(meeting)
-            self._write({"meetings": meetings})
+            path = self._meeting_path_for_new(created_at, meeting_id)
+            self._write_meeting_file(path, meeting)
             self._logger.info("Simulated meeting created: id=%s", meeting_id)
             self.publish_event("meeting_started", meeting_id)
             return meeting
@@ -174,19 +281,21 @@ class MeetingStore:
         self, audio_path: str, language: Optional[str], segments: list[dict]
     ) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            meetings = data.get("meetings", [])
-            meeting = next(
-                (item for item in meetings if item.get("audio_path") == audio_path),
-                None,
-            )
-            if not meeting:
+            meeting = self.get_meeting_by_audio_path(audio_path)
+            meeting_path = None
+            if meeting:
+                meeting_path = self._find_meeting_path(meeting.get("id", ""))
+
+            if not meeting or not meeting_path:
+                meeting_id = str(uuid.uuid4())
+                created_at = datetime.utcnow().isoformat()
                 meeting = {
-                    "id": str(uuid.uuid4()),
+                    "schema_version": 1,
+                    "id": meeting_id,
                     "title": "Meeting (transcribed)",
-                "title_source": "default",
-                "title_generated_at": None,
-                    "created_at": datetime.utcnow().isoformat(),
+                    "title_source": "default",
+                    "title_generated_at": None,
+                    "created_at": created_at,
                     "audio_path": audio_path,
                     "recording_id": None,
                     "samplerate": None,
@@ -198,8 +307,10 @@ class MeetingStore:
                     "summary": None,
                     "action_items": [],
                     "summary_state": self._default_summary_state(),
+                    "manual_notes": "",
+                    "manual_summary": "",
                 }
-                meetings.append(meeting)
+                meeting_path = self._meeting_path_for_new(created_at, meeting_id)
 
             attendees, normalized_segments = self._assign_attendees(
                 meeting.get("attendees", []), segments
@@ -212,11 +323,15 @@ class MeetingStore:
             }
             if not meeting.get("summary_state"):
                 meeting["summary_state"] = self._default_summary_state()
+            if "manual_notes" not in meeting:
+                meeting["manual_notes"] = ""
+            if "manual_summary" not in meeting:
+                meeting["manual_summary"] = ""
             self._ensure_title_fields(meeting)
             if meeting.get("status") != "in_progress":
                 meeting["status"] = "completed"
                 meeting["ended_at"] = meeting.get("ended_at") or datetime.utcnow().isoformat()
-            self._write({"meetings": meetings})
+            self._write_meeting_file(meeting_path, meeting)
             self._logger.info("Transcript saved: id=%s", meeting.get("id"))
             self.publish_event("meeting_updated", meeting.get("id"))
             return meeting
@@ -229,26 +344,28 @@ class MeetingStore:
         provider: str,
     ) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") == meeting_id:
-                    normalized_items: list[dict] = []
-                    for item in action_items:
-                        if isinstance(item, str):
-                            normalized_items.append({"description": item})
-                            continue
-                        if isinstance(item, dict):
-                            normalized_items.append(item)
-                    meeting["summary"] = {
-                        "text": summary,
-                        "provider": provider,
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }
-                    meeting["action_items"] = normalized_items
-                    self._write(data)
-                    self._logger.info("Summary saved: id=%s", meeting_id)
-                    return meeting
-            return None
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            normalized_items: list[dict] = []
+            for item in action_items:
+                if isinstance(item, str):
+                    normalized_items.append({"description": item})
+                    continue
+                if isinstance(item, dict):
+                    normalized_items.append(item)
+            meeting["summary"] = {
+                "text": summary,
+                "provider": provider,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            meeting["action_items"] = normalized_items
+            self._write_meeting_file(path, meeting)
+            self._logger.info("Summary saved: id=%s", meeting_id)
+            return meeting
 
     def maybe_auto_title(
         self,
@@ -259,259 +376,446 @@ class MeetingStore:
         force: bool = False,
     ) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") != meeting_id:
-                    continue
-                self._ensure_title_fields(meeting)
-                if meeting.get("title_source") == "manual":
-                    return meeting
-                if meeting.get("title_generated_at") and not force:
-                    return meeting
-                if not force:
-                    try:
-                        if not summarization_service.is_meaningful_summary(
-                            summary_text, provider_override=provider_override
-                        ):
-                            return meeting
-                    except Exception as exc:
-                        self._logger.warning("Meaningful summary check failed: %s", exc)
-                        return meeting
-                title = summarization_service.generate_title(
-                    summary_text, provider_override=provider_override
-                )
-                meeting["title"] = title
-                meeting["title_source"] = "auto"
-                meeting["title_generated_at"] = datetime.utcnow().isoformat()
-                self._write(data)
-                self._logger.info("Auto title saved: id=%s", meeting_id)
-                self.publish_event("meeting_updated", meeting_id)
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            self._ensure_title_fields(meeting)
+            if meeting.get("title_source") == "manual":
                 return meeting
+            # Only generate once (unless forced).
+            if meeting.get("title_generated_at") and not force:
+                return meeting
+            if not force:
+                try:
+                    if not summarization_service.is_meaningful_summary(
+                        summary_text, provider_override=provider_override
+                    ):
+                        return meeting
+                except Exception as exc:
+                    self._logger.warning("Meaningful summary check failed: %s", exc)
+                    return meeting
+            title = summarization_service.generate_title(
+                summary_text, provider_override=provider_override
+            )
+            meeting["title"] = title
+            meeting["title_source"] = "auto"
+            meeting["title_generated_at"] = datetime.utcnow().isoformat()
+            self._write_meeting_file(path, meeting)
+            self._logger.info("Auto title saved: id=%s", meeting_id)
+            self.publish_event("meeting_updated", meeting_id)
+            return meeting
             return None
 
     def update_title(
         self, meeting_id: str, title: str, source: str = "manual"
     ) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") == meeting_id:
-                    meeting["title"] = title
-                    if source == "auto":
-                        meeting["title_source"] = "auto"
-                        meeting["title_generated_at"] = datetime.utcnow().isoformat()
-                    else:
-                        meeting["title_source"] = "manual"
-                        meeting["title_generated_at"] = None
-                    self._write(data)
-                    return meeting
-            return None
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            meeting["title"] = title
+            if source == "auto":
+                meeting["title_source"] = "auto"
+                meeting["title_generated_at"] = datetime.utcnow().isoformat()
+            else:
+                meeting["title_source"] = "manual"
+                meeting["title_generated_at"] = None
+            self._write_meeting_file(path, meeting)
+            return meeting
 
     def update_attendees(self, meeting_id: str, attendees: list[dict]) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") == meeting_id:
-                    meeting["attendees"] = attendees
-                    self._write(data)
-                    return meeting
-            return None
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            meeting["attendees"] = attendees
+            self._write_meeting_file(path, meeting)
+            return meeting
 
     def update_status(self, meeting_id: str, status: str) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") == meeting_id:
-                    meeting["status"] = status
-                    if status == "in_progress":
-                        meeting["ended_at"] = None
-                    if status == "completed":
-                        meeting["ended_at"] = datetime.utcnow().isoformat()
-                    self._write(data)
-                    self.publish_event(
-                        "meeting_completed"
-                        if status == "completed"
-                        else "meeting_started"
-                        if status == "in_progress"
-                        else "meeting_updated",
-                        meeting_id,
-                    )
-                    return meeting
-            return None
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            meeting["status"] = status
+            if status == "in_progress":
+                meeting["ended_at"] = None
+            if status == "completed":
+                meeting["ended_at"] = datetime.utcnow().isoformat()
+            self._write_meeting_file(path, meeting)
+            self.publish_event(
+                "meeting_completed"
+                if status == "completed"
+                else "meeting_started"
+                if status == "in_progress"
+                else "meeting_updated",
+                meeting_id,
+            )
+            return meeting
 
     def update_transcript_speakers(
         self, meeting_id: str, segments: list[dict]
     ) -> Optional[dict]:
         """Update speaker labels in transcript segments after diarization."""
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") == meeting_id:
-                    transcript = meeting.get("transcript", {})
-                    if isinstance(transcript, dict):
-                        existing_segments = transcript.get("segments", [])
-                        # Match by start time and update speaker
-                        segment_map = {s["start"]: s.get("speaker") for s in segments}
-                        for seg in existing_segments:
-                            if seg["start"] in segment_map:
-                                seg["speaker"] = segment_map[seg["start"]]
-                        self._write(data)
-                        self.publish_event("meeting_updated", meeting_id)
-                    return meeting
-            return None
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            transcript = meeting.get("transcript", {})
+            if isinstance(transcript, dict):
+                existing_segments = transcript.get("segments", [])
+                segment_map = {s["start"]: s.get("speaker") for s in segments}
+                for seg in existing_segments:
+                    if seg["start"] in segment_map:
+                        seg["speaker"] = segment_map[seg["start"]]
+                meeting["transcript"] = transcript
+                self._write_meeting_file(path, meeting)
+                self.publish_event("meeting_updated", meeting_id)
+            return meeting
 
     def update_attendee_name(
         self, meeting_id: str, attendee_id: str, name: str
     ) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") == meeting_id:
-                    attendees = meeting.get("attendees", [])
-                    for attendee in attendees:
-                        if attendee.get("id") == attendee_id:
-                            attendee["name"] = name
-                            self._write(data)
-                            return meeting
-                    return None
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            attendees = meeting.get("attendees", [])
+            for attendee in attendees:
+                if attendee.get("id") == attendee_id:
+                    attendee["name"] = name
+                    self._write_meeting_file(path, meeting)
+                    return meeting
             return None
+
+    def update_manual_buffers(
+        self, meeting_id: str, manual_notes: str, manual_summary: str
+    ) -> Optional[dict]:
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            meeting["manual_notes"] = manual_notes or ""
+            meeting["manual_summary"] = manual_summary or ""
+            self._write_meeting_file(path, meeting)
+            self.publish_event("meeting_updated", meeting_id)
+            return meeting
 
     def delete_meeting(self, meeting_id: str) -> bool:
         with self._lock:
-            data = self._read()
-            meetings = data.get("meetings", [])
-            filtered = [meeting for meeting in meetings if meeting.get("id") != meeting_id]
-            if len(filtered) == len(meetings):
+            path = self._find_meeting_path(meeting_id)
+            if not path:
                 return False
-            self._write({"meetings": filtered})
-            return True
+            try:
+                os.unlink(path)
+                return True
+            except OSError as exc:
+                self._logger.warning("Failed to delete meeting file: %s error=%s", path, exc)
+                return False
 
     def append_live_segment(
         self, meeting_id: str, segment: dict, language: Optional[str]
     ) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") == meeting_id:
-                    transcript = meeting.get("transcript") or {
-                        "language": language,
-                        "segments": [],
-                    }
-                    if not transcript.get("language") and language:
-                        transcript["language"] = language
-                    transcript["segments"] = transcript.get("segments") or []
-                    transcript["segments"].append(segment)
-                    transcript["updated_at"] = datetime.utcnow().isoformat()
-                    meeting["transcript"] = transcript
-                    summary_state = meeting.get("summary_state") or self._default_summary_state()
-                    segment_text = segment.get("text", "").strip()
-                    if segment_text:
-                        streaming_text = summary_state.get("streaming_text", "")
-                        summary_state["streaming_text"] = (
-                            f"{streaming_text} {segment_text}".strip()
-                            if streaming_text
-                            else segment_text
-                        )
-                        summary_state["last_processed_segment_index"] = len(
-                            transcript["segments"]
-                        )
-                        summary_state["updated_at"] = datetime.utcnow().isoformat()
-                        meeting["summary_state"] = summary_state
-                    self._write(data)
-                    return meeting
-            return None
+            self._trace_log(
+                "meeting_append_live_segment_enter",
+                meeting_id=meeting_id,
+                segment_start=segment.get("start"),
+                segment_end=segment.get("end"),
+                text_len=len(segment.get("text", "") or ""),
+            )
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            transcript = meeting.get("transcript") or {
+                "language": language,
+                "segments": [],
+            }
+            if not transcript.get("language") and language:
+                transcript["language"] = language
+            transcript["segments"] = transcript.get("segments") or []
+            transcript["segments"].append(segment)
+            transcript["updated_at"] = datetime.utcnow().isoformat()
+            meeting["transcript"] = transcript
+            summary_state = meeting.get("summary_state") or self._default_summary_state()
+            segment_text = segment.get("text", "").strip()
+            if segment_text:
+                # SPEC WORKFLOW STEP 1 logs
+                self._trace_log(
+                    "spec_step_1_append_segment_to_streaming_start",
+                    meeting_id=meeting_id,
+                    incoming_text_len=len(segment_text),
+                    streaming_len_before=len(summary_state.get("streaming_text", "") or ""),
+                )
+                streaming_text = summary_state.get("streaming_text", "")
+                summary_state["streaming_text"] = (
+                    f"{streaming_text} {segment_text}".strip()
+                    if streaming_text
+                    else segment_text
+                )
+                summary_state["last_processed_segment_index"] = len(transcript["segments"])
+                summary_state["updated_at"] = datetime.utcnow().isoformat()
+                meeting["summary_state"] = summary_state
+                self._trace_log(
+                    "spec_step_1_append_segment_to_streaming_end",
+                    meeting_id=meeting_id,
+                    streaming_len_after=len(summary_state.get("streaming_text", "") or ""),
+                    last_processed_segment_index=summary_state.get("last_processed_segment_index"),
+                )
+            self._write_meeting_file(path, meeting)
+            self._trace_log(
+                "meeting_append_live_segment_exit",
+                meeting_id=meeting_id,
+                streaming_len=len((meeting.get("summary_state") or {}).get("streaming_text", "") or ""),
+                draft_len=len((meeting.get("summary_state") or {}).get("draft_text", "") or ""),
+                done_len=len((meeting.get("summary_state") or {}).get("done_text", "") or ""),
+                summarized_len=len((meeting.get("summary_state") or {}).get("summarized_summary", "") or ""),
+                interim_len=len((meeting.get("summary_state") or {}).get("interim_summary", "") or ""),
+            )
+            return meeting
 
     def append_live_meta(self, meeting_id: str, language: Optional[str]) -> Optional[dict]:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") == meeting_id:
-                    transcript = meeting.get("transcript") or {
-                        "language": language,
-                        "segments": [],
-                    }
-                    if not transcript.get("language") and language:
-                        transcript["language"] = language
-                    transcript["updated_at"] = datetime.utcnow().isoformat()
-                    meeting["transcript"] = transcript
-                    self._write(data)
-                    return meeting
-            return None
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            transcript = meeting.get("transcript") or {
+                "language": language,
+                "segments": [],
+            }
+            if not transcript.get("language") and language:
+                transcript["language"] = language
+            transcript["updated_at"] = datetime.utcnow().isoformat()
+            meeting["transcript"] = transcript
+            self._write_meeting_file(path, meeting)
+            return meeting
 
     def step_summary_state(self, meeting_id: str, summarization_service) -> dict:
         with self._lock:
-            data = self._read()
-            for meeting in data.get("meetings", []):
-                if meeting.get("id") == meeting_id:
-                    summary_state = meeting.get("summary_state") or self._default_summary_state()
-                    self._logger.info("Summary tick start: id=%s", meeting_id)
-                    streaming_text = summary_state.get("streaming_text", "")
-                    completed_text, remainder = self._extract_complete_sentences(
-                        streaming_text
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                raise ValueError("Meeting not found")
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                raise ValueError("Meeting not found")
+            summary_state = meeting.get("summary_state") or self._default_summary_state()
+            t0 = time.perf_counter()
+            self._trace_log(
+                "summary_tick_start",
+                meeting_id=meeting_id,
+                streaming_len=len(summary_state.get("streaming_text", "") or ""),
+                draft_len=len(summary_state.get("draft_text", "") or ""),
+                done_len=len(summary_state.get("done_text", "") or ""),
+                summarized_len=len(summary_state.get("summarized_summary", "") or ""),
+                interim_len=len(summary_state.get("interim_summary", "") or ""),
+            )
+            streaming_text = summary_state.get("streaming_text", "")
+            # IMPORTANT (matches spec intent, fixes practical behavior):
+            # Whisper/live transcripts often contain little/no punctuation, which makes
+            # "extract full sentences" on raw text a no-op forever. Instead:
+            # 1) Run cleanup on streaming_text to normalize punctuation
+            # 2) Extract complete sentences from the cleaned output
+            # 3) Move only whole sentences into draft_text, keep remainder in streaming_text
+            if streaming_text.strip():
+                try:
+                    t_clean = time.perf_counter()
+                    # SPEC WORKFLOW STEP 3:
+                    # Send extracted text to LLM for cleanup (transcription error correction).
+                    # (Implementation detail: we clean the streaming buffer first to add punctuation.)
+                    self._trace_log(
+                        "spec_step_3_llm_cleanup_start",
+                        meeting_id=meeting_id,
+                        input_len=len(streaming_text),
                     )
-                    if completed_text.strip():
-                        try:
-                            cleaned = summarization_service.cleanup_transcript(
-                                completed_text
-                            )
-                        except Exception as exc:
-                            self._logger.warning("Summary cleanup failed: %s", exc)
-                            return summary_state
-                        if cleaned.strip():
-                            draft_text = summary_state.get("draft_text", "")
-                            summary_state["draft_text"] = (
-                                f"{draft_text}\n{cleaned}".strip()
-                                if draft_text
-                                else cleaned.strip()
-                            )
-                        summary_state["streaming_text"] = remainder.lstrip()
-                    summary_state["updated_at"] = datetime.utcnow().isoformat()
-
-                    draft_text = summary_state.get("draft_text", "").strip()
-                    if draft_text:
-                        try:
-                            topics = summarization_service.segment_topics(draft_text)
-                        except Exception as exc:
-                            self._logger.warning("Topic segmentation failed: %s", exc)
-                            meeting["summary_state"] = summary_state
-                            self._write(data)
-                            self.publish_event("meeting_updated", meeting_id)
-                            return summary_state
-
-                        if topics:
-                            for topic in topics[:-1]:
-                                summary_text = str(topic.get("summary", "")).strip()
-                                transcript_text = str(topic.get("transcript", "")).strip()
-                                if summary_text:
-                                    summarized = summary_state.get("summarized_summary", "")
-                                    summary_state["summarized_summary"] = (
-                                        f"{summarized}\n\n{summary_text}".strip()
-                                        if summarized
-                                        else summary_text
-                                    )
-                                if transcript_text:
-                                    done_text = summary_state.get("done_text", "")
-                                    summary_state["done_text"] = (
-                                        f"{done_text}\n{transcript_text}".strip()
-                                        if done_text
-                                        else transcript_text
-                                    )
-                            last_topic = topics[-1]
-                            interim_summary = str(last_topic.get("summary", "")).strip()
-                            interim_transcript = str(
-                                last_topic.get("transcript", "")
-                            ).strip()
-                            if interim_summary:
-                                summary_state["interim_summary"] = interim_summary
-                            if interim_transcript:
-                                summary_state["draft_text"] = interim_transcript
-
-                    meeting["summary_state"] = summary_state
-                    self._write(data)
-                    self.publish_event("meeting_updated", meeting_id)
-                    self._logger.info("Summary tick complete: id=%s", meeting_id)
+                    cleaned_streaming = summarization_service.cleanup_transcript(streaming_text)
+                    self._trace_log(
+                        "spec_step_3_llm_cleanup_end",
+                        meeting_id=meeting_id,
+                        elapsed_s=round(time.perf_counter() - t_clean, 3),
+                        output_len=len(cleaned_streaming or ""),
+                    )
+                except Exception as exc:
+                    # Spec: If cleanup fails, skip update and keep streams unchanged.
+                    self._logger.warning("Summary cleanup failed: %s", exc)
+                    self._trace_log("spec_step_3_llm_cleanup_error", meeting_id=meeting_id, error=str(exc))
                     return summary_state
-            raise ValueError("Meeting not found")
+
+                # SPEC WORKFLOW STEP 2:
+                # Extract full sentences from the top of `streaming_text`; keep remainder in streaming.
+                completed_text, remainder = self._extract_complete_sentences(cleaned_streaming or "")
+                self._trace_log(
+                    "spec_step_2_extract_full_sentences",
+                    meeting_id=meeting_id,
+                    completed_len=len(completed_text or ""),
+                    remainder_len=len(remainder or ""),
+                )
+
+                if completed_text.strip():
+                    # SPEC WORKFLOW STEP 4:
+                    # Append cleaned text to `draft_text`.
+                    self._trace_log(
+                        "spec_step_4_append_to_draft_start",
+                        meeting_id=meeting_id,
+                        append_len=len(completed_text),
+                        draft_len_before=len(summary_state.get("draft_text", "") or ""),
+                    )
+                    draft_text = summary_state.get("draft_text", "")
+                    summary_state["draft_text"] = (
+                        f"{draft_text}\n{completed_text}".strip()
+                        if draft_text
+                        else completed_text.strip()
+                    )
+                    self._trace_log(
+                        "spec_step_4_append_to_draft_end",
+                        meeting_id=meeting_id,
+                        draft_len_after=len(summary_state.get("draft_text", "") or ""),
+                    )
+                else:
+                    self._trace_log(
+                        "spec_step_4_append_to_draft_skipped",
+                        meeting_id=meeting_id,
+                        reason="no_complete_sentences",
+                    )
+
+                # Keep remainder in streaming. Note this is now "cleaned remainder";
+                # new raw segments will append to it; that's acceptable for a working stream.
+                summary_state["streaming_text"] = (remainder or "").lstrip()
+            else:
+                self._trace_log(
+                    "spec_step_2_extract_full_sentences_skipped",
+                    meeting_id=meeting_id,
+                    reason="streaming_text_empty",
+                )
+
+            summary_state["updated_at"] = datetime.utcnow().isoformat()
+
+            draft_text = summary_state.get("draft_text", "").strip()
+            if draft_text:
+                try:
+                    t_seg = time.perf_counter()
+                    # SPEC WORKFLOW STEP 5:
+                    # Send `draft_text` to LLM to detect topic boundaries and summarize each topic.
+                    self._trace_log(
+                        "spec_step_5_llm_segment_topics_start",
+                        meeting_id=meeting_id,
+                        input_len=len(draft_text),
+                    )
+                    topics = summarization_service.segment_topics(draft_text)
+                    self._trace_log(
+                        "spec_step_5_llm_segment_topics_end",
+                        meeting_id=meeting_id,
+                        elapsed_s=round(time.perf_counter() - t_seg, 3),
+                        topics=len(topics) if topics else 0,
+                    )
+                except Exception as exc:
+                    self._logger.warning("Topic segmentation failed: %s", exc)
+                    self._trace_log("spec_step_5_llm_segment_topics_error", meeting_id=meeting_id, error=str(exc))
+                    meeting["summary_state"] = summary_state
+                    self._write_meeting_file(path, meeting)
+                    self.publish_event("meeting_updated", meeting_id)
+                    return summary_state
+
+                if topics:
+                    # SPEC WORKFLOW STEP 6:
+                    # For each topic except the last (in-progress topic), move transcript+summary to done/summarized.
+                    self._trace_log(
+                        "spec_step_6_finalize_topics_start",
+                        meeting_id=meeting_id,
+                        topics_total=len(topics),
+                    )
+                    for topic in topics[:-1]:
+                        summary_text = str(topic.get("summary", "")).strip()
+                        transcript_text = str(topic.get("transcript", "")).strip()
+                        if summary_text:
+                            summarized = summary_state.get("summarized_summary", "")
+                            summary_state["summarized_summary"] = (
+                                f"{summarized}\n\n{summary_text}".strip()
+                                if summarized
+                                else summary_text
+                            )
+                        if transcript_text:
+                            done_text = summary_state.get("done_text", "")
+                            summary_state["done_text"] = (
+                                f"{done_text}\n{transcript_text}".strip()
+                                if done_text
+                                else transcript_text
+                            )
+                    last_topic = topics[-1]
+                    interim_summary = str(last_topic.get("summary", "")).strip()
+                    interim_transcript = str(last_topic.get("transcript", "")).strip()
+                    if interim_summary:
+                        summary_state["interim_summary"] = interim_summary
+                    if interim_transcript:
+                        summary_state["draft_text"] = interim_transcript
+                    self._trace_log(
+                        "spec_step_6_finalize_topics_end",
+                        meeting_id=meeting_id,
+                        done_len=len(summary_state.get("done_text", "") or ""),
+                        summarized_len=len(summary_state.get("summarized_summary", "") or ""),
+                    )
+
+                    # SPEC WORKFLOW STEP 7:
+                    # Keep last topic in draft_text and its summary in interim_summary.
+                    self._trace_log(
+                        "spec_step_7_keep_last_topic_in_progress",
+                        meeting_id=meeting_id,
+                        draft_len=len(summary_state.get("draft_text", "") or ""),
+                        interim_len=len(summary_state.get("interim_summary", "") or ""),
+                    )
+                else:
+                    self._trace_log(
+                        "spec_step_6_finalize_topics_skipped",
+                        meeting_id=meeting_id,
+                        reason="topics_empty",
+                    )
+            else:
+                self._trace_log(
+                    "spec_step_5_llm_segment_topics_skipped",
+                    meeting_id=meeting_id,
+                    reason="draft_text_empty",
+                )
+
+            meeting["summary_state"] = summary_state
+            self._write_meeting_file(path, meeting)
+            self.publish_event("meeting_updated", meeting_id)
+            self._trace_log(
+                "summary_tick_end",
+                meeting_id=meeting_id,
+                elapsed_s=round(time.perf_counter() - t0, 3),
+                streaming_len=len(summary_state.get("streaming_text", "") or ""),
+                draft_len=len(summary_state.get("draft_text", "") or ""),
+                done_len=len(summary_state.get("done_text", "") or ""),
+                summarized_len=len(summary_state.get("summarized_summary", "") or ""),
+                interim_len=len(summary_state.get("interim_summary", "") or ""),
+            )
+            return summary_state
 
     def _extract_complete_sentences(self, text: str) -> tuple[str, str]:
         if not text:
@@ -652,20 +956,6 @@ class MeetingStore:
         while index in used:
             index += 1
         return index
-
-    def _read(self) -> dict:
-        try:
-            with open(self._path, "r", encoding="utf-8") as file:
-                return json.load(file)
-        except (OSError, json.JSONDecodeError) as exc:
-            self._logger.exception("Failed to read meetings file: %s", exc)
-            return {"meetings": []}
-
-    def _write(self, data: dict) -> None:
-        temp_path = f"{self._path}.tmp"
-        with open(temp_path, "w", encoding="utf-8") as file:
-            json.dump(data, file, indent=2)
-        os.replace(temp_path, self._path)
 
     def _default_summary_state(self) -> dict:
         return {

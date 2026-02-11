@@ -31,6 +31,7 @@ class AudioCaptureService:
         self._live_queue: "queue.Queue[bytes]" = queue.Queue(maxsize=60)
         self._writer_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._capture_stopped = threading.Event()  # Signals capture has stopped but transcription may continue
         self._stream: Optional[sd.RawInputStream] = None
         self._logger = logging.getLogger("notetaker.audio")
         self._callback_counter = 0
@@ -69,10 +70,15 @@ class AudioCaptureService:
         with self._lock:
             return self._state.recording_id is not None
 
+    def is_capture_stopped(self) -> bool:
+        """Check if audio capture has stopped (but transcription may still be processing)."""
+        return self._capture_stopped.is_set()
+
     def enable_live_tap(self) -> None:
         with self._lock:
             self._logger.debug("Live tap enabled")
             self._live_enabled = True
+            self._capture_stopped.clear()
 
     def disable_live_tap(self) -> None:
         with self._lock:
@@ -84,11 +90,37 @@ class AudioCaptureService:
                 except queue.Empty:
                     break
 
+    def signal_capture_stopped(self) -> None:
+        """Signal that audio capture has stopped. Call this when user requests stop."""
+        self._capture_stopped.set()
+        self._logger.debug("Capture stopped signal set")
+
     def get_live_chunk(self, timeout: float = 0.5) -> Optional[bytes]:
         try:
             return self._live_queue.get(timeout=timeout)
         except queue.Empty:
             return None
+
+    def drain_live_queue(self) -> bytes:
+        """Drain all remaining audio from the live queue.
+        
+        Call this after capture stops to get any buffered audio that
+        should still be transcribed.
+        
+        Returns:
+            Concatenated bytes of all remaining audio chunks
+        """
+        chunks = []
+        while True:
+            try:
+                chunk = self._live_queue.get_nowait()
+                chunks.append(chunk)
+            except queue.Empty:
+                break
+        
+        total_bytes = sum(len(c) for c in chunks)
+        self._logger.debug("Drained live queue: %d chunks, %d bytes", len(chunks), total_bytes)
+        return b"".join(chunks)
 
     def current_status(self) -> dict:
         with self._lock:
@@ -184,6 +216,7 @@ class AudioCaptureService:
             )
 
             self._stop_event.clear()
+            self._capture_stopped.clear()
             self._writer_thread = threading.Thread(
                 target=self._writer_loop, daemon=True
             )

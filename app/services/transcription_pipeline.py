@@ -13,7 +13,13 @@ All transcription endpoints should use this pipeline after obtaining audio.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+import os
+import tempfile
+import threading
+from typing import TYPE_CHECKING, Callable, Iterator, Optional
+
+import numpy as np
+import soundfile as sf
 
 if TYPE_CHECKING:
     from app.services.transcription import FasterWhisperProvider
@@ -67,15 +73,27 @@ class TranscriptionPipeline:
         self._meeting_store = meeting_store
         self._summarization = summarization_service
         self._logger = logging.getLogger("notetaker.transcription.pipeline")
+
+    def get_chunk_size(self) -> float:
+        """Get the optimal chunk size for live transcription.
+        
+        Returns the provider's optimal chunk size, which varies by model:
+        - Whisper: 30 seconds (fixed encoder window)
+        - Parakeet: 2 seconds (configurable streaming)
+        - Vosk: 0.5 seconds (native streaming)
+        """
+        return self._provider.get_chunk_size()
     
     def transcribe_and_format(
         self,
         audio_path: str,
+        cancel_event: Optional[threading.Event] = None,
     ) -> tuple[list[dict], Optional[str]]:
         """Transcribe audio and format segments to standard dict format.
         
         Args:
             audio_path: Path to audio file
+            cancel_event: Optional threading.Event to check for cancellation
             
         Returns:
             Tuple of (formatted segments, detected language)
@@ -85,6 +103,10 @@ class TranscriptionPipeline:
         
         segments: list[dict] = []
         for segment in segments_iter:
+            # Check for cancellation after each segment
+            if cancel_event and cancel_event.is_set():
+                self._logger.info("Transcription cancelled during processing")
+                break
             segments.append({
                 "type": "segment",
                 "start": float(segment.start),
@@ -94,6 +116,191 @@ class TranscriptionPipeline:
             })
         
         return segments, language
+    
+    def stream_transcribe_and_format(
+        self,
+        audio_path: str,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Iterator[tuple[dict, Optional[str]]]:
+        """Stream transcription segments one at a time for live updates.
+        
+        Args:
+            audio_path: Path to audio file
+            cancel_event: Optional threading.Event to check for cancellation
+            
+        Yields:
+            Tuples of (segment dict, detected language)
+        """
+        segments_iter, info = self._provider.stream_segments(audio_path)
+        language = getattr(info, "language", None)
+        
+        for segment in segments_iter:
+            # Check for cancellation after each segment
+            if cancel_event and cancel_event.is_set():
+                self._logger.info("Transcription cancelled during streaming")
+                return
+            yield {
+                "type": "segment",
+                "start": float(segment.start),
+                "end": float(segment.end),
+                "text": segment.text.strip(),
+                "speaker": None,
+            }, language
+
+    def chunked_transcribe_and_format(
+        self,
+        audio_path: str,
+        cancel_event: Optional[threading.Event] = None,
+        on_chunk_ingested: Optional[Callable[[int, float], None]] = None,
+    ) -> Iterator[tuple[dict, Optional[str], bool]]:
+        """Transcribe file in chunks with cancellation between chunks.
+        
+        This method reads the audio file in chunks matching the model's optimal
+        chunk size. Cancellation is checked BEFORE each chunk is transcribed,
+        allowing for responsive stop behavior:
+        
+        1. When cancel_event is set, no more audio is ingested
+        2. The current chunk being transcribed will complete
+        3. Any subsequent chunks will be skipped
+        
+        Args:
+            audio_path: Path to audio file
+            cancel_event: Optional threading.Event to check for cancellation
+            on_chunk_ingested: Callback(chunk_num, offset_seconds) when chunk is read
+            
+        Yields:
+            Tuples of (segment dict, detected language, was_cancelled)
+            The was_cancelled flag is True only on the final yield if cancelled
+        """
+        import time
+        chunk_seconds = self.get_chunk_size()
+        
+        # Read audio file info
+        try:
+            info = sf.info(audio_path)
+            samplerate = info.samplerate
+            channels = info.channels
+            total_frames = info.frames
+            total_duration = info.duration
+        except Exception as exc:
+            self._logger.error("Failed to read audio file: %s", exc)
+            return
+        
+        chunk_frames = int(samplerate * chunk_seconds)
+        offset_frames = 0
+        chunk_num = 0
+        language = None
+        was_cancelled = False
+        
+        self._logger.info(
+            "Chunked transcription start: audio=%s duration=%.1fs chunk_size=%.1fs",
+            audio_path,
+            total_duration,
+            chunk_seconds,
+        )
+        
+        while offset_frames < total_frames:
+            # Check for cancellation BEFORE reading next chunk
+            if cancel_event and cancel_event.is_set():
+                cancel_detected_time = time.perf_counter()
+                self._logger.info(
+                    "TIMING: Cancel detected before chunk %d (offset=%.1fs) - stop will complete now",
+                    chunk_num,
+                    offset_frames / samplerate,
+                )
+                was_cancelled = True
+                break
+            
+            # Calculate chunk bounds
+            end_frames = min(offset_frames + chunk_frames, total_frames)
+            frames_to_read = end_frames - offset_frames
+            offset_seconds = offset_frames / samplerate
+            
+            # Read chunk from file
+            try:
+                audio_data, _ = sf.read(
+                    audio_path,
+                    start=offset_frames,
+                    stop=end_frames,
+                    dtype='int16',
+                )
+            except Exception as exc:
+                self._logger.error("Failed to read audio chunk: %s", exc)
+                break
+            
+            # Notify that chunk has been ingested
+            if on_chunk_ingested:
+                on_chunk_ingested(chunk_num, offset_seconds)
+            
+            # Write chunk to temp file for transcription
+            temp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    temp_path = tmp.name
+                
+                with sf.SoundFile(
+                    temp_path,
+                    mode="w",
+                    samplerate=samplerate,
+                    channels=channels,
+                    subtype="PCM_16",
+                ) as f:
+                    f.write(audio_data)
+                
+                # Transcribe the chunk with timing instrumentation
+                chunk_start_time = time.perf_counter()
+                self._logger.info(
+                    "TIMING: Chunk %d transcription START (audio offset=%.1fs, audio_duration=%.1fs)",
+                    chunk_num,
+                    offset_seconds,
+                    frames_to_read / samplerate,
+                )
+                
+                segments, chunk_lang, chunk_duration = self.transcribe_chunk(
+                    temp_path,
+                    offset_seconds,
+                )
+                
+                chunk_elapsed = time.perf_counter() - chunk_start_time
+                self._logger.info(
+                    "TIMING: Chunk %d transcription END (took %.2fs for %.1fs audio, ratio=%.2fx)",
+                    chunk_num,
+                    chunk_elapsed,
+                    frames_to_read / samplerate,
+                    chunk_elapsed / (frames_to_read / samplerate) if frames_to_read > 0 else 0,
+                )
+                
+                if chunk_lang and not language:
+                    language = chunk_lang
+                
+                # Yield segments from this chunk
+                for segment in segments:
+                    yield segment, language, False
+                    
+            except Exception as exc:
+                self._logger.warning("Chunk %d transcription error: %s", chunk_num, exc)
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
+            
+            offset_frames = end_frames
+            chunk_num += 1
+        
+        # Final yield to signal completion status
+        if was_cancelled:
+            # Yield a marker that transcription was cancelled
+            self._logger.info(
+                "Chunked transcription cancelled: processed %d chunks",
+                chunk_num,
+            )
+        else:
+            self._logger.info(
+                "Chunked transcription complete: %d chunks",
+                chunk_num,
+            )
     
     def run_diarization(
         self,

@@ -26,7 +26,7 @@ from app.routers.uploads import create_uploads_router
 from app.routers.testing import create_testing_router
 from app.services.audio_capture import AudioCaptureService
 from app.services.meeting_store import MeetingStore
-from app.services.summarization import SummarizationConfig, SummarizationService
+from app.services.summarization import SummarizationService
 from app.services.logging_setup import configure_logging
 from app.services.crash_logging import enable_crash_logging
 
@@ -60,38 +60,19 @@ def create_app() -> FastAPI:
     app.state.version = version
     static_dir = os.path.join(base_dir, "static")
     recordings_dir = os.path.join(cwd, "data", "recordings")
-    meetings_path = os.path.join(cwd, "data", "meetings.json")
+    meetings_dir = os.path.join(cwd, "data", "meetings")
     logger.info(
-        "Boot: static_dir=%s recordings_dir=%s meetings_path=%s",
+        "Boot: static_dir=%s recordings_dir=%s meetings_dir=%s",
         static_dir,
         recordings_dir,
-        meetings_path,
+        meetings_dir,
     )
     audio_service = AudioCaptureService(recordings_dir=recordings_dir)
     logger.info("Boot: audio_service ready")
-    meeting_store = MeetingStore(path=meetings_path)
+    meeting_store = MeetingStore(meetings_dir=meetings_dir)
     logger.info("Boot: meeting_store ready")
-    summarization_config = config.get("summarization", {})
-    logger.info("Boot: summarization_config keys=%s", sorted(summarization_config.keys()))
-    summarization_service = SummarizationService(
-        SummarizationConfig(
-            provider=summarization_config.get("provider", "ollama"),
-            ollama_base_url=summarization_config.get(
-                "ollama_base_url", "http://127.0.0.1:11434"
-            ),
-            ollama_model=summarization_config.get("ollama_model", "llama3.1"),
-            openai_api_key=summarization_config.get("openai_api_key", ""),
-            openai_model=summarization_config.get("openai_model", "gpt-4o-mini"),
-            anthropic_api_key=summarization_config.get("anthropic_api_key", ""),
-            anthropic_model=summarization_config.get(
-                "anthropic_model", "claude-3-5-sonnet-20241022"
-            ),
-            lmstudio_base_url=summarization_config.get(
-                "lmstudio_base_url", "http://127.0.0.1:1234"
-            ),
-            lmstudio_model=summarization_config.get("lmstudio_model", ""),
-        )
-    )
+    # SummarizationService reads config dynamically to use the user's selected model
+    summarization_service = SummarizationService(config_path)
     logger.info("Boot: summarization_service ready")
     app.include_router(
         create_recording_router(

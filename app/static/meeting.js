@@ -4,12 +4,9 @@ const state = {
   lastTranscriptSegments: null,
   liveController: null,
   liveStreaming: false,
-  summaryTimer: null,
-  summaryInFlight: false,
-  summaryIntervalMs: 30000,
   titleSaveTimer: null,
-  countdownTimer: null,
-  countdownSeconds: 30,
+  selectedAttendeeId: null,
+  renameMode: false,
 };
 
 function debugLog(message, data = {}) {
@@ -60,12 +57,294 @@ function setMeetingTitle(title) {
   input.value = title || "";
 }
 
+function getSegmentsForAttendee(attendeeId) {
+  const transcript = state.meeting?.transcript || {};
+  const segments = transcript.segments || [];
+  return segments.filter(
+    (seg) => seg.speaker_id === attendeeId || seg.speaker === attendeeId
+  );
+}
+
+function formatTimestamp(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function renderAttendeesList(attendees) {
+  const listEl = document.getElementById("attendees-list");
+  if (!listEl) return;
+
+  if (!attendees || attendees.length === 0) {
+    listEl.innerHTML = '<div class="attendees-empty">No attendees detected yet.</div>';
+    return;
+  }
+
+  listEl.innerHTML = attendees
+    .map((attendee) => {
+      const segmentCount = getSegmentsForAttendee(attendee.id).length;
+      const name = attendee.name || attendee.label || attendee.id || "Unknown";
+      const isSelected = state.selectedAttendeeId === attendee.id;
+      return `
+        <div class="attendee-item ${isSelected ? "selected" : ""}" 
+             data-attendee-id="${attendee.id}">
+          <span class="attendee-item-name">${escapeHtml(name)}</span>
+          <span class="attendee-item-count">${segmentCount}</span>
+        </div>
+      `;
+    })
+    .join("");
+
+  // Add click handlers
+  listEl.querySelectorAll(".attendee-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      selectAttendee(item.dataset.attendeeId);
+    });
+  });
+}
+
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function selectAttendee(attendeeId) {
+  state.selectedAttendeeId = attendeeId;
+  state.renameMode = false;
+
+  // Update list selection
+  document.querySelectorAll(".attendee-item").forEach((item) => {
+    item.classList.toggle("selected", item.dataset.attendeeId === attendeeId);
+  });
+
+  // Find attendee
+  const attendees = state.meeting?.attendees || [];
+  const attendee = attendees.find((a) => a.id === attendeeId);
+
+  if (!attendee) {
+    clearAttendeeDetail();
+    return;
+  }
+
+  // Update detail panel
+  const nameDisplay = document.getElementById("selected-attendee-name");
+  const renameBtn = document.getElementById("rename-attendee-btn");
+  const autoRenameBtn = document.getElementById("auto-rename-btn");
+  const segmentsEl = document.getElementById("attendee-segments");
+
+  if (nameDisplay) {
+    nameDisplay.textContent = attendee.name || attendee.label || attendee.id || "Unknown";
+    nameDisplay.style.display = "inline";
+  }
+
+  // Show rename buttons
+  if (renameBtn) renameBtn.style.display = "inline-block";
+  if (autoRenameBtn) autoRenameBtn.style.display = "inline-block";
+
+  // Hide edit mode elements
+  hideRenameMode();
+
+  // Clear status
+  setAutoRenameStatus("");
+
+  // Render segments
+  const segments = getSegmentsForAttendee(attendeeId);
+  if (segmentsEl) {
+    if (segments.length === 0) {
+      segmentsEl.innerHTML =
+        '<div class="attendee-segments-placeholder">No spoken content found for this attendee.</div>';
+    } else {
+      segmentsEl.innerHTML = segments
+        .map(
+          (seg) => `
+          <div class="attendee-segment-item">
+            <div class="attendee-segment-time">${formatTimestamp(seg.start)} - ${formatTimestamp(seg.end)}</div>
+            <div class="attendee-segment-text">${escapeHtml(seg.text)}</div>
+          </div>
+        `
+        )
+        .join("");
+      // Scroll to bottom
+      segmentsEl.scrollTop = segmentsEl.scrollHeight;
+    }
+  }
+}
+
+function clearAttendeeDetail() {
+  const nameDisplay = document.getElementById("selected-attendee-name");
+  const renameBtn = document.getElementById("rename-attendee-btn");
+  const autoRenameBtn = document.getElementById("auto-rename-btn");
+  const segmentsEl = document.getElementById("attendee-segments");
+
+  if (nameDisplay) {
+    nameDisplay.textContent = "Select an attendee";
+    nameDisplay.style.display = "inline";
+  }
+  if (renameBtn) renameBtn.style.display = "none";
+  if (autoRenameBtn) autoRenameBtn.style.display = "none";
+  hideRenameMode();
+  setAutoRenameStatus("");
+
+  if (segmentsEl) {
+    segmentsEl.innerHTML =
+      '<div class="attendee-segments-placeholder">Select an attendee to see what they\'ve said.</div>';
+  }
+}
+
+function enterRenameMode() {
+  state.renameMode = true;
+
+  const attendees = state.meeting?.attendees || [];
+  const attendee = attendees.find((a) => a.id === state.selectedAttendeeId);
+  if (!attendee) return;
+
+  const nameDisplay = document.getElementById("selected-attendee-name");
+  const nameInput = document.getElementById("attendee-name-input");
+  const renameBtn = document.getElementById("rename-attendee-btn");
+  const autoRenameBtn = document.getElementById("auto-rename-btn");
+  const saveBtn = document.getElementById("save-rename-btn");
+  const cancelBtn = document.getElementById("cancel-rename-btn");
+
+  if (nameDisplay) nameDisplay.style.display = "none";
+  if (renameBtn) renameBtn.style.display = "none";
+  if (autoRenameBtn) autoRenameBtn.style.display = "none";
+
+  if (nameInput) {
+    nameInput.value = attendee.name || attendee.label || "";
+    nameInput.style.display = "inline-block";
+    nameInput.focus();
+    nameInput.select();
+  }
+  if (saveBtn) saveBtn.style.display = "inline-block";
+  if (cancelBtn) cancelBtn.style.display = "inline-block";
+}
+
+function hideRenameMode() {
+  const nameInput = document.getElementById("attendee-name-input");
+  const saveBtn = document.getElementById("save-rename-btn");
+  const cancelBtn = document.getElementById("cancel-rename-btn");
+
+  if (nameInput) nameInput.style.display = "none";
+  if (saveBtn) saveBtn.style.display = "none";
+  if (cancelBtn) cancelBtn.style.display = "none";
+  state.renameMode = false;
+}
+
+function cancelRename() {
+  hideRenameMode();
+  // Re-select to refresh UI
+  if (state.selectedAttendeeId) {
+    selectAttendee(state.selectedAttendeeId);
+  }
+}
+
+async function saveAttendeeName() {
+  if (!state.meetingId || !state.selectedAttendeeId) return;
+
+  const nameInput = document.getElementById("attendee-name-input");
+  const newName = nameInput?.value.trim();
+  if (!newName) {
+    setGlobalError("Name cannot be empty.");
+    return;
+  }
+
+  setGlobalBusy("Saving name...");
+  try {
+    await fetchJson(
+      `/api/meetings/${state.meetingId}/attendees/${state.selectedAttendeeId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      }
+    );
+    debugLog("Attendee name saved", { attendeeId: state.selectedAttendeeId, name: newName });
+    await refreshMeeting();
+    // Re-select to refresh the detail panel
+    selectAttendee(state.selectedAttendeeId);
+  } catch (error) {
+    setGlobalError(`Failed to save name: ${error.message}`);
+  } finally {
+    setGlobalBusy("");
+  }
+}
+
+function setAutoRenameStatus(message, type = "") {
+  const statusEl = document.getElementById("auto-rename-status");
+  if (statusEl) {
+    statusEl.textContent = message;
+    statusEl.className = "auto-rename-status" + (type ? ` ${type}` : "");
+  }
+}
+
+async function autoRenameAttendee() {
+  if (!state.meetingId || !state.selectedAttendeeId) return;
+
+  setAutoRenameStatus("Analyzing speech to identify name...", "loading");
+
+  try {
+    const result = await fetchJson(
+      `/api/meetings/${state.meetingId}/attendees/${state.selectedAttendeeId}/auto-rename`,
+      { method: "POST" }
+    );
+
+    const { suggested_name, confidence, reasoning } = result;
+
+    if (suggested_name === "Unknown Speaker") {
+      setAutoRenameStatus(
+        `Could not identify name. ${reasoning || ""}`,
+        "error"
+      );
+      return;
+    }
+
+    // Show suggestion and auto-apply if confidence is high
+    const confidenceText = confidence === "high" ? "" : ` (${confidence} confidence)`;
+    setAutoRenameStatus(
+      `Suggested: ${suggested_name}${confidenceText}. ${reasoning || ""}`,
+      "success"
+    );
+
+    // Auto-apply the name
+    await fetchJson(
+      `/api/meetings/${state.meetingId}/attendees/${state.selectedAttendeeId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: suggested_name }),
+      }
+    );
+
+    debugLog("Auto-rename applied", {
+      attendeeId: state.selectedAttendeeId,
+      name: suggested_name,
+      confidence,
+    });
+
+    await refreshMeeting();
+    selectAttendee(state.selectedAttendeeId);
+    setAutoRenameStatus(`Renamed to "${suggested_name}"`, "success");
+  } catch (error) {
+    debugError("Auto-rename failed", error);
+    setAutoRenameStatus(`Failed: ${error.message}`, "error");
+  }
+}
+
 function setAttendeeEditor(attendees) {
-  const editor = document.getElementById("attendee-editor");
-  const lines = (attendees || [])
-    .map((attendee) => attendee.name || attendee.label || attendee.id || "")
-    .filter((line) => line);
-  editor.value = lines.join("\n");
+  // Render the new attendee list UI
+  renderAttendeesList(attendees);
+
+  // If we had a selected attendee, re-select it
+  if (state.selectedAttendeeId) {
+    const stillExists = (attendees || []).some((a) => a.id === state.selectedAttendeeId);
+    if (stillExists) {
+      selectAttendee(state.selectedAttendeeId);
+    } else {
+      state.selectedAttendeeId = null;
+      clearAttendeeDetail();
+    }
+  }
 }
 
 function buildTranscriptText(segments) {
@@ -111,6 +390,91 @@ function setSummaryOutput(message) {
   output.textContent = message;
 }
 
+function setManualSummaryStatus(message) {
+  const el = document.getElementById("manual-summary-status");
+  if (!el) return;
+  el.textContent = message || "";
+}
+
+function setManualTranscriptionBuffer(text) {
+  const el = document.getElementById("manual-transcription");
+  if (!el) return;
+  el.value = text || "";
+  el.scrollTop = el.scrollHeight;
+}
+
+function buildTranscriptTextSafe(meeting) {
+  const segments = meeting?.transcript?.segments || [];
+  return segments.length ? buildTranscriptText(segments) : "";
+}
+
+let manualBuffersSaveTimer = null;
+
+function scheduleManualBuffersSave() {
+  if (!state.meetingId) return;
+  if (manualBuffersSaveTimer) {
+    clearTimeout(manualBuffersSaveTimer);
+  }
+  manualBuffersSaveTimer = setTimeout(async () => {
+    const notesEl = document.getElementById("manual-notes");
+    const summaryEl = document.getElementById("manual-summary");
+    const manualNotes = notesEl?.value ?? "";
+    const manualSummary = summaryEl?.value ?? "";
+    try {
+      await fetchJson(`/api/meetings/${state.meetingId}/manual-buffers`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ manual_notes: manualNotes, manual_summary: manualSummary }),
+      });
+      setManualSummaryStatus("Saved.");
+    } catch (error) {
+      setManualSummaryStatus(`Save failed: ${error.message}`);
+    }
+  }, 600);
+}
+
+async function manualSummarize() {
+  if (!state.meetingId) return;
+
+  const transcriptText = buildTranscriptTextSafe(state.meeting);
+  if (!transcriptText.trim()) {
+    setManualSummaryStatus("No transcript yet.");
+    return;
+  }
+
+  const button = document.getElementById("manual-summarize");
+  if (button) button.disabled = true;
+  setManualSummaryStatus("Summarizing…");
+  setGlobalBusy("Summarizing...");
+
+  try {
+    const result = await fetchJson(`/api/meetings/${state.meetingId}/manual-summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript_text: transcriptText }),
+    });
+    if (result.meeting) {
+      state.meeting = result.meeting;
+      setMeetingTitle(state.meeting.title || "");
+    }
+    const summaryEl = document.getElementById("manual-summary");
+    if (summaryEl) {
+      summaryEl.value = result.summary_text || "";
+      summaryEl.scrollTop = summaryEl.scrollHeight;
+    }
+    setManualSummaryStatus("Summary updated.");
+    // Summary is already persisted server-side; still schedule a save to catch any edits.
+    scheduleManualBuffersSave();
+    // Refresh the main Summary section immediately.
+    await refreshMeeting();
+  } catch (error) {
+    setManualSummaryStatus(`Summarize failed: ${error.message}`);
+  } finally {
+    setGlobalBusy("");
+    if (button) button.disabled = false;
+  }
+}
+
 function loadMeetingId() {
   const params = new URLSearchParams(window.location.search);
   const meetingId = params.get("id");
@@ -152,26 +516,17 @@ async function refreshMeeting() {
         setTranscriptOutput([]);
       }
     }
-    if (meeting.summary_state) {
-      const summaryUpdated = meeting.summary_state.updated_at
-        ? `Last updated ${meeting.summary_state.updated_at}`
-        : "Summary ready";
-      setSummaryStatus(`${meetingStatus} • ${summaryUpdated}`);
-      const summarized = meeting.summary_state.summarized_summary || "";
-      const interim = meeting.summary_state.interim_summary || "";
-      setSummaryOutput([summarized, interim].filter(Boolean).join("\n\n") || "No summary yet.");
-      updateSummaryDebugPanel(meeting.summary_state);
-    } else if (meeting.summary?.text) {
+    if (meeting.summary?.text) {
       const summaryUpdated = meeting.summary?.updated_at
         ? `Last updated ${meeting.summary.updated_at}`
         : "Summary ready";
       setSummaryStatus(`${meetingStatus} • ${summaryUpdated}`);
       setSummaryOutput(meeting.summary.text);
-      updateSummaryDebugPanel(null);
+      updateSummaryDebugPanel(meeting);
     } else {
       setSummaryStatus(`${meetingStatus} • No summary yet.`);
       setSummaryOutput("No summary yet.");
-      updateSummaryDebugPanel(null);
+      updateSummaryDebugPanel(meeting);
     }
 
     if (meeting.status === "in_progress") {
@@ -179,11 +534,8 @@ async function refreshMeeting() {
       if (!meeting.simulated) {
         startLiveTranscript();
       }
-      // Start summary refresh for all in-progress meetings
-      startSummaryRefresh();
     } else {
       stopLiveTranscript();
-      stopSummaryRefresh();
     }
     
     // Update transcription controls (stop/resume buttons)
@@ -297,7 +649,8 @@ async function streamLiveTranscript(controller) {
       } else if (event.type === "segment") {
         segments.push(event);
         state.lastTranscriptSegments = segments;
-        setTranscriptOutput(buildTranscriptText(segments));
+        setTranscriptOutput(segments);
+        setManualTranscriptionBuffer(buildTranscriptText(segments));
       } else if (event.type === "done") {
         done = true;
       } else if (event.type === "error") {
@@ -342,227 +695,22 @@ async function saveMeetingTitle() {
   }
 }
 
-function buildAttendeePayload(lines, existingAttendees) {
-  const existing = existingAttendees || [];
-  return lines.map((name, index) => {
-    const existingAttendee = existing[index] || {};
-    return {
-      id: existingAttendee.id || `manual-${index + 1}`,
-      label: existingAttendee.label || null,
-      name: name.trim(),
-    };
-  });
-}
+// Attendee saving is now done via inline rename - see saveAttendeeName()
 
-async function saveAttendees() {
-  if (!state.meetingId) {
-    return;
-  }
-  const editor = document.getElementById("attendee-editor");
-  const lines = editor.value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  setGlobalBusy("Saving attendees...");
-  try {
-    const payload = buildAttendeePayload(lines, state.meeting?.attendees || []);
-    await fetchJson(`/api/meetings/${state.meetingId}/attendees`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ attendees: payload }),
-    });
-    await refreshMeeting();
-  } catch (error) {
-    setGlobalError(`Failed to save attendees: ${error.message}`);
-  } finally {
-    setGlobalBusy("");
-  }
-}
-
-async function summarizeMeetingAuto() {
-  if (!state.meetingId || state.summaryInFlight) {
-    return;
-  }
-  if (!state.meeting?.transcript?.segments?.length && !state.meeting?.summary_state?.streaming_text) {
-    debugLog("Skip auto summary (no transcript yet)");
-    return;
-  }
-  state.summaryInFlight = true;
-  debugLog("Auto summary start (step_summary_state)");
-  try {
-    // Use the smart real-time summary step endpoint instead of full summarize
-    await fetchJson(`/api/meetings/${state.meetingId}/summary-state/step`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-    await refreshMeeting();
-    debugLog("Auto summary step complete");
-  } catch (error) {
-    debugError("Auto summary step failed", error);
-    // Don't show error to user for summary ticks - they're non-critical
-    debugLog("Summary tick error (non-critical): " + error.message);
-  } finally {
-    state.summaryInFlight = false;
-  }
-}
-
-function startSummaryRefresh() {
-  if (state.summaryTimer) {
-    return;
-  }
-  debugLog("Starting summary refresh timer", {
-    intervalMs: state.summaryIntervalMs,
-  });
-  resetCountdown();
-  state.summaryTimer = setInterval(() => {
-    summarizeMeetingAuto();
-    resetCountdown();
-  }, state.summaryIntervalMs);
-  startCountdown();
-}
-
-function stopSummaryRefresh() {
-  if (!state.summaryTimer) {
-    return;
-  }
-  debugLog("Stopping summary refresh timer");
-  clearInterval(state.summaryTimer);
-  state.summaryTimer = null;
-  stopCountdown();
-}
-
-function resetCountdown() {
-  state.countdownSeconds = Math.round(state.summaryIntervalMs / 1000);
-  updateCountdownDisplay();
-}
-
-function startCountdown() {
-  if (state.countdownTimer) {
-    return;
-  }
-  state.countdownTimer = setInterval(() => {
-    if (state.countdownSeconds > 0) {
-      state.countdownSeconds--;
-      updateCountdownDisplay();
-    }
-  }, 1000);
-}
-
-function stopCountdown() {
-  if (state.countdownTimer) {
-    clearInterval(state.countdownTimer);
-    state.countdownTimer = null;
-  }
-  const display = document.getElementById("countdown-display");
-  if (display) {
-    display.textContent = "--";
-    display.className = "countdown-display";
-  }
-}
-
-function updateCountdownDisplay() {
-  const display = document.getElementById("countdown-display");
-  if (!display) return;
-  
-  display.textContent = state.countdownSeconds;
-  
-  // Update color based on urgency
-  display.className = "countdown-display";
-  if (state.countdownSeconds <= 5) {
-    display.classList.add("imminent");
-  } else if (state.countdownSeconds <= 10) {
-    display.classList.add("warning");
-  }
-}
-
-function doItNow() {
-  if (state.summaryInFlight) {
-    debugLog("Summary already in flight, skipping do-it-now");
-    return;
-  }
-  debugLog("Do it now triggered");
-  
-  // Stop the current timer
-  if (state.summaryTimer) {
-    clearInterval(state.summaryTimer);
-    state.summaryTimer = null;
-  }
-  
-  // Run summary immediately
-  summarizeMeetingAuto();
-  
-  // Restart the timer with reset countdown
-  resetCountdown();
-  state.summaryTimer = setInterval(() => {
-    summarizeMeetingAuto();
-    resetCountdown();
-  }, state.summaryIntervalMs);
-}
-
-function updateSummaryInterval(seconds) {
-  const newIntervalMs = seconds * 1000;
-  if (newIntervalMs === state.summaryIntervalMs) {
-    return;
-  }
-  
-  debugLog("Updating summary interval", { seconds, newIntervalMs });
-  state.summaryIntervalMs = newIntervalMs;
-  
-  // Update the display
-  const valueEl = document.getElementById("interval-value");
-  if (valueEl) {
-    valueEl.textContent = seconds;
-  }
-  
-  // If timer is running, restart it with new interval
-  if (state.summaryTimer) {
-    clearInterval(state.summaryTimer);
-    state.summaryTimer = null;
-    resetCountdown();
-    state.summaryTimer = setInterval(() => {
-      summarizeMeetingAuto();
-      resetCountdown();
-    }, state.summaryIntervalMs);
-  }
-}
-
-function updateSummaryDebugPanel(summaryState) {
+function updateSummaryDebugPanel(meeting) {
   const panel = document.getElementById("summary-debug-panel");
   if (!panel || panel.style.display === "none") {
     return;
   }
-  const doneEl = document.getElementById("debug-done");
-  const draftEl = document.getElementById("debug-draft");
-  const streamingEl = document.getElementById("debug-streaming");
-  const summarizedEl = document.getElementById("debug-summarized");
-  const interimEl = document.getElementById("debug-interim");
-  if (!summaryState) {
-    if (doneEl) doneEl.value = "";
-    if (draftEl) draftEl.value = "";
-    if (streamingEl) streamingEl.value = "";
-    if (summarizedEl) summarizedEl.value = "";
-    if (interimEl) interimEl.value = "";
-    return;
+  setManualTranscriptionBuffer(buildTranscriptTextSafe(meeting));
+
+  const notesEl = document.getElementById("manual-notes");
+  if (notesEl && notesEl.value !== (meeting?.manual_notes || "")) {
+    notesEl.value = meeting?.manual_notes || "";
   }
-  if (doneEl) {
-    doneEl.value = summaryState.done_text || "";
-    doneEl.scrollTop = doneEl.scrollHeight;
-  }
-  if (draftEl) {
-    draftEl.value = summaryState.draft_text || "";
-    draftEl.scrollTop = draftEl.scrollHeight;
-  }
-  if (streamingEl) {
-    streamingEl.value = summaryState.streaming_text || "";
-    streamingEl.scrollTop = streamingEl.scrollHeight;
-  }
-  if (summarizedEl) {
-    summarizedEl.value = summaryState.summarized_summary || "";
-    summarizedEl.scrollTop = summarizedEl.scrollHeight;
-  }
-  if (interimEl) {
-    interimEl.value = summaryState.interim_summary || "";
-    interimEl.scrollTop = interimEl.scrollHeight;
+  const summaryEl = document.getElementById("manual-summary");
+  if (summaryEl && summaryEl.value !== (meeting?.manual_summary || "")) {
+    summaryEl.value = meeting?.manual_summary || "";
   }
 }
 
@@ -749,16 +897,60 @@ async function updateTranscriptionControls() {
 async function stopTranscription() {
   if (!state.meetingId) return;
   
-  setGlobalBusy("Stopping transcription...");
+  // Disable the stop button immediately to prevent multiple clicks
+  const stopBtn = document.getElementById("stop-transcription");
+  if (stopBtn) {
+    stopBtn.disabled = true;
+    stopBtn.textContent = "Stopping...";
+  }
+  
+  setGlobalBusy("Stopping audio capture...");
+  setTranscriptStatus("Stopped capturing audio. Finishing transcription of captured audio...");
+  
   try {
-    await fetchJson(`/api/transcribe/stop/${state.meetingId}`, { method: "POST" });
-    debugLog("Transcription stopped", { meetingId: state.meetingId });
+    const result = await fetchJson(`/api/transcribe/stop/${state.meetingId}`, { method: "POST" });
+    debugLog("Transcription stop requested", { meetingId: state.meetingId, result });
+    
+    // The stop request returns immediately. Audio capture has stopped.
+    // Transcription of already-captured audio continues in background.
+    setGlobalBusy("Audio capture stopped. Finishing transcription...");
+    setTranscriptStatus("Audio capture stopped. Processing remaining audio...");
+    
+    // Poll for completion since transcription continues in background
+    let attempts = 0;
+    const maxAttempts = 120; // 2 minutes max wait (for the final 30s chunk)
+    
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      attempts++;
+      
+      const active = await getActiveTranscription();
+      if (!active.active || active.meeting_id !== state.meetingId) {
+        debugLog("Transcription fully stopped", { attempts });
+        break;
+      }
+      
+      // Show progress message
+      if (attempts <= 5) {
+        setGlobalBusy("Processing remaining captured audio...");
+      } else if (attempts <= 30) {
+        setGlobalBusy(`Finishing transcription... (${attempts}s)`);
+      } else {
+        setGlobalBusy(`Still processing... (${attempts}s, Whisper uses 30s chunks)`);
+      }
+    }
+    
+    setTranscriptStatus("Transcription complete.");
     await refreshMeeting();
   } catch (error) {
     setGlobalError(`Failed to stop transcription: ${error.message}`);
     debugError("Stop transcription failed", error);
   } finally {
     setGlobalBusy("");
+    if (stopBtn) {
+      stopBtn.disabled = false;
+      stopBtn.textContent = "Stop transcription";
+    }
   }
 }
 
@@ -794,9 +986,37 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (saveTitleButton) {
     saveTitleButton.addEventListener("click", saveMeetingTitle);
   }
-  document
-    .getElementById("save-attendees")
-    .addEventListener("click", saveAttendees);
+
+  // Attendee rename controls
+  const renameBtn = document.getElementById("rename-attendee-btn");
+  if (renameBtn) {
+    renameBtn.addEventListener("click", enterRenameMode);
+  }
+  const autoRenameBtn = document.getElementById("auto-rename-btn");
+  if (autoRenameBtn) {
+    autoRenameBtn.addEventListener("click", autoRenameAttendee);
+  }
+  const saveRenameBtn = document.getElementById("save-rename-btn");
+  if (saveRenameBtn) {
+    saveRenameBtn.addEventListener("click", saveAttendeeName);
+  }
+  const cancelRenameBtn = document.getElementById("cancel-rename-btn");
+  if (cancelRenameBtn) {
+    cancelRenameBtn.addEventListener("click", cancelRename);
+  }
+  const nameInput = document.getElementById("attendee-name-input");
+  if (nameInput) {
+    nameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        saveAttendeeName();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancelRename();
+      }
+    });
+  }
+
   document
     .getElementById("delete-meeting")
     .addEventListener("click", deleteMeeting);
@@ -825,46 +1045,25 @@ document.addEventListener("DOMContentLoaded", async () => {
       const isHidden = panel.style.display === "none" || !panel.style.display;
       panel.style.display = isHidden ? "block" : "none";
       if (isHidden) {
-        updateSummaryDebugPanel(state.meeting?.summary_state || null);
-        // Initialize countdown display when panel opens
-        if (state.summaryTimer) {
-          updateCountdownDisplay();
-        }
+        updateSummaryDebugPanel(state.meeting || null);
       }
     });
 
-  // Do it now button
-  const doItNowButton = document.getElementById("do-it-now");
-  if (doItNowButton) {
-    doItNowButton.addEventListener("click", doItNow);
+  const manualSummarizeBtn = document.getElementById("manual-summarize");
+  if (manualSummarizeBtn) {
+    manualSummarizeBtn.addEventListener("click", manualSummarize);
   }
 
-  // Interval slider
-  const intervalSlider = document.getElementById("interval-slider");
-  if (intervalSlider) {
-    // Initialize slider to current value
-    intervalSlider.value = Math.round(state.summaryIntervalMs / 1000);
-    const valueEl = document.getElementById("interval-value");
-    if (valueEl) {
-      valueEl.textContent = intervalSlider.value;
-    }
-    
-    intervalSlider.addEventListener("input", (e) => {
-      const seconds = parseInt(e.target.value, 10);
-      const valueEl = document.getElementById("interval-value");
-      if (valueEl) {
-        valueEl.textContent = seconds;
-      }
-    });
-    
-    intervalSlider.addEventListener("change", (e) => {
-      const seconds = parseInt(e.target.value, 10);
-      updateSummaryInterval(seconds);
-    });
+  const manualNotesEl = document.getElementById("manual-notes");
+  if (manualNotesEl) {
+    manualNotesEl.addEventListener("input", scheduleManualBuffersSave);
+  }
+  const manualSummaryEl = document.getElementById("manual-summary");
+  if (manualSummaryEl) {
+    manualSummaryEl.addEventListener("input", scheduleManualBuffersSave);
   }
   window.addEventListener("beforeunload", () => {
     stopLiveTranscript();
-    stopSummaryRefresh();
   });
 
   await refreshVersion();
