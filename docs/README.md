@@ -4,8 +4,6 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 
 ## Current Status
 
-**Phase 0 complete** — basic FastAPI skeleton.
-
 **What works right now:**
 - Server starts on localhost:6684
 - Root endpoint returns a health message + version
@@ -13,10 +11,17 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 - Audio devices listed via `/api/audio/devices`
 - Start/stop recording via `/api/recording/start` and `/api/recording/stop`
 - Local transcription via `/api/transcribe` (faster-whisper)
-- Optional diarization via config (WhisperX or pyannote)
+- Simulated transcription from file via `/api/transcribe/simulate`
+- Live transcription with real-time diarization (Diart)
+- Cancellable transcription with proper finalization
+- Diarization via WhisperX, pyannote, or Diart (configurable)
 - JSON meeting storage via `/api/meetings`
 - Meeting summarization via `/api/meetings/{id}/summarize`
+- Auto-title generation on meeting completion
 - Markdown export via `/api/meetings/{id}/export`
+- **Unified LLM model selection:** Settings > AI Models picks one model for all tasks
+- **Multi-provider support:** OpenAI, Anthropic, Gemini, Grok, Ollama, LMStudio
+- Interactive attendee list with rename and AI-powered name suggestions
 
 **Try it:** `/Users/chee/projects/notetaker/notetaker.sh` → open http://localhost:6684
 
@@ -26,7 +31,7 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 
 **Launcher logs:** `/Users/chee/projects/notetaker/logs/launcher_YYYY-MM-DD_HH-MM-SS.log`
 
-**Next:** Continue Phase 8 — full meeting UI + polish (cleanup main window complete).
+**Settings > AI Models:** Configure API keys and select which model to use for summarization, titles, and other LLM features. Format: `provider:model_id` (e.g., `openai:gpt-4o`).
 
 ## Getting Started
 

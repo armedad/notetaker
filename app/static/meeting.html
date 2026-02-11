@@ -40,12 +40,31 @@
 
       <section class="panel">
         <h2>Attendees</h2>
-        <div class="row">
-          <label for="attendee-editor">Names (one per line)</label>
-          <textarea id="attendee-editor" rows="6" placeholder="Person 1&#10;Person 2"></textarea>
+        <div class="attendees-container">
+          <div class="attendees-list-column">
+            <div class="attendees-list" id="attendees-list">
+              <!-- Attendee items rendered by JS -->
+              <div class="attendees-empty">No attendees detected yet.</div>
+            </div>
+          </div>
+          <div class="attendees-detail-column" id="attendees-detail">
+            <div class="attendee-detail-header">
+              <div class="attendee-name-row">
+                <span class="attendee-name-display" id="selected-attendee-name">Select an attendee</span>
+                <input type="text" class="attendee-name-input" id="attendee-name-input" style="display: none;" />
+                <button id="rename-attendee-btn" class="secondary small" style="display: none;">Rename</button>
+                <button id="auto-rename-btn" class="secondary small" style="display: none;" title="Use AI to identify name">Auto</button>
+                <button id="save-rename-btn" class="small" style="display: none;">Save</button>
+                <button id="cancel-rename-btn" class="secondary small" style="display: none;">Cancel</button>
+              </div>
+              <div class="auto-rename-status" id="auto-rename-status"></div>
+            </div>
+            <div class="attendee-segments" id="attendee-segments">
+              <div class="attendee-segments-placeholder">Select an attendee to see what they've said.</div>
+            </div>
+          </div>
         </div>
         <div class="actions">
-          <button id="save-attendees" class="secondary">Save attendees</button>
           <button id="export-meeting" class="secondary">Export Markdown</button>
           <button id="delete-meeting" class="secondary">Delete meeting</button>
         </div>
@@ -67,47 +86,31 @@
 
       <section class="panel">
         <div class="row">
-          <button id="toggle-summary-debug" class="secondary">Debug summary parsing</button>
+          <button id="toggle-summary-debug" class="secondary">Manual summarization</button>
         </div>
         <div id="summary-debug-panel" class="summary-debug-panel" style="display: none;">
           <div class="summary-debug-grid">
             <div class="summary-debug-column">
-              <h3>Transcript streams</h3>
-              <label for="debug-done">Done</label>
-              <textarea id="debug-done" rows="6" readonly></textarea>
-              <label for="debug-draft">Draft</label>
-              <textarea id="debug-draft" rows="6" readonly></textarea>
-              <label for="debug-streaming">Streaming</label>
-              <textarea id="debug-streaming" rows="6" readonly></textarea>
+              <h3>Transcription</h3>
+              <textarea id="manual-transcription" rows="10" readonly></textarea>
             </div>
             <div class="summary-debug-column">
-              <h3>Summary streams</h3>
-              <label for="debug-summarized">Summarized</label>
-              <textarea id="debug-summarized" rows="6" readonly></textarea>
-              <label for="debug-interim">Interim</label>
-              <textarea id="debug-interim" rows="6" readonly></textarea>
+              <h3>User notes</h3>
+              <textarea id="manual-notes" rows="10"></textarea>
             </div>
-            <div class="summary-debug-column debug-controls">
-              <h3>Timer Controls</h3>
-              <div class="debug-countdown">
-                <div class="countdown-display" id="countdown-display">--</div>
-                <div class="countdown-label">seconds until next summary</div>
+            <div class="summary-debug-column">
+              <h3>Summary</h3>
+              <textarea id="manual-summary" rows="10"></textarea>
+              <div class="row" style="margin-top: 8px;">
+                <button id="manual-summarize" class="primary">Summarize</button>
               </div>
-              <button id="do-it-now" class="primary">Do it now</button>
-              <div class="interval-control">
-                <label for="interval-slider">Interval: <span id="interval-value">30</span>s</label>
-                <input type="range" id="interval-slider" min="5" max="300" value="30" step="5" />
-                <div class="interval-range-labels">
-                  <span>5s</span>
-                  <span>300s</span>
-                </div>
-              </div>
+              <div class="status" id="manual-summary-status"></div>
             </div>
           </div>
         </div>
       </section>
     </main>
 
-    <script src="/static/meeting.js?v=130"></script>
+    <script src="/static/meeting.js?v=145"></script>
   </body>
 </html>

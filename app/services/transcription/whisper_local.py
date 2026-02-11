@@ -103,6 +103,15 @@ class FasterWhisperProvider(TranscriptionProvider):
             self._logger.exception("Transcription stream failed: %s", exc)
             raise TranscriptionProviderError("Transcription failed") from exc
 
+    def get_chunk_size(self) -> float:
+        """Whisper uses a fixed 30-second encoder window.
+        
+        Smaller inputs are padded with silence to 30 seconds, so there's
+        no benefit to using smaller chunks. Using 30 seconds minimizes
+        the number of encoder passes and avoids wasted padding computation.
+        """
+        return 30.0
+
 
 def _apply_diarization(
     segments: list[TranscriptSegment], diarization_segments: list[dict]

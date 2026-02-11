@@ -97,9 +97,10 @@
           <label for="diarization-provider">Diarization</label>
           <select id="diarization-provider">
             <option value="none">Off</option>
-            <option value="pyannote-3.1">pyannote 3.1 (recommended)</option>
-            <option value="pyannote-3.0">pyannote 3.0 (faster on CPU)</option>
-            <option value="whisperx">whisperx</option>
+            <option value="diart">diart — Real-time streaming</option>
+            <option value="whisperx">whisperx — Batch (after transcription)</option>
+            <option value="pyannote-3.1">pyannote 3.1 — Batch (after transcription)</option>
+            <option value="pyannote-3.0">pyannote 3.0 — Batch, faster on CPU</option>
           </select>
         </div>
         <div class="hint" id="diarization-description"></div>
