@@ -96,20 +96,34 @@ Personal tool for Chee. Dev-friendly setup is acceptable. Optimized for one user
 - **Modular provider interface** — easy to swap implementations
 - Default: Local Whisper (faster-whisper for speed)
 - Future: Deepgram, AssemblyAI, OpenAI Whisper API
-- Speaker diarization via pyannote-audio or similar
-- Processes audio in chunks for near-real-time display
+- **Diarization options:**
+  - WhisperX (batch, most accurate)
+  - pyannote-audio (batch)
+  - Diart (real-time, for live transcription)
+- **Unified TranscriptionPipeline:** Centralizes all post-audio processing (transcription, diarization, meeting store updates, summarization)
+- **Simulated transcription:** File-based transcription that mimics live recording flow
+- **Cancellation support:** Transcription jobs can be stopped mid-processing
 - Outputs timestamped transcript with speaker labels
 - Provider selection via config (not hardcoded)
 
 ### 3. LLM Processing
-- **Offline mode:** Local LLM via Ollama (llama3, mistral, etc.)
-- **Online mode:** OpenAI GPT-4 or Anthropic Claude API
-- Automatic detection of connectivity
-- User can force local-only mode
+- **Unified model selection:** User picks one model in Settings > AI Models, used for all LLM tasks
+- **Supported providers:**
+  - OpenAI (GPT-4o, GPT-5.x, etc.)
+  - Anthropic (Claude 3.x, 4.x)
+  - Google Gemini
+  - xAI Grok
+  - Ollama (local models)
+  - LMStudio (local models)
+- **Dynamic configuration:** Model selection stored in `config.json` under `models.selected_model` (format: `provider:model_id`)
+- **Provider credentials:** API keys and base URLs stored in `config.json` under `providers.<provider_name>`
+- User can force local-only mode (Ollama/LMStudio)
 - Generates:
   - Meeting summary (key points, decisions)
   - Action items (who, what, when if mentioned)
+  - Auto-generated meeting titles
   - Optional: topic segmentation
+  - Optional: AI-powered attendee name suggestions
 
 ### 4. Storage
 - SQLite database for meetings, transcripts, summaries
@@ -237,7 +251,15 @@ Meeting
 - Mobile apps
 - Calendar integration (auto-detect meetings)
 - Video recording
-- Live transcription during meeting (batch processing only for v1)
+
+## Recently Implemented
+
+- **Live transcription:** Real-time microphone transcription with Diart diarization support
+- **Unified model selection:** Single model choice in Settings applies to all LLM tasks
+- **Multi-provider LLM support:** OpenAI, Anthropic, Gemini, Grok, Ollama, LMStudio
+- **Interactive attendee management:** Rename speakers, AI-powered name suggestions
+- **Cancellable transcription:** Stop mid-processing with proper finalization
+- **Transcription finalization:** Summarization and title generation on stop
 
 ## Open Questions Resolved
 

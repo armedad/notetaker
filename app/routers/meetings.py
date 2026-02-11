@@ -2,6 +2,7 @@ from typing import Optional
 
 import json
 import logging
+import re
 import time
 
 from fastapi import APIRouter, HTTPException
@@ -9,6 +10,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.meeting_store import MeetingStore
+from app.services.summarization import SummarizationService
 
 
 class UpdateMeetingRequest(BaseModel):
@@ -22,6 +24,17 @@ class UpdateAttendeesRequest(BaseModel):
 
 class UpdateSpeakerNameRequest(BaseModel):
     name: str = Field(..., min_length=1)
+
+
+class AutoRenameResponse(BaseModel):
+    suggested_name: str
+    confidence: str  # "high", "medium", "low"
+    reasoning: Optional[str] = None
+
+
+class ManualBuffersUpdateRequest(BaseModel):
+    manual_notes: str = ""
+    manual_summary: str = ""
 
 
 def create_meetings_router(
@@ -67,6 +80,15 @@ def create_meetings_router(
             logger.warning("Summary state step failed: %s", exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.patch("/api/meetings/{meeting_id}/manual-buffers")
+    def update_manual_buffers(meeting_id: str, payload: ManualBuffersUpdateRequest) -> dict:
+        meeting = meeting_store.update_manual_buffers(
+            meeting_id, payload.manual_notes, payload.manual_summary
+        )
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        return meeting
+
     @router.patch("/api/meetings/{meeting_id}")
     def update_meeting(meeting_id: str, payload: UpdateMeetingRequest) -> dict:
         logger.info("Meeting title update: id=%s source=%s", meeting_id, payload.title_source)
@@ -97,6 +119,101 @@ def create_meetings_router(
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
         return meeting
+
+    @router.post("/api/meetings/{meeting_id}/attendees/{attendee_id}/auto-rename")
+    def auto_rename_attendee(meeting_id: str, attendee_id: str) -> AutoRenameResponse:
+        """Use AI to suggest a name for an attendee based on their spoken content."""
+        meeting = meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        
+        # Find the attendee
+        attendees = meeting.get("attendees", [])
+        attendee = next((a for a in attendees if a.get("id") == attendee_id), None)
+        if not attendee:
+            raise HTTPException(status_code=404, detail="Attendee not found")
+        
+        # Get transcript segments for this attendee
+        transcript = meeting.get("transcript", {})
+        segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
+        
+        attendee_segments = [
+            seg for seg in segments
+            if seg.get("speaker_id") == attendee_id or seg.get("speaker") == attendee_id
+        ]
+        
+        if not attendee_segments:
+            raise HTTPException(
+                status_code=400, 
+                detail="No spoken content found for this attendee"
+            )
+        
+        # Build context from their speech
+        spoken_text = "\n".join(
+            f"[{seg.get('start', 0):.1f}s] {seg.get('text', '')}"
+            for seg in attendee_segments[:20]  # Limit to first 20 segments
+        )
+        
+        # Build context from other attendees' speech (for cross-references)
+        other_text = ""
+        for seg in segments[:30]:  # Sample of conversation
+            speaker_id = seg.get("speaker_id") or seg.get("speaker")
+            if speaker_id != attendee_id:
+                other_text += f"{seg.get('text', '')} "
+        other_text = other_text[:1000]  # Limit context size
+        
+        # Create prompt for AI
+        prompt = f"""Analyze this meeting transcript to identify the name of the speaker.
+
+The speaker's own words:
+{spoken_text}
+
+Context from the conversation (other speakers):
+{other_text[:500] if other_text else "No other context available."}
+
+Based on this content, what is the most likely name of this speaker?
+
+Look for:
+1. Self-introductions ("Hi, I'm...", "My name is...", "This is...")
+2. Others addressing them by name
+3. Professional context clues (role mentions, department, etc.)
+
+Respond in this exact JSON format:
+{{"name": "First Name" or "First Last" if available, "confidence": "high/medium/low", "reasoning": "brief explanation"}}
+
+If you cannot determine the name, respond with:
+{{"name": "Unknown Speaker", "confidence": "low", "reasoning": "No name indicators found"}}"""
+
+        try:
+            result = summarization_service.prompt_raw(prompt)
+            
+            # Parse the JSON response
+            json_match = re.search(r'\{[^}]+\}', result)
+            if json_match:
+                data = json.loads(json_match.group())
+                suggested_name = data.get("name", "Unknown Speaker")
+                confidence = data.get("confidence", "low")
+                reasoning = data.get("reasoning", "")
+            else:
+                # Fallback: extract any name-like text
+                suggested_name = "Unknown Speaker"
+                confidence = "low"
+                reasoning = "Could not parse AI response"
+            
+            logger.info(
+                "Auto-rename suggestion: meeting=%s attendee=%s suggested=%s confidence=%s",
+                meeting_id, attendee_id, suggested_name, confidence
+            )
+            
+            return AutoRenameResponse(
+                suggested_name=suggested_name,
+                confidence=confidence,
+                reasoning=reasoning,
+            )
+            
+        except Exception as exc:
+            logger.exception("Auto-rename failed: %s", exc)
+            raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(exc)}")
 
     @router.delete("/api/meetings/{meeting_id}")
     def delete_meeting(meeting_id: str) -> dict:

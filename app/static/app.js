@@ -470,24 +470,78 @@ async function startFileRecording() {
 
 async function stopFileRecording() {
   debugLog("stopFileRecording", { audioPath: state.testAudioPath });
-  setGlobalBusy("Stopping file transcription...");
+  
+  // Disable toggle button to prevent multiple clicks
+  const toggleBtn = document.getElementById("recording-toggle");
+  if (toggleBtn) {
+    toggleBtn.disabled = true;
+    toggleBtn.textContent = "Stopping...";
+  }
+  
+  setGlobalBusy("Stopping file ingestion...");
+  setStatus("Stopped reading file. Finishing transcription of read audio...");
+  
   try {
-    await fetchJson(
+    const result = await fetchJson(
       `/api/transcribe/simulate/stop?audio_path=${encodeURIComponent(
         state.testAudioPath
       )}`,
       { method: "POST" }
     );
+    debugLog("File stop requested", { result });
+    
+    // The stop request returns immediately. File reading has stopped.
+    // Transcription of already-read audio continues in background.
+    setGlobalBusy("File reading stopped. Finishing transcription...");
+    setStatus("File reading stopped. Processing remaining audio...");
+    
+    // Poll for completion since transcription continues in background
+    let attempts = 0;
+    const maxAttempts = 120; // 2 minutes max wait
+    
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      attempts++;
+      
+      // Check if transcription has stopped
+      try {
+        const status = await fetchJson(
+          `/api/transcribe/simulate/status?audio_path=${encodeURIComponent(state.testAudioPath)}`
+        );
+        if (status.status === "idle") {
+          debugLog("File transcription fully stopped", { attempts });
+          break;
+        }
+      } catch (e) {
+        // Status check failed, assume stopped
+        break;
+      }
+      
+      // Show progress message
+      if (attempts <= 5) {
+        setGlobalBusy("Processing remaining read audio...");
+      } else if (attempts <= 30) {
+        setGlobalBusy(`Finishing transcription... (${attempts}s)`);
+      } else {
+        setGlobalBusy(`Still processing... (${attempts}s, Whisper uses 30s chunks)`);
+      }
+    }
+    
     state.testTranscribing = false;
     setRecordingToggleLabel(state.recording);
-    setOutput("File transcription stopping...");
-    setStatus("File transcription stopping...");
+    setOutput("File transcription complete.");
+    setStatus("File transcription complete.");
     setRecordingSourceNote("Recording source: File");
+    await refreshMeetings();
   } catch (error) {
     setStatusError(`Stop file transcription failed: ${error.message}`);
     debugError("stopFileRecording failed", error);
   } finally {
     setGlobalBusy("");
+    if (toggleBtn) {
+      toggleBtn.disabled = false;
+      setRecordingToggleLabel(false);
+    }
   }
 }
 
@@ -1186,18 +1240,28 @@ async function stopRecording() {
     return;
   }
   state.stopInFlight = true;
-  setOutput("Stopping recording...");
+  setOutput("Stopping audio capture...");
   setStatusError("");
-  setGlobalBusy("Stopping recording...");
+  setGlobalBusy("Stopping audio capture...");
   try {
     if (state.recordingSource === "file") {
       await stopFileRecording();
       return;
     }
+    
+    // Stop live transcription SSE stream immediately
+    // This signals to stop pulling audio from the queue
+    await stopLiveTranscription();
+    debugLog("Live transcription stream aborted");
+    
+    // Now stop the actual recording
     const data = await fetchJson("/api/recording/stop", {
       method: "POST",
     });
-    setOutput(`Recording saved: ${data.file_path}`);
+    
+    setOutput("Audio capture stopped. Finishing transcription...");
+    setGlobalBusy("Audio capture stopped. Finishing transcription...");
+    
     if (data.file_path) {
       state.lastRecordingPath = data.file_path;
     }
@@ -1209,7 +1273,8 @@ async function stopRecording() {
     if (state.transcriptionSettings.auto_transcribe) {
       await transcribeLatest();
     }
-    await stopLiveTranscription();
+    
+    setOutput(`Recording saved: ${data.file_path}`);
     refreshMeetings();
   } catch (error) {
     setOutput(`Failed to stop: ${error.message}`);

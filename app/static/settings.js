@@ -83,19 +83,23 @@ function setGlobalBusy(message) {
 function getDiarizationDescription(choice) {
   const descriptions = {
     none: "Speaker identification is disabled. Transcripts will not distinguish between speakers.",
-    "pyannote-3.1":
-      "Best accuracy, optimized for GPU. Uses pyannote/speaker-diarization-3.1. " +
-      (state.gpuAvailable
-        ? "GPU detected — this is the recommended choice for your system."
-        : "Note: No GPU detected. This will be slow on CPU. Consider pyannote 3.0 instead."),
-    "pyannote-3.0":
-      "Good accuracy, faster on CPU. Uses pyannote/speaker-diarization@2.1. " +
-      (state.gpuAvailable
-        ? "You have a GPU, so pyannote 3.1 would be faster and more accurate."
-        : "Recommended for your system (no GPU detected). About 2x faster than 3.1 on CPU."),
+    diart:
+      "🟢 REAL-TIME: Identifies speakers as you record, with ~500ms latency. " +
+      "Best for live meetings where you want speaker labels during transcription. " +
+      "Uses pyannote models with streaming inference.",
     whisperx:
-      "Alternative diarization using WhisperX. Also requires Hugging Face token. " +
-      "Good integration with Whisper transcription but may be less accurate than pyannote.",
+      "⏸️ BATCH: Runs after transcription completes. Good accuracy with WhisperX integration. " +
+      "Speaker labels appear after the recording ends.",
+    "pyannote-3.1":
+      "⏸️ BATCH: Best accuracy, runs after transcription. Uses pyannote/speaker-diarization-3.1. " +
+      (state.gpuAvailable
+        ? "GPU detected — good performance expected."
+        : "Note: No GPU detected. This will be slow on CPU."),
+    "pyannote-3.0":
+      "⏸️ BATCH: Good accuracy, faster on CPU. Runs after transcription completes. " +
+      (state.gpuAvailable
+        ? "You have a GPU, so pyannote 3.1 would be more accurate."
+        : "Better for CPU-only systems. About 2x faster than 3.1."),
   };
   return descriptions[choice] || "";
 }
@@ -103,6 +107,7 @@ function getDiarizationDescription(choice) {
 const DIARIZATION_MODELS = {
   "pyannote-3.1": "pyannote/speaker-diarization-3.1",
   "pyannote-3.0": "pyannote/speaker-diarization@2.1",
+  diart: "",
   whisperx: "",
   none: "",
 };
@@ -395,6 +400,7 @@ async function saveDiarizationSettings() {
   if (providerChoice === "pyannote-3.1" || providerChoice === "pyannote-3.0") {
     backendProvider = "pyannote";
   }
+  // diart and whisperx use their own names as provider
 
   setDiarizationOutput("Saving diarization settings...");
   setGlobalBusy("Saving diarization settings...");
@@ -517,6 +523,8 @@ async function loadDiarizationSettings() {
         }
       } else if (data.provider === "whisperx") {
         uiChoice = "whisperx";
+      } else if (data.provider === "diart") {
+        uiChoice = "diart";
       }
     }
 

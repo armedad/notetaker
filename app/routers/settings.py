@@ -112,6 +112,72 @@ def create_settings_router(config_path: str) -> APIRouter:
             json.dump(data, config_file, indent=2)
         return {"status": "ok"}
 
+    @router.post("/api/settings/diarization/test")
+    def test_diarization_access() -> dict:
+        """Test if HuggingFace token has access to pyannote models."""
+        if not os.path.exists(config_path):
+            return {"status": "error", "message": "No configuration found"}
+        
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            data = json.load(config_file)
+        
+        diarization = data.get("diarization", {})
+        hf_token = diarization.get("hf_token", "")
+        
+        if not hf_token:
+            return {
+                "status": "error",
+                "message": "HuggingFace token not configured. Get one at https://huggingface.co/settings/tokens"
+            }
+        
+        # Test access to the required models
+        models_to_check = [
+            "pyannote/speaker-diarization-3.1",
+            "pyannote/segmentation-3.0",
+        ]
+        
+        results = []
+        for model in models_to_check:
+            try:
+                response = requests.get(
+                    f"https://huggingface.co/api/models/{model}",
+                    headers={"Authorization": f"Bearer {hf_token}"},
+                    timeout=10,
+                )
+                if response.status_code == 200:
+                    results.append({"model": model, "status": "ok"})
+                elif response.status_code == 403:
+                    results.append({
+                        "model": model,
+                        "status": "error",
+                        "message": f"License not accepted. Visit https://huggingface.co/{model} to accept."
+                    })
+                elif response.status_code == 401:
+                    results.append({
+                        "model": model,
+                        "status": "error", 
+                        "message": "Invalid HuggingFace token"
+                    })
+                else:
+                    results.append({
+                        "model": model,
+                        "status": "error",
+                        "message": f"HTTP {response.status_code}"
+                    })
+            except Exception as exc:
+                results.append({
+                    "model": model,
+                    "status": "error",
+                    "message": str(exc)
+                })
+        
+        all_ok = all(r["status"] == "ok" for r in results)
+        return {
+            "status": "ok" if all_ok else "error",
+            "models": results,
+            "message": "All models accessible" if all_ok else "Some models require license acceptance"
+        }
+
     @router.post("/api/settings/models/test")
     def test_model_access(payload: ModelTestRequest) -> dict:
         provider = payload.provider.lower()
