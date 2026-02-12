@@ -127,7 +127,7 @@ function updateGoToMeetingButton() {
   
   if (isRecording && meetingId) {
     btn.style.display = "inline-block";
-    btn.onclick = () => window.location.href = `/meeting.html?id=${meetingId}`;
+    btn.onclick = () => window.location.href = `/meeting?id=${meetingId}`;
   } else {
     btn.style.display = "none";
   }
@@ -474,7 +474,7 @@ async function startFileRecording() {
     );
     // Navigate to the newly created meeting
     if (response.meeting_id) {
-      window.location.href = `/meeting.html?id=${response.meeting_id}`;
+      window.location.href = `/meeting?id=${response.meeting_id}`;
     }
   } catch (error) {
     if (error.name !== "AbortError") {
@@ -1085,7 +1085,7 @@ async function startRecording() {
     refreshMeetings();
     // Navigate to the newly created meeting
     if (data.recording_id) {
-      window.location.href = `/meeting.html?id=${data.recording_id}`;
+      window.location.href = `/meeting?id=${data.recording_id}`;
     }
   } catch (error) {
     setOutput(`Failed to start: ${error.message}`);
