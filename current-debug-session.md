@@ -1,3 +1,62 @@
+# Debug Session: Meeting disappears after stop
+
+**Status:** INVESTIGATING
+**Started:** 2026-02-07
+**Drive:** N/A
+
+---
+
+## 1. Investigation (Evidence Gathering)
+**Goal:** Gather Hard Evidence (logs, traces) of *what* is failing.
+
+- [ ] **Reproduction Steps:**
+  1.
+  2.
+
+- [ ] **Hard Evidence Collected:**
+  - [ ] Logs showing error: `[Paste brief log snippet]`
+  - [ ] Variable trace: `[Variable X is null]`
+  - [ ] Network response: `[500 from /api/foo]`
+
+**Current State:** Need logs in runtime `~/projects/notetaker/logs/` per AGENTS.MD. Added client/server logging to `/api/logs/client` and `logs/server_runtime_debug.log`.
+
+---
+
+## 2. Diagnosis (Hypothesis Board)
+**Goal:** List potential causes, track their status, and avoid repeating work.
+
+**Hypothesis Status:** `PENDING` (To do), `TESTING` (In progress), `RULED_OUT` (Proven false), `CONFIRMED` (Proven true).
+
+| ID | Hypothesis (I believe X because Y...) | Status | Test/Evidence |
+|----|---------------------------------------|--------|---------------|
+| H1 | Meeting file gets deleted during stop/finalize. | RULED_OUT | No delete_meeting logs; list_meetings keeps file. |
+| H2 | Meeting file exists but is not listed (filename/path mismatch). | RULED_OUT | list_meetings includes meeting IDs after stop. |
+| H3 | Client refresh filters out the meeting after stop. | RULED_OUT | refreshMeetings logs still include meeting ID. |
+| H5 | Cross-page mismatch: meeting.js stop uses ID not present in app.js list. | TESTING | Store lastStoppedMeetingId and check in app.js list. |
+
+**Active Hypothesis Verification Plan:**
+- **Selected Hypothesis:** H1
+- **Test Case:** After stop + return to list, confirm delete_meeting or missing file in list_meetings logs.
+- **Result:** Pending.
+
+---
+
+## 3. Fix & Verify (Resolution)
+**Goal:** Apply minimal fix and confirm with new logs.
+
+- [ ] **The Fix:**
+  - [ ] File(s) modified: `[list files]`
+  - [ ] Description: `[brief description]`
+
+- [ ] **Verification (Post-Fix):**
+  - [ ] Reproduction steps run again?
+  - [ ] **New Logs:** `[Paste confirmation of success]`
+
+---
+
+## Retrospective
+- **Root Cause Category:** [Code Error / Config / Data / Architecture]
+- **Prevention:** [How to prevent this class of bug?]
 # Debug Session: Server not coming up
 
 **Status:** INVESTIGATING

@@ -14,12 +14,16 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 import tempfile
 import threading
+import time
 from typing import TYPE_CHECKING, Callable, Iterator, Optional
 
 import numpy as np
 import soundfile as sf
+
+from app.services.debug_logging import dbg
 
 if TYPE_CHECKING:
     from app.services.transcription import FasterWhisperProvider
@@ -152,6 +156,7 @@ class TranscriptionPipeline:
         audio_path: str,
         cancel_event: Optional[threading.Event] = None,
         on_chunk_ingested: Optional[Callable[[int, float], None]] = None,
+        on_chunk_audio: Optional[Callable[[bytes, int, int, float], None]] = None,
     ) -> Iterator[tuple[dict, Optional[str], bool]]:
         """Transcribe file in chunks with cancellation between chunks.
         
@@ -272,6 +277,13 @@ class TranscriptionPipeline:
                 
                 if chunk_lang and not language:
                     language = chunk_lang
+
+                # Optional hook: provide raw chunk audio bytes for downstream (e.g. real-time diarization).
+                if on_chunk_audio:
+                    try:
+                        on_chunk_audio(audio_data.tobytes(), samplerate, channels, offset_seconds)
+                    except Exception:
+                        pass
                 
                 # Yield segments from this chunk
                 for segment in segments:
@@ -321,12 +333,59 @@ class TranscriptionPipeline:
         
         try:
             self._logger.info("Diarization start: audio=%s", audio_path)
+            # #region agent log
+            try:
+                dbg(
+                    self._logger,
+                    location="app/services/transcription_pipeline.py:run_diarization",
+                    message="run_diarization_before_run",
+                    data={
+                        "provider": getattr(self._diarization, "get_provider_name", lambda: "unknown")(),
+                        "segments_in": len(segments) if segments else 0,
+                        "audio_basename": os.path.basename(audio_path or ""),
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H3",
+                )
+            except Exception:
+                pass
+            # #endregion
             diarization_segments = self._diarization.run(audio_path)
             segments = apply_diarization(segments, diarization_segments)
             speaker_count = len(set(s.get("speaker") for s in segments if s.get("speaker")))
             self._logger.info("Diarization complete: speakers=%s", speaker_count)
+            # #region agent log
+            try:
+                dbg(
+                    self._logger,
+                    location="app/services/transcription_pipeline.py:run_diarization",
+                    message="run_diarization_after_apply",
+                    data={
+                        "diarization_segments": len(diarization_segments) if diarization_segments else 0,
+                        "segments_out": len(segments) if segments else 0,
+                        "speakers": speaker_count,
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H5",
+                )
+            except Exception:
+                pass
+            # #endregion
         except Exception as exc:
             self._logger.warning("Diarization failed: %s", exc)
+            # #region agent log
+            try:
+                dbg(
+                    self._logger,
+                    location="app/services/transcription_pipeline.py:run_diarization",
+                    message="run_diarization_error",
+                    data={"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
+                    run_id="pre-fix",
+                    hypothesis_id="H1",
+                )
+            except Exception:
+                pass
+            # #endregion
         
         return segments
     
@@ -368,6 +427,36 @@ class TranscriptionPipeline:
         self._meeting_store.add_transcript(audio_path, language, segments)
         
         return segments, language
+
+    def persist_and_finalize_meeting(
+        self,
+        meeting_id: str,
+        audio_path: str,
+        language: Optional[str],
+        segments: list[dict],
+        *,
+        apply_diarization: bool = True,
+    ) -> list[dict]:
+        """Persist transcript and finalize meeting via a single shared pipeline.
+        
+        This is the convergence point for live vs simulated flows once audio is obtained.
+        
+        Behavior:
+        - Optionally applies batch diarization (if enabled) and updates stored speakers
+        - Saves transcript to storage
+        - Finalizes meeting (status=completed, summary, auto-title) via enhanced pipeline
+        """
+        if apply_diarization:
+            segments = self.run_diarization(audio_path, segments)
+            if self._diarization.is_enabled():
+                self._meeting_store.update_transcript_speakers(meeting_id, segments)
+
+        self._meeting_store.add_transcript(audio_path, language, segments)
+        
+        # Use enhanced finalization with speaker naming and status updates.
+        # Pass audio_path=None since diarization was already done above.
+        self.finalize_meeting_with_diarization(meeting_id, segments, audio_path=None)
+        return segments
     
     def transcribe_chunk(
         self,
@@ -419,6 +508,20 @@ class TranscriptionPipeline:
         Returns:
             Summary result dict or None if summarization failed
         """
+        # #region agent log
+        try:
+            dbg(
+                self._logger,
+                location="transcription_pipeline.py:finalize_meeting",
+                message="finalize_meeting_enter",
+                data={"meeting_id": meeting_id, "segments_count": len(segments) if segments else 0},
+                run_id="bugs-debug",
+                hypothesis_id="H1a_H2a",
+            )
+        except Exception:
+            pass
+        # #endregion
+        
         # Update status to completed
         self._meeting_store.update_status(meeting_id, "completed")
         
@@ -431,6 +534,19 @@ class TranscriptionPipeline:
         
         if not summary_text.strip():
             self._logger.info("Finalize skipped (no text): meeting_id=%s", meeting_id)
+            # #region agent log
+            try:
+                dbg(
+                    self._logger,
+                    location="transcription_pipeline.py:finalize_meeting",
+                    message="finalize_meeting_skip_empty",
+                    data={"meeting_id": meeting_id},
+                    run_id="bugs-debug",
+                    hypothesis_id="H2a",
+                )
+            except Exception:
+                pass
+            # #endregion
             return None
         
         try:
@@ -439,7 +555,38 @@ class TranscriptionPipeline:
                 meeting_id,
                 len(segments),
             )
+            # #region agent log
+            try:
+                dbg(
+                    self._logger,
+                    location="transcription_pipeline.py:finalize_meeting",
+                    message="finalize_summarize_start",
+                    data={"meeting_id": meeting_id, "summary_text_len": len(summary_text)},
+                    run_id="bugs-debug",
+                    hypothesis_id="H2b",
+                )
+            except Exception:
+                pass
+            # #endregion
             result = self._summarization.summarize(summary_text)
+            # #region agent log
+            try:
+                dbg(
+                    self._logger,
+                    location="transcription_pipeline.py:finalize_meeting",
+                    message="finalize_summarize_done",
+                    data={
+                        "meeting_id": meeting_id,
+                        "has_result": result is not None,
+                        "summary_len": len(result.get("summary", "")) if result else 0,
+                        "action_items_count": len(result.get("action_items", [])) if result else 0,
+                    },
+                    run_id="bugs-debug",
+                    hypothesis_id="H2b",
+                )
+            except Exception:
+                pass
+            # #endregion
             
             self._meeting_store.add_summary(
                 meeting_id,
@@ -448,16 +595,265 @@ class TranscriptionPipeline:
                 provider="default",
             )
             
+            # #region agent log
+            try:
+                dbg(
+                    self._logger,
+                    location="transcription_pipeline.py:finalize_meeting",
+                    message="finalize_auto_title_start",
+                    data={"meeting_id": meeting_id, "summary_for_title_len": len(result.get("summary", ""))},
+                    run_id="bugs-debug",
+                    hypothesis_id="H1b",
+                )
+            except Exception:
+                pass
+            # #endregion
             self._meeting_store.maybe_auto_title(
                 meeting_id,
                 result.get("summary", ""),
                 self._summarization,
                 force=True,
             )
+            # #region agent log
+            try:
+                dbg(
+                    self._logger,
+                    location="transcription_pipeline.py:finalize_meeting",
+                    message="finalize_auto_title_done",
+                    data={"meeting_id": meeting_id},
+                    run_id="bugs-debug",
+                    hypothesis_id="H1b",
+                )
+            except Exception:
+                pass
+            # #endregion
             
             self._logger.info("Finalize complete: meeting_id=%s", meeting_id)
             return result
             
         except Exception as exc:
             self._logger.warning("Finalize summary failed: meeting_id=%s error=%s", meeting_id, exc)
+            # #region agent log
+            try:
+                import traceback
+                dbg(
+                    self._logger,
+                    location="transcription_pipeline.py:finalize_meeting",
+                    message="finalize_meeting_error",
+                    data={
+                        "meeting_id": meeting_id,
+                        "exc_type": type(exc).__name__,
+                        "exc_str": str(exc)[:500],
+                        "traceback": traceback.format_exc()[-1500:],
+                    },
+                    run_id="bugs-debug",
+                    hypothesis_id="H2b",
+                )
+            except Exception:
+                pass
+            # #endregion
             return None
+
+    def finalize_meeting_with_diarization(
+        self,
+        meeting_id: str,
+        segments: list[dict],
+        audio_path: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Finalize a meeting with full diarization pipeline.
+        
+        Enhanced finalization flow:
+        1. Publish status: "Analyzing speakers..."
+        2. Run batch diarization on the full audio
+        3. Apply speaker labels to transcript
+        4. Publish status: "Identifying speaker names..."
+        5. Use LLM to identify speaker names (if available)
+        6. Update attendee names
+        7. Publish status: "Generating summary..."
+        8. Run summarization
+        9. Generate auto-title
+        10. Publish status: "Complete"
+        
+        Args:
+            meeting_id: Meeting ID to finalize
+            segments: Transcript segments
+            audio_path: Path to the audio file for diarization
+            
+        Returns:
+            Summary result dict or None if failed
+        """
+        try:
+            self._logger.info(
+                "finalize_meeting_with_diarization: meeting_id=%s segments=%d audio_path=%s",
+                meeting_id,
+                len(segments) if segments else 0,
+                audio_path,
+            )
+            
+            # Update status to processing
+            self._meeting_store.update_status(meeting_id, "processing")
+            
+            # Step 1-3: Run batch diarization if enabled and audio available
+            diarization_segments = []
+            if audio_path and self._diarization.is_enabled():
+                self._meeting_store.publish_finalization_status(
+                    meeting_id, "Analyzing speakers...", 0.1
+                )
+                try:
+                    diarization_segments = self._diarization.run(audio_path)
+                    self._logger.info(
+                        "Diarization complete: meeting_id=%s segments=%d",
+                        meeting_id,
+                        len(diarization_segments),
+                    )
+                    
+                    # Apply speaker labels to transcript
+                    if diarization_segments:
+                        segments = apply_diarization(segments, diarization_segments)
+                        # Update transcript speakers in meeting store
+                        self._meeting_store.update_transcript_speakers(meeting_id, segments)
+                except Exception as exc:
+                    self._logger.warning(
+                        "Diarization failed, continuing without: meeting_id=%s error=%s",
+                        meeting_id, exc
+                    )
+            
+            # Step 4-6: Identify speaker names using LLM
+            if diarization_segments:
+                self._meeting_store.publish_finalization_status(
+                    meeting_id, "Identifying speaker names...", 0.3
+                )
+                try:
+                    self._identify_and_update_speaker_names(meeting_id, segments)
+                except Exception as exc:
+                    self._logger.warning(
+                        "Speaker name identification failed: meeting_id=%s error=%s",
+                        meeting_id, exc
+                    )
+            
+            # Step 7-9: Generate summary
+            self._meeting_store.publish_finalization_status(
+                meeting_id, "Generating summary...", 0.6
+            )
+            
+            summary_text = "\n".join(
+                segment.get("text", "")
+                for segment in segments
+                if isinstance(segment, dict)
+            )
+            
+            result = None
+            if summary_text.strip():
+                try:
+                    result = self._summarization.summarize(summary_text)
+                    self._meeting_store.add_summary(
+                        meeting_id,
+                        summary=result.get("summary", ""),
+                        action_items=result.get("action_items", []),
+                        provider="default",
+                    )
+                    
+                    # Auto-generate title
+                    self._meeting_store.publish_finalization_status(
+                        meeting_id, "Generating title...", 0.9
+                    )
+                    self._meeting_store.maybe_auto_title(
+                        meeting_id,
+                        result.get("summary", ""),
+                        self._summarization,
+                        force=True,
+                    )
+                except Exception as exc:
+                    self._logger.warning(
+                        "Summarization failed: meeting_id=%s error=%s",
+                        meeting_id, exc
+                    )
+            
+            # Step 10: Complete
+            self._meeting_store.update_status(meeting_id, "completed")
+            self._meeting_store.clear_finalization_status(meeting_id)
+            self._meeting_store.publish_event("meeting_updated", meeting_id)
+            
+            self._logger.info("finalize_meeting_with_diarization complete: meeting_id=%s", meeting_id)
+            return result
+            
+        except Exception as exc:
+            self._logger.exception(
+                "finalize_meeting_with_diarization failed: meeting_id=%s error=%s",
+                meeting_id, exc
+            )
+            # Make sure to clear status on error
+            self._meeting_store.update_status(meeting_id, "completed")
+            self._meeting_store.clear_finalization_status(meeting_id)
+            return None
+
+    def _identify_and_update_speaker_names(
+        self,
+        meeting_id: str,
+        segments: list[dict],
+    ) -> None:
+        """Use LLM to identify speaker names from transcript.
+        
+        For each unique speaker label (e.g., "SPEAKER_00"), extract their
+        dialogue and ask the LLM if it can identify who they are.
+        """
+        # Get unique speakers
+        speakers = set()
+        for seg in segments:
+            speaker = seg.get("speaker")
+            if speaker:
+                speakers.add(speaker)
+        
+        if not speakers:
+            return
+        
+        # Get current meeting to check existing attendees
+        meeting = self._meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            return
+        
+        attendees = meeting.get("attendees", [])
+        attendee_map = {a.get("id"): a for a in attendees}
+        
+        # For each speaker, try to identify their name
+        for speaker_id in speakers:
+            # Skip if already has a human-assigned name
+            attendee = attendee_map.get(speaker_id)
+            if attendee and attendee.get("name_source") == "manual":
+                continue
+            
+            # Get segments for this speaker
+            speaker_segments = [
+                seg for seg in segments
+                if seg.get("speaker") == speaker_id
+            ]
+            
+            if not speaker_segments:
+                continue
+            
+            # Try to identify the speaker
+            try:
+                result = self._summarization.identify_speaker_name(
+                    speaker_id, speaker_segments
+                )
+                
+                if result and result.get("name"):
+                    # Update or create attendee
+                    self._meeting_store.update_attendee_name(
+                        meeting_id,
+                        speaker_id,
+                        result["name"],
+                        source="llm",
+                        confidence=result.get("confidence", "low"),
+                    )
+                    self._logger.info(
+                        "Identified speaker: %s -> %s (confidence: %s)",
+                        speaker_id,
+                        result["name"],
+                        result.get("confidence", "unknown"),
+                    )
+            except Exception as exc:
+                self._logger.warning(
+                    "Failed to identify speaker %s: %s",
+                    speaker_id, exc
+                )

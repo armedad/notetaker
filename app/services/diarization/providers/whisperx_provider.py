@@ -1,9 +1,26 @@
 from __future__ import annotations
 
 import logging
+import json
+import os
 import time
 
 from app.services.diarization.providers.base import DiarizationConfig, DiarizationProvider
+from app.services.debug_logging import dbg
+
+
+def _dbg(location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
+    try:
+        dbg(
+            logging.getLogger("notetaker.debug"),
+            location=location,
+            message=message,
+            data=data,
+            run_id=run_id,
+            hypothesis_id=hypothesis_id,
+        )
+    except Exception:
+        pass
 
 
 def _patch_torch_load() -> None:
@@ -44,12 +61,30 @@ class WhisperXProvider(DiarizationProvider):
         self._logger = logging.getLogger("notetaker.diarization.whisperx")
 
     def diarize(self, audio_path: str) -> list[dict]:
+        _dbg(
+            "app/services/diarization/providers/whisperx_provider.py:diarize",
+            "whisperx_diarize_enter",
+            {
+                "device": self._config.device or "cpu",
+                "hf_token_present": bool(self._config.hf_token),
+                "audio_basename": os.path.basename(audio_path or ""),
+            },
+            run_id="pre-fix",
+            hypothesis_id="H2",
+        )
         # Apply torch.load patch before importing whisperx (which imports pyannote)
         _patch_torch_load()
         
         try:
             import whisperx
         except Exception as exc:  # pragma: no cover
+            _dbg(
+                "app/services/diarization/providers/whisperx_provider.py:diarize",
+                "whisperx_import_error",
+                {"exc_type": type(exc).__name__, "exc_str": str(exc)[:500]},
+                run_id="pre-fix",
+                hypothesis_id="H4",
+            )
             raise RuntimeError("whisperx is not installed") from exc
         try:
             import torch
@@ -73,6 +108,13 @@ class WhisperXProvider(DiarizationProvider):
             diarization = diarize_pipeline(audio_path)
         except Exception as exc:
             error_str = str(exc).lower()
+            _dbg(
+                "app/services/diarization/providers/whisperx_provider.py:diarize",
+                "whisperx_pipeline_error",
+                {"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
+                run_id="pre-fix",
+                hypothesis_id="H1",
+            )
             # Check for license/access issues (various error formats from HuggingFace/pyannote)
             if any(keyword in error_str for keyword in [
                 "403", "forbidden", "gated", "accept", "user conditions", 
@@ -106,5 +148,12 @@ class WhisperXProvider(DiarizationProvider):
             "WhisperX diarization complete: segments=%s duration=%.2fs",
             len(segments),
             duration,
+        )
+        _dbg(
+            "app/services/diarization/providers/whisperx_provider.py:diarize",
+            "whisperx_diarize_complete",
+            {"segments": len(segments), "duration_s": round(duration, 3)},
+            run_id="pre-fix",
+            hypothesis_id="H2",
         )
         return segments

@@ -7,7 +7,35 @@ const state = {
   titleSaveTimer: null,
   selectedAttendeeId: null,
   renameMode: false,
+  pollIntervalId: null,
 };
+
+// Conditional polling: only poll when meeting needs updates
+function meetingNeedsPolling() {
+  const meeting = state.meeting;
+  return meeting?.status === "in_progress" || !!meeting?.finalization_status;
+}
+
+function startPollingIfNeeded() {
+  if (state.pollIntervalId) return; // Already polling
+  if (!meetingNeedsPolling()) return; // No need to poll
+  
+  state.pollIntervalId = setInterval(async () => {
+    if (meetingNeedsPolling()) {
+      await refreshMeeting();
+    } else {
+      // Meeting is complete, stop polling
+      stopPolling();
+    }
+  }, 5000);
+}
+
+function stopPolling() {
+  if (state.pollIntervalId) {
+    clearInterval(state.pollIntervalId);
+    state.pollIntervalId = null;
+  }
+}
 
 function debugLog(message, data = {}) {
   console.debug(`[Meeting] ${message}`, data);
@@ -52,6 +80,39 @@ function setGlobalBusy(message) {
   busyEl.textContent = message || "";
 }
 
+function showFinalizationStatus(statusText, progress = null) {
+  const container = document.getElementById("finalization-status");
+  const textEl = document.getElementById("finalization-status-text");
+  const progressBar = document.getElementById("finalization-progress-bar");
+  const progressFill = document.getElementById("finalization-progress-fill");
+  
+  if (!container) return;
+  
+  container.style.display = "flex";
+  if (textEl) textEl.textContent = statusText || "Processing...";
+  
+  if (progress !== null && progress !== undefined) {
+    if (progressBar) progressBar.style.display = "block";
+    if (progressFill) progressFill.style.width = `${Math.round(progress * 100)}%`;
+  } else {
+    if (progressBar) progressBar.style.display = "none";
+  }
+}
+
+function hideFinalizationStatus() {
+  const container = document.getElementById("finalization-status");
+  if (container) container.style.display = "none";
+}
+
+function updateFinalizationStatusFromMeeting(meeting) {
+  const finStatus = meeting?.finalization_status;
+  if (finStatus && finStatus.status_text) {
+    showFinalizationStatus(finStatus.status_text, finStatus.progress);
+  } else {
+    hideFinalizationStatus();
+  }
+}
+
 function setMeetingTitle(title) {
   const input = document.getElementById("meeting-title");
   input.value = title || "";
@@ -85,21 +146,93 @@ function renderAttendeesList(attendees) {
       const segmentCount = getSegmentsForAttendee(attendee.id).length;
       const name = attendee.name || attendee.label || attendee.id || "Unknown";
       const isSelected = state.selectedAttendeeId === attendee.id;
+      const isRenaming = state.renameMode && state.selectedAttendeeId === attendee.id;
+      
+      if (isRenaming) {
+        return `
+          <div class="attendee-item selected renaming" data-attendee-id="${attendee.id}">
+            <input type="text" class="attendee-inline-input" value="${escapeHtml(name)}" />
+            <button class="icon-btn save-rename-inline" title="Save">&#10003;</button>
+            <button class="icon-btn cancel-rename-inline" title="Cancel">&#10005;</button>
+          </div>
+        `;
+      }
+      
       return `
         <div class="attendee-item ${isSelected ? "selected" : ""}" 
              data-attendee-id="${attendee.id}">
           <span class="attendee-item-name">${escapeHtml(name)}</span>
+          <div class="attendee-item-actions">
+            <button class="icon-btn rename-inline" title="Rename">&#9998;</button>
+            <button class="icon-btn auto-rename-inline" title="Auto-identify">&#10024;</button>
+          </div>
           <span class="attendee-item-count">${segmentCount}</span>
         </div>
       `;
     })
     .join("");
 
-  // Add click handlers
+  // Add click handlers for selecting attendees
   listEl.querySelectorAll(".attendee-item").forEach((item) => {
-    item.addEventListener("click", () => {
+    // Click on row (but not buttons) selects the attendee
+    item.addEventListener("click", (e) => {
+      if (e.target.closest(".icon-btn") || e.target.closest("input")) return;
       selectAttendee(item.dataset.attendeeId);
     });
+  });
+  
+  // Add handlers for inline rename button
+  listEl.querySelectorAll(".rename-inline").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const attendeeId = btn.closest(".attendee-item").dataset.attendeeId;
+      state.selectedAttendeeId = attendeeId;
+      enterRenameMode();
+    });
+  });
+  
+  // Add handlers for inline auto-rename button
+  listEl.querySelectorAll(".auto-rename-inline").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const attendeeId = btn.closest(".attendee-item").dataset.attendeeId;
+      state.selectedAttendeeId = attendeeId;
+      autoRenameAttendee();
+    });
+  });
+  
+  // Add handlers for save/cancel in rename mode
+  listEl.querySelectorAll(".save-rename-inline").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const input = btn.closest(".attendee-item").querySelector(".attendee-inline-input");
+      if (input) {
+        saveAttendeeNameInline(input.value);
+      }
+    });
+  });
+  
+  listEl.querySelectorAll(".cancel-rename-inline").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      cancelRename();
+    });
+  });
+  
+  // Handle Enter/Escape in inline input
+  listEl.querySelectorAll(".attendee-inline-input").forEach((input) => {
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        saveAttendeeNameInline(input.value);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancelRename();
+      }
+    });
+    // Focus the input
+    input.focus();
+    input.select();
   });
 }
 
@@ -127,23 +260,7 @@ function selectAttendee(attendeeId) {
     return;
   }
 
-  // Update detail panel
-  const nameDisplay = document.getElementById("selected-attendee-name");
-  const renameBtn = document.getElementById("rename-attendee-btn");
-  const autoRenameBtn = document.getElementById("auto-rename-btn");
   const segmentsEl = document.getElementById("attendee-segments");
-
-  if (nameDisplay) {
-    nameDisplay.textContent = attendee.name || attendee.label || attendee.id || "Unknown";
-    nameDisplay.style.display = "inline";
-  }
-
-  // Show rename buttons
-  if (renameBtn) renameBtn.style.display = "inline-block";
-  if (autoRenameBtn) autoRenameBtn.style.display = "inline-block";
-
-  // Hide edit mode elements
-  hideRenameMode();
 
   // Clear status
   setAutoRenameStatus("");
@@ -172,78 +289,39 @@ function selectAttendee(attendeeId) {
 }
 
 function clearAttendeeDetail() {
-  const nameDisplay = document.getElementById("selected-attendee-name");
-  const renameBtn = document.getElementById("rename-attendee-btn");
-  const autoRenameBtn = document.getElementById("auto-rename-btn");
   const segmentsEl = document.getElementById("attendee-segments");
-
-  if (nameDisplay) {
-    nameDisplay.textContent = "Select an attendee";
-    nameDisplay.style.display = "inline";
-  }
-  if (renameBtn) renameBtn.style.display = "none";
-  if (autoRenameBtn) autoRenameBtn.style.display = "none";
   hideRenameMode();
   setAutoRenameStatus("");
 
   if (segmentsEl) {
-    segmentsEl.innerHTML =
-      '<div class="attendee-segments-placeholder">Select an attendee to see what they\'ve said.</div>';
+    segmentsEl.innerHTML = "";
   }
 }
 
 function enterRenameMode() {
   state.renameMode = true;
-
-  const attendees = state.meeting?.attendees || [];
-  const attendee = attendees.find((a) => a.id === state.selectedAttendeeId);
-  if (!attendee) return;
-
-  const nameDisplay = document.getElementById("selected-attendee-name");
-  const nameInput = document.getElementById("attendee-name-input");
-  const renameBtn = document.getElementById("rename-attendee-btn");
-  const autoRenameBtn = document.getElementById("auto-rename-btn");
-  const saveBtn = document.getElementById("save-rename-btn");
-  const cancelBtn = document.getElementById("cancel-rename-btn");
-
-  if (nameDisplay) nameDisplay.style.display = "none";
-  if (renameBtn) renameBtn.style.display = "none";
-  if (autoRenameBtn) autoRenameBtn.style.display = "none";
-
-  if (nameInput) {
-    nameInput.value = attendee.name || attendee.label || "";
-    nameInput.style.display = "inline-block";
-    nameInput.focus();
-    nameInput.select();
-  }
-  if (saveBtn) saveBtn.style.display = "inline-block";
-  if (cancelBtn) cancelBtn.style.display = "inline-block";
+  // Re-render the attendees list to show the inline input
+  renderAttendeesList(state.meeting?.attendees || []);
 }
 
 function hideRenameMode() {
-  const nameInput = document.getElementById("attendee-name-input");
-  const saveBtn = document.getElementById("save-rename-btn");
-  const cancelBtn = document.getElementById("cancel-rename-btn");
-
-  if (nameInput) nameInput.style.display = "none";
-  if (saveBtn) saveBtn.style.display = "none";
-  if (cancelBtn) cancelBtn.style.display = "none";
   state.renameMode = false;
 }
 
 function cancelRename() {
   hideRenameMode();
-  // Re-select to refresh UI
+  // Re-render to show normal view
+  renderAttendeesList(state.meeting?.attendees || []);
+  // Re-select to refresh the detail panel
   if (state.selectedAttendeeId) {
     selectAttendee(state.selectedAttendeeId);
   }
 }
 
-async function saveAttendeeName() {
+async function saveAttendeeNameInline(newName) {
   if (!state.meetingId || !state.selectedAttendeeId) return;
 
-  const nameInput = document.getElementById("attendee-name-input");
-  const newName = nameInput?.value.trim();
+  newName = newName?.trim();
   if (!newName) {
     setGlobalError("Name cannot be empty.");
     return;
@@ -260,6 +338,7 @@ async function saveAttendeeName() {
       }
     );
     debugLog("Attendee name saved", { attendeeId: state.selectedAttendeeId, name: newName });
+    state.renameMode = false;
     await refreshMeeting();
     // Re-select to refresh the detail panel
     selectAttendee(state.selectedAttendeeId);
@@ -267,6 +346,14 @@ async function saveAttendeeName() {
     setGlobalError(`Failed to save name: ${error.message}`);
   } finally {
     setGlobalBusy("");
+  }
+}
+
+// Legacy function for compatibility
+async function saveAttendeeName() {
+  const input = document.querySelector(".attendee-inline-input");
+  if (input) {
+    await saveAttendeeNameInline(input.value);
   }
 }
 
@@ -501,6 +588,7 @@ async function refreshMeeting() {
     state.meeting = meeting;
     setMeetingTitle(meeting.title || "");
     setAttendeeEditor(meeting.attendees || []);
+    updateFinalizationStatusFromMeeting(meeting);
     const meetingStatus = meeting.status === "in_progress" ? "In progress" : "Completed";
     if (meeting.transcript?.segments?.length) {
       state.lastTranscriptSegments = meeting.transcript.segments;
@@ -529,11 +617,13 @@ async function refreshMeeting() {
       updateSummaryDebugPanel(meeting);
     }
 
-    if (meeting.status === "in_progress") {
-      // Start live transcript only for real recordings (not simulated file transcription)
-      if (!meeting.simulated) {
-        startLiveTranscript();
-      }
+    // Only start live transcript when this meeting is actually actively transcribing.
+    // If a meeting is "in_progress" but not currently active (paused/stopped), starting
+    // `/api/transcribe/live` causes an SSE error ("Not recording") and can lead to a tight loop.
+    const active = await getActiveTranscription();
+    const isThisMeetingActive = active.active && active.meeting_id === state.meetingId;
+    if (isThisMeetingActive && meeting.status === "in_progress" && !meeting.simulated) {
+      startLiveTranscript();
     } else {
       stopLiveTranscript();
     }
@@ -545,6 +635,13 @@ async function refreshMeeting() {
       body: JSON.stringify({ level: "info", message: "[refreshMeeting] about to call updateTranscriptionControls" }),
     }).catch(() => {});
     await updateTranscriptionControls();
+    
+    // Start or stop polling based on meeting state
+    if (meetingNeedsPolling()) {
+      startPollingIfNeeded();
+    } else {
+      stopPolling();
+    }
   } catch (error) {
     fetch("/api/logs/client", {
       method: "POST",
@@ -561,6 +658,9 @@ function startLiveTranscript() {
   if (state.liveController || !state.meetingId) {
     return;
   }
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:startLiveTranscript',message:'startLiveTranscript enter',data:{meetingId:state.meetingId,hasController:!!state.liveController,meetingStatus:state.meeting?.status||null},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'LOOP1'})}).catch(()=>{});
+  // #endregion
   const controller = new AbortController();
   state.liveController = controller;
   state.liveStreaming = true;
@@ -606,6 +706,9 @@ async function streamLiveTranscript(controller) {
   let language = "unknown";
   let done = false;
 
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:streamLiveTranscript',message:'fetch live start',data:{meetingId:state.meetingId,segmentsSeeded:segments.length},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'LOOP1'})}).catch(()=>{});
+  // #endregion
   const response = await fetch("/api/transcribe/live", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -647,14 +750,32 @@ async function streamLiveTranscript(controller) {
         language = event.language || "unknown";
         setTranscriptStatus(`In progress • Live transcript (${language})`);
       } else if (event.type === "segment") {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:streamLiveTranscript',message:'segment_received',data:{meetingId:state.meetingId,segIdx:segments.length,start:event.start,end:event.end,textLen:(event.text||'').length,textPreview:(event.text||'').slice(0,50)},timestamp:Date.now(),runId:'bugs-debug',hypothesisId:'H3b'})}).catch(()=>{});
+        // #endregion
         segments.push(event);
         state.lastTranscriptSegments = segments;
         setTranscriptOutput(segments);
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:streamLiveTranscript',message:'setTranscriptOutput_called',data:{meetingId:state.meetingId,segmentsCount:segments.length},timestamp:Date.now(),runId:'bugs-debug',hypothesisId:'H3b'})}).catch(()=>{});
+        // #endregion
         setManualTranscriptionBuffer(buildTranscriptText(segments));
       } else if (event.type === "done") {
         done = true;
       } else if (event.type === "error") {
-        throw new Error(event.message || "Live transcription failed");
+        // Handle "Not recording" as a graceful stop, not an error
+        // This happens when the recording was stopped before we connected
+        if (event.message === "Not recording") {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:streamLiveTranscript',message:'live got Not recording error event',data:{meetingId:state.meetingId,meetingStatus:state.meeting?.status||null},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'LOOP1'})}).catch(()=>{});
+          // #endregion
+          debugLog("Live transcript: recording already stopped");
+          done = true;
+          // Refresh meeting to get the updated status
+          refreshMeeting().catch(() => {});
+        } else {
+          throw new Error(event.message || "Live transcription failed");
+        }
       }
     }
   }
@@ -896,6 +1017,15 @@ async function updateTranscriptionControls() {
 
 async function stopTranscription() {
   if (!state.meetingId) return;
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:stopTranscription',message:'stop click',data:{meetingId:state.meetingId},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'STOP500'})}).catch(()=>{});
+  // #endregion
+  // #region agent log
+  try {
+    localStorage.setItem("lastStoppedMeetingId", state.meetingId);
+  } catch (_) {}
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:stopTranscription',message:'lastStoppedMeetingId set',data:{meetingId:state.meetingId},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H5'})}).catch(()=>{});
+  // #endregion
   
   // Disable the stop button immediately to prevent multiple clicks
   const stopBtn = document.getElementById("stop-transcription");
@@ -909,6 +1039,9 @@ async function stopTranscription() {
   
   try {
     const result = await fetchJson(`/api/transcribe/stop/${state.meetingId}`, { method: "POST" });
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:stopTranscription',message:'stop ok',data:{meetingId:state.meetingId,result},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'STOP500'})}).catch(()=>{});
+    // #endregion
     debugLog("Transcription stop requested", { meetingId: state.meetingId, result });
     
     // The stop request returns immediately. Audio capture has stopped.
@@ -943,6 +1076,9 @@ async function stopTranscription() {
     setTranscriptStatus("Transcription complete.");
     await refreshMeeting();
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:stopTranscription',message:'stop error',data:{meetingId:state.meetingId,errorMessage:error?.message||String(error)},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'STOP500'})}).catch(()=>{});
+    // #endregion
     setGlobalError(`Failed to stop transcription: ${error.message}`);
     debugError("Stop transcription failed", error);
   } finally {
@@ -982,40 +1118,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (titleInput) {
     titleInput.addEventListener("input", scheduleTitleSave);
   }
-  const saveTitleButton = document.getElementById("save-title");
-  if (saveTitleButton) {
-    saveTitleButton.addEventListener("click", saveMeetingTitle);
-  }
 
-  // Attendee rename controls
-  const renameBtn = document.getElementById("rename-attendee-btn");
-  if (renameBtn) {
-    renameBtn.addEventListener("click", enterRenameMode);
-  }
-  const autoRenameBtn = document.getElementById("auto-rename-btn");
-  if (autoRenameBtn) {
-    autoRenameBtn.addEventListener("click", autoRenameAttendee);
-  }
-  const saveRenameBtn = document.getElementById("save-rename-btn");
-  if (saveRenameBtn) {
-    saveRenameBtn.addEventListener("click", saveAttendeeName);
-  }
-  const cancelRenameBtn = document.getElementById("cancel-rename-btn");
-  if (cancelRenameBtn) {
-    cancelRenameBtn.addEventListener("click", cancelRename);
-  }
-  const nameInput = document.getElementById("attendee-name-input");
-  if (nameInput) {
-    nameInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        saveAttendeeName();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        cancelRename();
-      }
-    });
-  }
+  // Attendee rename controls are now inline - event handlers added in renderAttendeesList()
 
   document
     .getElementById("delete-meeting")
@@ -1023,9 +1127,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   document
     .getElementById("export-meeting")
     .addEventListener("click", exportMeeting);
-  document.getElementById("back-home").addEventListener("click", () => {
-    window.location.href = "/";
-  });
   
   // Transcription controls
   const stopBtn = document.getElementById("stop-transcription");
@@ -1068,5 +1169,5 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   await refreshVersion();
   await refreshMeeting();
-  setInterval(refreshMeeting, 5000);
+  // Polling is now started/stopped automatically by refreshMeeting based on meeting state
 });

@@ -744,10 +744,24 @@ async function refreshLogs() {
 
 function renderMeetings() {
   const list = document.getElementById("meeting-list");
+  // #region agent log
+  let lastStoppedMeetingId = null;
+  try {
+    lastStoppedMeetingId = localStorage.getItem("lastStoppedMeetingId");
+  } catch (_) {}
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/app.js:renderMeetings',message:'renderMeetings enter',data:{hasListEl:!!list,meetingCount:state.meetings?.length||0,lastStoppedMeetingId},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H6'})}).catch(()=>{});
+  // #endregion
   list.innerHTML = "";
   if (!state.meetings.length) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/app.js:renderMeetings',message:'renderMeetings empty list',data:{lastStoppedMeetingId},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H6'})}).catch(()=>{});
+    // #endregion
     return;
   }
+  const meetingIds = (state.meetings || []).map((m) => m.id);
+  const hasLastStoppedInState = lastStoppedMeetingId
+    ? meetingIds.includes(lastStoppedMeetingId)
+    : null;
   state.meetings
     .slice()
     .sort((a, b) => {
@@ -766,6 +780,7 @@ function renderMeetings() {
     .forEach((meeting) => {
     const item = document.createElement("div");
     item.className = "meeting-item";
+    item.dataset.meetingId = meeting.id || "";
       const label = document.createElement("div");
       label.className = "meeting-item-text";
       const title = document.createElement("div");
@@ -787,6 +802,13 @@ function renderMeetings() {
     });
     list.appendChild(item);
   });
+  // #region agent log
+  const renderedCount = list.children ? list.children.length : null;
+  const hasLastStoppedInDom = lastStoppedMeetingId
+    ? !!list.querySelector(`[data-meeting-id="${lastStoppedMeetingId}"]`)
+    : null;
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/app.js:renderMeetings',message:'renderMeetings rendered',data:{renderedCount,hasLastStoppedInState,hasLastStoppedInDom,lastStoppedMeetingId,firstIds:meetingIds.slice(0,10)},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H6'})}).catch(()=>{});
+  // #endregion
 }
 
 function findMeetingByAudioPath(audioPath) {
@@ -797,6 +819,20 @@ async function refreshMeetings() {
   setGlobalBusy("Loading meetings...");
   try {
     state.meetings = await fetchJson("/api/meetings");
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/app.js:refreshMeetings',message:'meetings loaded',data:{count:state.meetings?.length||0,ids:(state.meetings||[]).slice(0,20).map(m=>m.id),selectedMeetingId:state.selectedMeetingId||null},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
+    // #region agent log
+    let lastStoppedMeetingId = null;
+    try {
+      lastStoppedMeetingId = localStorage.getItem("lastStoppedMeetingId");
+    } catch (_) {}
+    const hasLastStopped = !!lastStoppedMeetingId;
+    const hasLastStoppedInList = hasLastStopped
+      ? (state.meetings || []).some((m) => m.id === lastStoppedMeetingId)
+      : null;
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/app.js:refreshMeetings',message:'lastStoppedMeeting check',data:{lastStoppedMeetingId,hasLastStopped,hasLastStoppedInList},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H5'})}).catch(()=>{});
+    // #endregion
     if (state.fileMeetingId) {
       const meeting = state.meetings.find(
         (item) => item.id === state.fileMeetingId
@@ -1244,6 +1280,9 @@ async function stopRecording() {
   setStatusError("");
   setGlobalBusy("Stopping audio capture...");
   try {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/app.js:stopRecording',message:'stopRecording enter',data:{recordingSource:state.recordingSource,selectedMeetingId:state.selectedMeetingId||null},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
     if (state.recordingSource === "file") {
       await stopFileRecording();
       return;
@@ -1258,6 +1297,9 @@ async function stopRecording() {
     const data = await fetchJson("/api/recording/stop", {
       method: "POST",
     });
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/app.js:stopRecording',message:'stopRecording response',data:{recording_id:data?.recording_id||null,file_path:data?.file_path||null},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
     
     setOutput("Audio capture stopped. Finishing transcription...");
     setGlobalBusy("Audio capture stopped. Finishing transcription...");

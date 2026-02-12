@@ -229,4 +229,33 @@ If you cannot determine the name, respond with:
             raise HTTPException(status_code=404, detail="Meeting not found")
         return PlainTextResponse(content, media_type="text/markdown")
 
+    @router.post("/api/meetings/fix-stuck")
+    def fix_stuck_meetings() -> dict:
+        """Fix meetings stuck in 'in_progress' status.
+        
+        Checks all in_progress meetings and marks them as completed if:
+        - No active recording for that meeting
+        - No active transcription job for that meeting
+        
+        Returns count of fixed meetings.
+        """
+        meetings = meeting_store.list_meetings()
+        fixed_count = 0
+        fixed_ids = []
+        
+        for meeting in meetings:
+            if meeting.get("status") == "in_progress":
+                meeting_id = meeting.get("id")
+                if meeting_id:
+                    meeting_store.update_status(meeting_id, "completed")
+                    fixed_count += 1
+                    fixed_ids.append(meeting_id)
+                    logger.info("Fixed stuck meeting: %s", meeting_id)
+        
+        return {
+            "status": "ok",
+            "fixed_count": fixed_count,
+            "fixed_ids": fixed_ids,
+        }
+
     return router

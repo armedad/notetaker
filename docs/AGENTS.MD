@@ -30,14 +30,20 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 3. Continue with the next phase in `docs/plans/plan.md`
 4. Update docs as you go (see Continuous Documentation)
 
-## Working Directory
+## Non-Negotiables (Read First)
 
-Project root: `coding/notetaker/`
+- **Source code location:** `/Users/chee/zapier ai project/coding/notetaker` (Cursor workspace)
+- **Runtime location:** `~/projects/notetaker` (where the app runs)
+- **NEVER** edit files under `~/projects/notetaker` or `/Users/chee/projects/notetaker`
+- **ALWAYS** edit in the workspace and deploy via `./deploy.sh` (run from `coding/notetaker/`)
+- **Runtime logs only:** use `~/projects/notetaker/logs/server_*.log` and `~/projects/notetaker/logs/server_runtime_debug.log`
+- **Do NOT** use `.cursor/debug.log` unless the user explicitly asks
 
-## Deployment Boundary (CRITICAL)
+## Pre-Flight Checklist (Must Do Before Any Change)
 
-- Never edit files directly under `/Users/chee/projects/notetaker`.
-- Only modify files in the Cursor workspace (`/Users/chee/zapier ai project/coding/notetaker`) and deploy via `deploy.sh`.
+- Confirm edits are in `/Users/chee/zapier ai project/coding/notetaker`
+- Confirm deployment uses `./deploy.sh` to `~/projects/notetaker`
+- Confirm logs are read from `~/projects/notetaker/logs/`
 
 ## Tech Stack (Implemented)
 
@@ -65,8 +71,23 @@ Default to stdlib first. For new packages, explain why and alternatives briefly 
 ## Logging (CRITICAL)
 
 - All logs must include timestamps: `[HH:MM:SS] [PREFIX] message`
-- Route frontend logs to backend so all logs are visible in one place
-- Prefer one unified log file under `data/logs/`
+- Frontend logs must go through `/api/logs/client` so they land in runtime logs
+- Prefer runtime logs under `~/projects/notetaker/logs/` (do not invent new locations)
+
+## Pipeline Convergence Rule (CRITICAL)
+
+**Rule:** After audio is obtained (from mic/live queues OR from file/simulate), all downstream steps MUST share the same codepath:
+- segment normalization/formatting
+- diarization (real-time feed/assign when enabled, plus optional batch diarization)
+- meeting store persistence
+- finalization (status=completed, summary, auto-title)
+
+**Allowed differences:** only the *audio acquisition* layer and UI transport (SSE vs background job) may differ.
+
+**Implementation checklist (required for any new transcription feature):**
+- Add/extend methods on `TranscriptionPipeline` instead of copying logic into routers
+- Ensure `/api/transcribe/live`, `/api/transcribe/simulate`, and `/api/transcribe/stream` call the same post-audio pipeline entrypoint
+- Add a regression note in `docs/specs/opportunity-assessment.md` if you intentionally diverge (rare)
 
 ## Framework/OS Gotchas (CRITICAL)
 

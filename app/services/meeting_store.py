@@ -10,6 +10,30 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+# #region agent log
+_DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+
+
+def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
+    """Write one NDJSON debug line for this session. Best-effort only."""
+    try:
+        payload = {
+            "id": f"log_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
+            "timestamp": int(time.time() * 1000),
+            "location": location,
+            "message": message,
+            "data": data,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+# #endregion
+
 
 class MeetingStore:
     def __init__(self, meetings_dir: str) -> None:
@@ -83,9 +107,45 @@ class MeetingStore:
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(meeting, f, indent=2)
         os.replace(temp_path, path)
+        # #region agent log
+        _dbg_ndjson(
+            location="app/services/meeting_store.py:_write_meeting_file",
+            message="meeting file written",
+            data={
+                "meeting_id": meeting.get("id"),
+                "path_name": os.path.basename(path),
+                "status": meeting.get("status"),
+            },
+            run_id="pre-fix",
+            hypothesis_id="H4",
+        )
+        # #endregion
 
     def list_meetings(self) -> list[dict]:
         with self._lock:
+            # #region agent log
+            try:
+                paths = self._list_meeting_paths()
+                _dbg_ndjson(
+                    location="app/services/meeting_store.py:list_meetings",
+                    message="list_meetings paths",
+                    data={
+                        "meetings_dir": self._meetings_dir,
+                        "path_count": len(paths),
+                        "path_names": [os.path.basename(p) for p in paths[:20]],
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H2",
+                )
+            except Exception as exc:
+                _dbg_ndjson(
+                    location="app/services/meeting_store.py:list_meetings",
+                    message="list_meetings paths error",
+                    data={"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+                    run_id="pre-fix",
+                    hypothesis_id="H2",
+                )
+            # #endregion
             meetings: list[dict] = []
             for path in self._list_meeting_paths():
                 meeting = self._read_meeting_file(path)
@@ -108,6 +168,21 @@ class MeetingStore:
                 if updated:
                     self._write_meeting_file(path, meeting)
                 meetings.append(meeting)
+            # #region agent log
+            try:
+                _dbg_ndjson(
+                    location="app/services/meeting_store.py:list_meetings",
+                    message="list_meetings result",
+                    data={
+                        "meeting_count": len(meetings),
+                        "meeting_ids": [m.get("id") for m in meetings[:20]],
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H2",
+                )
+            except Exception:
+                pass
+            # #endregion
             return sorted(meetings, key=lambda m: m.get("created_at") or "", reverse=True)
 
     def get_storage_path(self) -> str:
@@ -125,6 +200,75 @@ class MeetingStore:
             if len(self._events) > 200:
                 self._events = self._events[-100:]
 
+    def publish_finalization_status(
+        self,
+        meeting_id: str,
+        status_text: str,
+        progress: Optional[float] = None,
+    ) -> None:
+        """Publish a finalization status update for a meeting.
+        
+        Args:
+            meeting_id: The meeting being finalized
+            status_text: Human-readable status text (e.g., "Analyzing speakers...")
+            progress: Optional progress percentage (0.0 to 1.0)
+        """
+        with self._events_lock:
+            payload = {
+                "type": "finalization_status",
+                "meeting_id": meeting_id,
+                "status_text": status_text,
+                "progress": progress,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            self._events.append(payload)
+            if len(self._events) > 200:
+                self._events = self._events[-100:]
+        
+        # Also update the meeting's finalization_status field
+        self.update_finalization_status(meeting_id, status_text, progress)
+
+    def update_finalization_status(
+        self,
+        meeting_id: str,
+        status_text: str,
+        progress: Optional[float] = None,
+    ) -> Optional[dict]:
+        """Update the finalization_status field in the meeting file.
+        
+        This persists the status so clients can poll for it.
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            
+            meeting["finalization_status"] = {
+                "status_text": status_text,
+                "progress": progress,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            self._write_meeting_file(path, meeting)
+            return meeting
+
+    def clear_finalization_status(self, meeting_id: str) -> Optional[dict]:
+        """Clear the finalization_status field when finalization completes."""
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            
+            if "finalization_status" in meeting:
+                del meeting["finalization_status"]
+            self._write_meeting_file(path, meeting)
+            return meeting
+
     def get_events_since(self, cursor: int) -> tuple[list[dict], int]:
         with self._events_lock:
             events = self._events[cursor:]
@@ -133,6 +277,19 @@ class MeetingStore:
     def get_meeting(self, meeting_id: str) -> Optional[dict]:
         with self._lock:
             path = self._find_meeting_path(meeting_id)
+            # #region agent log
+            _dbg_ndjson(
+                location="app/services/meeting_store.py:get_meeting",
+                message="get_meeting path lookup",
+                data={
+                    "meeting_id": meeting_id,
+                    "path_found": bool(path),
+                    "path_name": os.path.basename(path) if path else None,
+                },
+                run_id="pre-fix",
+                hypothesis_id="H2",
+            )
+            # #endregion
             if not path:
                 return None
             meeting = self._read_meeting_file(path)
@@ -206,6 +363,19 @@ class MeetingStore:
                     existing["ended_at"] = None
                 self._ensure_title_fields(existing)
                 self._write_meeting_file(existing_path, existing)
+                # #region agent log
+                _dbg_ndjson(
+                    location="app/services/meeting_store.py:create_from_recording",
+                    message="create_from_recording updated existing",
+                    data={
+                        "meeting_id": meeting_id,
+                        "path_name": os.path.basename(existing_path),
+                        "status": status,
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H4",
+                )
+                # #endregion
                 self.publish_event(
                     "meeting_completed" if status == "completed" else "meeting_started",
                     existing.get("id"),
@@ -238,6 +408,19 @@ class MeetingStore:
                 meeting["ended_at"] = datetime.utcnow().isoformat()
             path = self._meeting_path_for_new(created_at, meeting_id)
             self._write_meeting_file(path, meeting)
+            # #region agent log
+            _dbg_ndjson(
+                location="app/services/meeting_store.py:create_from_recording",
+                message="create_from_recording created new",
+                data={
+                    "meeting_id": meeting_id,
+                    "path_name": os.path.basename(path),
+                    "status": status,
+                },
+                run_id="pre-fix",
+                hypothesis_id="H4",
+            )
+            # #endregion
             self._logger.info("Meeting created: id=%s", meeting_id)
             self.publish_event(
                 "meeting_completed" if status == "completed" else "meeting_started",
@@ -375,31 +558,116 @@ class MeetingStore:
         provider_override: Optional[str] = None,
         force: bool = False,
     ) -> Optional[dict]:
+        # #region agent log
+        _dbg_ndjson(
+            location="meeting_store.py:maybe_auto_title",
+            message="maybe_auto_title_enter",
+            data={"meeting_id": meeting_id, "force": force, "summary_len": len(summary_text) if summary_text else 0},
+            run_id="bugs-debug",
+            hypothesis_id="H1b",
+        )
+        # #endregion
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
+                # #region agent log
+                _dbg_ndjson(
+                    location="meeting_store.py:maybe_auto_title",
+                    message="maybe_auto_title_path_not_found",
+                    data={"meeting_id": meeting_id},
+                    run_id="bugs-debug",
+                    hypothesis_id="H1b",
+                )
+                # #endregion
                 return None
             meeting = self._read_meeting_file(path)
             if not meeting:
                 return None
             self._ensure_title_fields(meeting)
             if meeting.get("title_source") == "manual":
+                # #region agent log
+                _dbg_ndjson(
+                    location="meeting_store.py:maybe_auto_title",
+                    message="maybe_auto_title_skip_manual",
+                    data={"meeting_id": meeting_id, "current_title": meeting.get("title", "")[:50]},
+                    run_id="bugs-debug",
+                    hypothesis_id="H1b",
+                )
+                # #endregion
                 return meeting
             # Only generate once (unless forced).
             if meeting.get("title_generated_at") and not force:
+                # #region agent log
+                _dbg_ndjson(
+                    location="meeting_store.py:maybe_auto_title",
+                    message="maybe_auto_title_skip_already_generated",
+                    data={"meeting_id": meeting_id, "title_generated_at": meeting.get("title_generated_at")},
+                    run_id="bugs-debug",
+                    hypothesis_id="H1b",
+                )
+                # #endregion
                 return meeting
             if not force:
                 try:
                     if not summarization_service.is_meaningful_summary(
                         summary_text, provider_override=provider_override
                     ):
+                        # #region agent log
+                        _dbg_ndjson(
+                            location="meeting_store.py:maybe_auto_title",
+                            message="maybe_auto_title_skip_not_meaningful",
+                            data={"meeting_id": meeting_id},
+                            run_id="bugs-debug",
+                            hypothesis_id="H1c",
+                        )
+                        # #endregion
                         return meeting
                 except Exception as exc:
                     self._logger.warning("Meaningful summary check failed: %s", exc)
+                    # #region agent log
+                    _dbg_ndjson(
+                        location="meeting_store.py:maybe_auto_title",
+                        message="maybe_auto_title_meaningful_check_error",
+                        data={"meeting_id": meeting_id, "exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+                        run_id="bugs-debug",
+                        hypothesis_id="H1c",
+                    )
+                    # #endregion
                     return meeting
-            title = summarization_service.generate_title(
-                summary_text, provider_override=provider_override
+            # #region agent log
+            _dbg_ndjson(
+                location="meeting_store.py:maybe_auto_title",
+                message="maybe_auto_title_calling_generate",
+                data={"meeting_id": meeting_id, "summary_len": len(summary_text) if summary_text else 0},
+                run_id="bugs-debug",
+                hypothesis_id="H1b",
             )
+            # #endregion
+            try:
+                title = summarization_service.generate_title(
+                    summary_text, provider_override=provider_override
+                )
+            except Exception as exc:
+                # #region agent log
+                _dbg_ndjson(
+                    location="meeting_store.py:maybe_auto_title",
+                    message="maybe_auto_title_generate_error",
+                    data={"meeting_id": meeting_id, "exc_type": type(exc).__name__, "exc": str(exc)[:500]},
+                    run_id="bugs-debug",
+                    hypothesis_id="H1b",
+                )
+                # #endregion
+                self._logger.warning("generate_title failed: %s", exc)
+                return meeting
+            # #region agent log
+            _dbg_ndjson(
+                location="meeting_store.py:maybe_auto_title",
+                message="maybe_auto_title_title_generated",
+                data={"meeting_id": meeting_id, "new_title": title[:100] if title else None},
+                run_id="bugs-debug",
+                hypothesis_id="H1b",
+            )
+            # #endregion
             meeting["title"] = title
             meeting["title_source"] = "auto"
             meeting["title_generated_at"] = datetime.utcnow().isoformat()
@@ -407,7 +675,6 @@ class MeetingStore:
             self._logger.info("Auto title saved: id=%s", meeting_id)
             self.publish_event("meeting_updated", meeting_id)
             return meeting
-            return None
 
     def update_title(
         self, meeting_id: str, title: str, source: str = "manual"
@@ -445,16 +712,52 @@ class MeetingStore:
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
+                # #region agent log
+                _dbg_ndjson(
+                    location="app/services/meeting_store.py:update_status",
+                    message="update_status path not found",
+                    data={"meeting_id": meeting_id, "new_status": status},
+                    run_id="pre-fix",
+                    hypothesis_id="STATUS1",
+                )
+                # #endregion
                 return None
             meeting = self._read_meeting_file(path)
             if not meeting:
+                # #region agent log
+                _dbg_ndjson(
+                    location="app/services/meeting_store.py:update_status",
+                    message="update_status meeting read empty",
+                    data={"meeting_id": meeting_id, "new_status": status, "path": os.path.basename(path)},
+                    run_id="pre-fix",
+                    hypothesis_id="STATUS1",
+                )
+                # #endregion
                 return None
+            prev_status = meeting.get("status")
+            prev_ended_at = meeting.get("ended_at")
             meeting["status"] = status
             if status == "in_progress":
                 meeting["ended_at"] = None
             if status == "completed":
                 meeting["ended_at"] = datetime.utcnow().isoformat()
             self._write_meeting_file(path, meeting)
+            # #region agent log
+            _dbg_ndjson(
+                location="app/services/meeting_store.py:update_status",
+                message="update_status wrote",
+                data={
+                    "meeting_id": meeting_id,
+                    "path": os.path.basename(path),
+                    "prev_status": prev_status,
+                    "new_status": status,
+                    "prev_ended_at": prev_ended_at,
+                    "new_ended_at": meeting.get("ended_at"),
+                },
+                run_id="pre-fix",
+                hypothesis_id="STATUS1",
+            )
+            # #endregion
             self.publish_event(
                 "meeting_completed"
                 if status == "completed"
@@ -489,8 +792,22 @@ class MeetingStore:
             return meeting
 
     def update_attendee_name(
-        self, meeting_id: str, attendee_id: str, name: str
+        self,
+        meeting_id: str,
+        attendee_id: str,
+        name: str,
+        source: Optional[str] = None,
+        confidence: Optional[str] = None,
     ) -> Optional[dict]:
+        """Update or create an attendee with a name.
+        
+        Args:
+            meeting_id: The meeting ID
+            attendee_id: The attendee/speaker ID (e.g., "SPEAKER_00")
+            name: The name to assign
+            source: Optional source of the name ("manual", "llm", etc.)
+            confidence: Optional confidence level ("high", "medium", "low")
+        """
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
@@ -499,12 +816,32 @@ class MeetingStore:
             if not meeting:
                 return None
             attendees = meeting.get("attendees", [])
+            
+            # Find existing attendee or create new one
+            found = False
             for attendee in attendees:
                 if attendee.get("id") == attendee_id:
                     attendee["name"] = name
-                    self._write_meeting_file(path, meeting)
-                    return meeting
-            return None
+                    if source:
+                        attendee["name_source"] = source
+                    if confidence:
+                        attendee["name_confidence"] = confidence
+                    found = True
+                    break
+            
+            if not found:
+                # Create new attendee entry
+                new_attendee = {"id": attendee_id, "name": name}
+                if source:
+                    new_attendee["name_source"] = source
+                if confidence:
+                    new_attendee["name_confidence"] = confidence
+                attendees.append(new_attendee)
+                meeting["attendees"] = attendees
+            
+            self._write_meeting_file(path, meeting)
+            self.publish_event("meeting_updated", meeting_id)
+            return meeting
 
     def update_manual_buffers(
         self, meeting_id: str, manual_notes: str, manual_summary: str
@@ -526,12 +863,44 @@ class MeetingStore:
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
+                # #region agent log
+                _dbg_ndjson(
+                    location="app/services/meeting_store.py:delete_meeting",
+                    message="delete_meeting path missing",
+                    data={"meeting_id": meeting_id},
+                    run_id="pre-fix",
+                    hypothesis_id="H1",
+                )
+                # #endregion
                 return False
             try:
                 os.unlink(path)
+                # #region agent log
+                _dbg_ndjson(
+                    location="app/services/meeting_store.py:delete_meeting",
+                    message="delete_meeting success",
+                    data={"meeting_id": meeting_id, "path_name": os.path.basename(path)},
+                    run_id="pre-fix",
+                    hypothesis_id="H1",
+                )
+                # #endregion
                 return True
             except OSError as exc:
                 self._logger.warning("Failed to delete meeting file: %s error=%s", path, exc)
+                # #region agent log
+                _dbg_ndjson(
+                    location="app/services/meeting_store.py:delete_meeting",
+                    message="delete_meeting error",
+                    data={
+                        "meeting_id": meeting_id,
+                        "path_name": os.path.basename(path),
+                        "exc_type": type(exc).__name__,
+                        "exc": str(exc)[:300],
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H1",
+                )
+                # #endregion
                 return False
 
     def append_live_segment(

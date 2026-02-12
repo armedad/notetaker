@@ -11,6 +11,8 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 
+from app.services.ndjson_debug import dbg as nd_dbg
+
 
 @dataclass
 class RecordingState:
@@ -28,7 +30,11 @@ class AudioCaptureService:
         self._state = RecordingState()
         self._lock = threading.RLock()
         self._audio_queue: "queue.Queue[bytes]" = queue.Queue()
-        self._live_queue: "queue.Queue[bytes]" = queue.Queue(maxsize=60)
+        # #region agent log
+        # Increased from 60 to 200 to handle Diart initialization delay (~5s)
+        # At 4096 blocksize / 48kHz = ~85ms per callback, 200 slots = ~17s buffer
+        # #endregion
+        self._live_queue: "queue.Queue[bytes]" = queue.Queue(maxsize=200)
         self._writer_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._capture_stopped = threading.Event()  # Signals capture has stopped but transcription may continue
@@ -144,6 +150,13 @@ class AudioCaptureService:
         channels: int = 2,
     ) -> dict:
         with self._lock:
+            nd_dbg(
+                "app/services/audio_capture.py:start_recording",
+                "mic_start_enter",
+                {"device_index": device_index, "samplerate": samplerate, "channels": channels},
+                run_id="pre-fix",
+                hypothesis_id="M1",
+            )
             self._logger.debug(
                 "Start request: device=%s samplerate=%s channels=%s",
                 device_index,
@@ -168,9 +181,27 @@ class AudioCaptureService:
                 device_info = sd.query_devices(device_index)
             except Exception as exc:
                 self._logger.exception("Invalid audio device index: %s", device_index)
+                nd_dbg(
+                    "app/services/audio_capture.py:start_recording",
+                    "mic_device_query_error",
+                    {"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
+                    run_id="pre-fix",
+                    hypothesis_id="M1",
+                )
                 raise RuntimeError("Invalid audio device index") from exc
 
             self._logger.debug("Device info: %s", device_info)
+            nd_dbg(
+                "app/services/audio_capture.py:start_recording",
+                "mic_device_info",
+                {
+                    "name": str(device_info.get("name")),
+                    "max_input_channels": int(device_info.get("max_input_channels", 0)),
+                    "default_samplerate": float(device_info.get("default_samplerate", 0.0)),
+                },
+                run_id="pre-fix",
+                hypothesis_id="M1",
+            )
             max_channels = int(device_info.get("max_input_channels", 0))
             if max_channels < 1:
                 raise RuntimeError("Selected device has no input channels")
@@ -222,21 +253,51 @@ class AudioCaptureService:
             )
             self._writer_thread.start()
             self._logger.debug("Writer thread started")
+            nd_dbg(
+                "app/services/audio_capture.py:start_recording",
+                "mic_writer_thread_started",
+                {"file_path": file_path},
+                run_id="pre-fix",
+                hypothesis_id="M4",
+            )
 
             try:
                 self._logger.debug("Opening RawInputStream (dtype=int16)")
+                nd_dbg(
+                    "app/services/audio_capture.py:start_recording",
+                    "mic_stream_opening",
+                    {"dtype": "int16"},
+                    run_id="pre-fix",
+                    hypothesis_id="M2",
+                )
                 self._stream = sd.RawInputStream(
                     device=device_index,
                     samplerate=samplerate,
                     channels=channels,
                     dtype="int16",
+                    # Avoid tiny callback blocks (e.g. 512 frames) that can overwhelm live queue.
+                    blocksize=4096,
                     callback=self._audio_callback,
                 )
                 self._logger.debug("Starting RawInputStream")
                 self._stream.start()
                 self._logger.info("RawInputStream started")
+                nd_dbg(
+                    "app/services/audio_capture.py:start_recording",
+                    "mic_stream_started",
+                    {"ok": True},
+                    run_id="pre-fix",
+                    hypothesis_id="M2",
+                )
             except Exception as exc:
                 self._logger.exception("Failed to start audio stream: %s", exc)
+                nd_dbg(
+                    "app/services/audio_capture.py:start_recording",
+                    "mic_stream_start_error",
+                    {"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
+                    run_id="pre-fix",
+                    hypothesis_id="M2",
+                )
                 self._stop_event.set()
                 if self._writer_thread is not None:
                     self._writer_thread.join(timeout=5)
@@ -303,6 +364,29 @@ class AudioCaptureService:
         if not self._first_callback_logged:
             self._logger.info("First audio callback received")
             self._first_callback_logged = True
+            try:
+                payload = bytes(indata)
+                samples = np.frombuffer(payload, dtype=np.int16)
+                # RMS as a quick “is this silent?” signal. Keep it lightweight (first callback only).
+                rms = float(np.sqrt(np.mean((samples.astype(np.float32)) ** 2))) if samples.size else 0.0
+                peak = int(np.max(np.abs(samples))) if samples.size else 0
+            except Exception:
+                rms = -1.0
+                peak = -1
+            nd_dbg(
+                "app/services/audio_capture.py:_audio_callback",
+                "mic_first_callback",
+                {
+                    "frames": int(frames),
+                    "bytes": len(bytes(indata)),
+                    "status_present": bool(status),
+                    "rms_int16": round(rms, 2),
+                    "peak_int16": peak,
+                    "live_enabled": bool(self._live_enabled),
+                },
+                run_id="pre-fix",
+                hypothesis_id="M3",
+            )
         if self._callback_counter % 50 == 0:
             self._logger.debug("Audio callback frames=%s", frames)
         payload = bytes(indata)
@@ -313,6 +397,13 @@ class AudioCaptureService:
             except queue.Full:
                 if self._callback_counter % 100 == 0:
                     self._logger.warning("Live queue full; dropping chunk")
+                    nd_dbg(
+                        "app/services/audio_capture.py:_audio_callback",
+                        "mic_live_queue_full_drop",
+                        {"callback_counter": self._callback_counter, "live_queue_max": 200},
+                        run_id="pre-fix",
+                        hypothesis_id="M5",
+                    )
 
     def _writer_loop(self) -> None:
         file_path = self._state.file_path
@@ -320,9 +411,23 @@ class AudioCaptureService:
         channels = self._state.channels
         if not file_path or not samplerate or not channels:
             self._logger.error("Writer loop missing file path or audio parameters")
+            nd_dbg(
+                "app/services/audio_capture.py:_writer_loop",
+                "mic_writer_missing_params",
+                {"file_path_present": bool(file_path), "samplerate": samplerate, "channels": channels},
+                run_id="pre-fix",
+                hypothesis_id="M4",
+            )
             return
 
         self._logger.debug("Writer loop start: %s", file_path)
+        nd_dbg(
+            "app/services/audio_capture.py:_writer_loop",
+            "mic_writer_start",
+            {"file_path": file_path, "samplerate": int(samplerate), "channels": int(channels)},
+            run_id="pre-fix",
+            hypothesis_id="M4",
+        )
 
         with sf.SoundFile(
             file_path,
@@ -331,6 +436,7 @@ class AudioCaptureService:
             channels=channels,
             subtype="PCM_16",
         ) as sound_file:
+            wrote_any = False
             while not self._stop_event.is_set() or not self._audio_queue.empty():
                 try:
                     data = self._audio_queue.get(timeout=0.1)
@@ -338,10 +444,33 @@ class AudioCaptureService:
                     if channels > 1:
                         frames = frames.reshape(-1, channels)
                     sound_file.write(frames)
+                    if not wrote_any:
+                        wrote_any = True
+                        nd_dbg(
+                            "app/services/audio_capture.py:_writer_loop",
+                            "mic_writer_first_write",
+                            {"samples": int(frames.shape[0])},
+                            run_id="pre-fix",
+                            hypothesis_id="M4",
+                        )
                 except queue.Empty:
                     continue
                 except Exception as exc:
                     self._logger.exception("Failed to write audio data: %s", exc)
+                    nd_dbg(
+                        "app/services/audio_capture.py:_writer_loop",
+                        "mic_writer_error",
+                        {"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
+                        run_id="pre-fix",
+                        hypothesis_id="M4",
+                    )
                     break
 
         self._logger.debug("Writer loop complete: %s", file_path)
+        nd_dbg(
+            "app/services/audio_capture.py:_writer_loop",
+            "mic_writer_complete",
+            {"file_path": file_path},
+            run_id="pre-fix",
+            hypothesis_id="M4",
+        )

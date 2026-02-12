@@ -20,7 +20,7 @@ body {
 }
 
 header {
-  margin-bottom: 24px;
+  margin-bottom: 12px;
 }
 
 h1 {
@@ -96,6 +96,15 @@ h1 {
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
 }
 
+/* Flat panel variant - no background/shadow/border */
+.panel.flat {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+  margin-bottom: 24px;
+}
+
 .panel input[type="file"]:not(.file-input-hidden) {
   display: block;
   margin-top: 6px;
@@ -138,6 +147,11 @@ textarea {
   border: 1px solid #d1d5db;
   font-size: 14px;
   font-family: inherit;
+}
+
+/* Notes textarea - larger default height */
+#manual-notes {
+  min-height: 160px;
 }
 
 .actions {
@@ -504,20 +518,22 @@ button:disabled {
   display: grid;
   grid-template-columns: 200px 1fr;
   gap: 16px;
-  min-height: 200px;
+  height: 280px;
   margin-bottom: 16px;
+  align-items: stretch;
 }
 
 .attendees-list-column {
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
 
 .attendees-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 300px;
+  height: 100%;
   overflow-y: auto;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -573,19 +589,7 @@ button:disabled {
 .attendees-detail-column {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-.attendee-detail-header {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.attendee-name-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  height: 100%;
 }
 
 .attendee-name-display {
@@ -634,7 +638,6 @@ button.small {
   border-radius: 8px;
   padding: 12px;
   background: #f9fafb;
-  max-height: 250px;
   overflow-y: auto;
   font-size: 13px;
 }
@@ -678,4 +681,146 @@ button.small {
   .attendees-list {
     max-height: 150px;
   }
+}
+
+/* Finalization status banner */
+.finalization-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: white;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-weight: 500;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.25);
+}
+
+.finalization-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: finalization-spin 0.8s linear infinite;
+}
+
+@keyframes finalization-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.finalization-progress-bar {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  overflow: hidden;
+  max-width: 200px;
+}
+
+.finalization-progress-fill {
+  height: 100%;
+  background: white;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+/* App brand link in header */
+.app-brand {
+  font-size: 24px;
+  font-weight: 700;
+  color: #111827;
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.app-brand:hover {
+  color: #2563eb;
+}
+
+/* Meeting title input styled as editable heading */
+.meeting-title-input {
+  font-size: 24px;
+  font-weight: 600;
+  color: #111827;
+  border: none;
+  background: transparent;
+  padding: 4px 0;
+  width: 100%;
+  outline: none;
+  border-bottom: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.meeting-title-input:hover {
+  border-bottom-color: #e5e7eb;
+}
+
+.meeting-title-input:focus {
+  border-bottom-color: #2563eb;
+}
+
+.meeting-title-input::placeholder {
+  color: #9ca3af;
+}
+
+/* Icon buttons for attendee actions */
+.icon-btn {
+  background: transparent;
+  border: none;
+  padding: 4px 8px;
+  font-size: 16px;
+  cursor: pointer;
+  color: #6b7280;
+  border-radius: 4px;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.icon-btn:hover {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+/* Attendee item with hover actions */
+.attendee-item {
+  position: relative;
+}
+
+.attendee-item-actions {
+  display: none;
+  gap: 2px;
+}
+
+.attendee-item:hover .attendee-item-actions,
+.attendee-item.selected .attendee-item-actions {
+  display: flex;
+}
+
+.attendee-item.renaming {
+  padding: 4px 8px;
+}
+
+.attendee-inline-input {
+  flex: 1;
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid #3b82f6;
+  border-radius: 4px;
+  min-width: 0;
+}
+
+.attendee-item .icon-btn {
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+/* Summary debug grid - now 2 columns */
+.summary-debug-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
 }
