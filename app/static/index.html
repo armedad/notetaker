@@ -30,20 +30,15 @@
       <section class="panel">
         <div class="panel-header">
           <div>
-            <h2>Recording</h2>
             <div class="status" id="recording-status">Status: unknown</div>
             <div class="status error" id="status-error"></div>
             <div class="status" id="recording-settings-note"></div>
           </div>
           <div class="actions">
+            <button id="go-to-meeting" class="secondary" style="display:none">Go to meeting</button>
             <button id="recording-toggle">Start recording</button>
           </div>
         </div>
-        <div class="output" id="recording-output"></div>
-      </section>
-
-      <section class="panel">
-        <h2>Recording source</h2>
         <div class="row">
           <label for="recording-source">Input source</label>
           <select id="recording-source"></select>
@@ -56,6 +51,7 @@
           <input id="test-audio-upload" type="file" class="file-input-hidden" />
           <div class="status" id="test-audio-status">No file selected.</div>
         </div>
+        <div class="output" id="recording-output"></div>
       </section>
 
       <section class="panel">
@@ -78,6 +74,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=171"></script>
+    <script src="/static/app.js?v=172"></script>
   </body>
 </html>
