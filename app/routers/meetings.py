@@ -2,15 +2,17 @@ from typing import Optional
 
 import json
 import logging
+import os
 import re
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.meeting_store import MeetingStore
 from app.services.summarization import SummarizationService
+from app.services.transcript_utils import consolidate_segments
 
 
 class UpdateMeetingRequest(BaseModel):
@@ -38,10 +40,25 @@ class ManualBuffersUpdateRequest(BaseModel):
 
 
 def create_meetings_router(
-    meeting_store: MeetingStore, summarization_service
+    meeting_store: MeetingStore, summarization_service, config_path: str = None
 ) -> APIRouter:
     router = APIRouter()
     logger = logging.getLogger("notetaker.api.meetings")
+    
+    def _get_consolidation_settings() -> tuple[float, float]:
+        """Load consolidation settings from config, with defaults."""
+        max_duration = 15.0
+        max_gap = 2.0
+        if config_path and os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                transcription = data.get("transcription", {})
+                max_duration = transcription.get("consolidation_max_duration", 15.0)
+                max_gap = transcription.get("consolidation_max_gap", 2.0)
+            except Exception:
+                pass  # Use defaults on error
+        return max_duration, max_gap
 
     @router.get("/api/meetings")
     def list_meetings() -> list[dict]:
@@ -63,10 +80,24 @@ def create_meetings_router(
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @router.get("/api/meetings/{meeting_id}")
-    def get_meeting(meeting_id: str) -> dict:
+    def get_meeting(meeting_id: str, raw: bool = Query(False, description="Return raw unconsolidated segments")) -> dict:
         meeting = meeting_store.get_meeting(meeting_id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
+        
+        # Apply segment consolidation unless raw=true
+        if not raw:
+            transcript = meeting.get("transcript")
+            if transcript and isinstance(transcript, dict):
+                segments = transcript.get("segments", [])
+                if segments:
+                    max_duration, max_gap = _get_consolidation_settings()
+                    consolidated = consolidate_segments(segments, max_duration, max_gap)
+                    # Create a new transcript dict with consolidated segments
+                    meeting = dict(meeting)
+                    meeting["transcript"] = dict(transcript)
+                    meeting["transcript"]["segments"] = consolidated
+        
         return meeting
 
     @router.post("/api/meetings/{meeting_id}/summary-state/step")
