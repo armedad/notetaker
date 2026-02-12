@@ -225,3 +225,100 @@ class SummarizationService:
         provider = self._get_provider(provider_override)
         self._logger.info("Raw prompt using provider=%s", provider.__class__.__name__)
         return provider.prompt(prompt)
+
+    def identify_speaker_name(
+        self,
+        speaker_id: str,
+        speaker_segments: list[dict],
+        provider_override: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Identify a speaker's name from their dialogue.
+        
+        Uses LLM to analyze what a speaker said and try to identify their name.
+        
+        Args:
+            speaker_id: The speaker identifier (e.g., "SPEAKER_00")
+            speaker_segments: List of transcript segments for this speaker
+            provider_override: Optional override for the LLM provider
+            
+        Returns:
+            Dict with keys:
+                - name: The identified name (str) or None
+                - confidence: "high", "medium", or "low"
+                - reasoning: Explanation of how the name was identified
+            Or None if identification failed.
+        """
+        if not speaker_segments:
+            return None
+        
+        # Build speaker's dialogue text
+        speaker_text = "\n".join(
+            f"[{seg.get('start', 0):.1f}s] {seg.get('text', '')}"
+            for seg in speaker_segments[:20]  # Limit to first 20 segments
+        )
+        
+        if not speaker_text.strip():
+            return None
+        
+        # Load prompt template
+        prompt_path = os.path.join(self._prompts_dir, "identify_speaker_prompt.txt")
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                template = f.read()
+        except OSError as exc:
+            self._logger.warning("Missing speaker prompt file: %s", exc)
+            return None
+        
+        # Build prompt
+        prompt = template.replace("{{speaker_id}}", speaker_id)
+        prompt = prompt.replace("{{speaker_text}}", speaker_text)
+        
+        # Get response from LLM
+        try:
+            provider = self._get_provider(provider_override)
+            self._logger.info(
+                "Identifying speaker %s using provider=%s",
+                speaker_id, provider.__class__.__name__
+            )
+            content = provider.prompt(prompt)
+        except Exception as exc:
+            self._logger.warning("LLM call failed for speaker identification: %s", exc)
+            return None
+        
+        # Parse JSON response
+        text = content.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            stripped = []
+            for line in lines:
+                if line.startswith("```"):
+                    continue
+                stripped.append(line)
+            text = "\n".join(stripped).strip()
+        
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            self._logger.warning(
+                "Non-JSON response for speaker identification: %s",
+                text[:200]
+            )
+            return None
+        
+        name = parsed.get("name")
+        confidence = parsed.get("confidence", "low")
+        reasoning = parsed.get("reasoning", "")
+        
+        # Only return a name if confidence is not low or name is explicitly provided
+        if not name:
+            self._logger.debug(
+                "Could not identify speaker %s: %s",
+                speaker_id, reasoning
+            )
+            return None
+        
+        return {
+            "name": str(name).strip(),
+            "confidence": confidence,
+            "reasoning": reasoning,
+        }

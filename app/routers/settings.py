@@ -21,12 +21,31 @@ class SummarizationSettingsRequest(BaseModel):
 
 
 class DiarizationSettingsRequest(BaseModel):
+    """Legacy unified diarization settings (for backwards compatibility)."""
     enabled: bool
     provider: str
     model: str
     device: str
     hf_token: Optional[str] = None
     performance_level: float = 0.5
+
+
+class RealtimeDiarizationSettingsRequest(BaseModel):
+    """Real-time diarization settings (runs during live transcription)."""
+    enabled: bool
+    provider: str  # "diart" or "none"
+    device: str = "cpu"
+    hf_token: Optional[str] = None
+    performance_level: float = 0.5
+
+
+class BatchDiarizationSettingsRequest(BaseModel):
+    """Batch diarization settings (runs after transcription completes)."""
+    enabled: bool
+    provider: str  # "pyannote", "whisperx", "diart", or "none"
+    model: str = "pyannote/speaker-diarization-3.1"
+    device: str = "cpu"
+    hf_token: Optional[str] = None
 
 
 class ModelTestRequest(BaseModel):
@@ -103,11 +122,143 @@ def create_settings_router(config_path: str) -> APIRouter:
 
     @router.post("/api/settings/diarization")
     def update_diarization_settings(payload: DiarizationSettingsRequest) -> dict:
+        """Legacy endpoint - updates unified diarization settings."""
         data = {}
         if os.path.exists(config_path):
             with open(config_path, "r", encoding="utf-8") as config_file:
                 data = json.load(config_file)
         data["diarization"] = payload.model_dump()
+        with open(config_path, "w", encoding="utf-8") as config_file:
+            json.dump(data, config_file, indent=2)
+        return {"status": "ok"}
+
+    @router.get("/api/settings/diarization/realtime")
+    def get_realtime_diarization_settings() -> dict:
+        """Get real-time diarization settings."""
+        if not os.path.exists(config_path):
+            return {
+                "enabled": False,
+                "provider": "none",
+                "device": "cpu",
+                "hf_token": "",
+                "performance_level": 0.5,
+                "gpu_available": _gpu_available(),
+            }
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            data = json.load(config_file)
+        
+        diarization = data.get("diarization", {})
+        
+        # Check for new split format
+        if "realtime" in diarization:
+            result = diarization["realtime"].copy()
+        else:
+            # Legacy format - extract realtime-relevant settings
+            # Real-time is only enabled if provider is diart
+            legacy_enabled = diarization.get("enabled", False)
+            legacy_provider = diarization.get("provider", "none")
+            result = {
+                "enabled": legacy_enabled and legacy_provider.lower() == "diart",
+                "provider": "diart" if legacy_provider.lower() == "diart" else "none",
+                "device": diarization.get("device", "cpu"),
+                "hf_token": diarization.get("hf_token", ""),
+                "performance_level": diarization.get("performance_level", 0.5),
+            }
+        
+        result["gpu_available"] = _gpu_available()
+        return result
+
+    @router.post("/api/settings/diarization/realtime")
+    def update_realtime_diarization_settings(payload: RealtimeDiarizationSettingsRequest) -> dict:
+        """Update real-time diarization settings."""
+        data = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as config_file:
+                data = json.load(config_file)
+        
+        diarization = data.get("diarization", {})
+        
+        # Convert to new split format if needed
+        if "realtime" not in diarization:
+            # Migrate from legacy to split format
+            batch_settings = {
+                "enabled": diarization.get("enabled", False) and diarization.get("provider", "").lower() != "diart",
+                "provider": diarization.get("provider", "none") if diarization.get("provider", "").lower() != "diart" else "none",
+                "model": diarization.get("model", "pyannote/speaker-diarization-3.1"),
+                "device": diarization.get("device", "cpu"),
+                "hf_token": diarization.get("hf_token", ""),
+            }
+            diarization = {"batch": batch_settings}
+        
+        diarization["realtime"] = payload.model_dump()
+        data["diarization"] = diarization
+        
+        with open(config_path, "w", encoding="utf-8") as config_file:
+            json.dump(data, config_file, indent=2)
+        return {"status": "ok"}
+
+    @router.get("/api/settings/diarization/batch")
+    def get_batch_diarization_settings() -> dict:
+        """Get batch diarization settings."""
+        if not os.path.exists(config_path):
+            return {
+                "enabled": False,
+                "provider": "none",
+                "model": "pyannote/speaker-diarization-3.1",
+                "device": "cpu",
+                "hf_token": "",
+                "gpu_available": _gpu_available(),
+            }
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            data = json.load(config_file)
+        
+        diarization = data.get("diarization", {})
+        
+        # Check for new split format
+        if "batch" in diarization:
+            result = diarization["batch"].copy()
+        else:
+            # Legacy format - extract batch-relevant settings
+            # Batch is enabled for non-diart providers
+            legacy_enabled = diarization.get("enabled", False)
+            legacy_provider = diarization.get("provider", "none")
+            is_batch = legacy_provider.lower() not in ("diart", "none")
+            result = {
+                "enabled": legacy_enabled and is_batch,
+                "provider": legacy_provider if is_batch else "none",
+                "model": diarization.get("model", "pyannote/speaker-diarization-3.1"),
+                "device": diarization.get("device", "cpu"),
+                "hf_token": diarization.get("hf_token", ""),
+            }
+        
+        result["gpu_available"] = _gpu_available()
+        return result
+
+    @router.post("/api/settings/diarization/batch")
+    def update_batch_diarization_settings(payload: BatchDiarizationSettingsRequest) -> dict:
+        """Update batch diarization settings."""
+        data = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as config_file:
+                data = json.load(config_file)
+        
+        diarization = data.get("diarization", {})
+        
+        # Convert to new split format if needed
+        if "batch" not in diarization:
+            # Migrate from legacy to split format
+            realtime_settings = {
+                "enabled": diarization.get("enabled", False) and diarization.get("provider", "").lower() == "diart",
+                "provider": "diart" if diarization.get("provider", "").lower() == "diart" else "none",
+                "device": diarization.get("device", "cpu"),
+                "hf_token": diarization.get("hf_token", ""),
+                "performance_level": diarization.get("performance_level", 0.5),
+            }
+            diarization = {"realtime": realtime_settings}
+        
+        diarization["batch"] = payload.model_dump()
+        data["diarization"] = diarization
+        
         with open(config_path, "w", encoding="utf-8") as config_file:
             json.dump(data, config_file, indent=2)
         return {"status": "ok"}
@@ -122,7 +273,15 @@ def create_settings_router(config_path: str) -> APIRouter:
             data = json.load(config_file)
         
         diarization = data.get("diarization", {})
-        hf_token = diarization.get("hf_token", "")
+        
+        # Find HF token from new split format or legacy format
+        hf_token = ""
+        if "batch" in diarization:
+            hf_token = diarization["batch"].get("hf_token", "")
+        if not hf_token and "realtime" in diarization:
+            hf_token = diarization["realtime"].get("hf_token", "")
+        if not hf_token:
+            hf_token = diarization.get("hf_token", "")
         
         if not hf_token:
             return {

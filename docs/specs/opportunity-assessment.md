@@ -106,6 +106,8 @@ Personal tool for Chee. Dev-friendly setup is acceptable. Optimized for one user
 - Outputs timestamped transcript with speaker labels
 - Provider selection via config (not hardcoded)
 
+**CRITICAL implementation rule:** once audio is obtained (live mic buffers OR file chunks), all downstream processing must converge through the same `TranscriptionPipeline` entrypoints (do not duplicate “post-audio” logic in routers). The only allowed divergence is the audio acquisition mechanism and UI transport (SSE vs background worker).
+
 ### 3. LLM Processing
 - **Unified model selection:** User picks one model in Settings > AI Models, used for all LLM tasks
 - **Supported providers:**
