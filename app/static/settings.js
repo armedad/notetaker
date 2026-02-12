@@ -407,6 +407,10 @@ async function loadTranscriptionSettings() {
       data.stream_transcribe ?? true;
     document.getElementById("live-transcribe").checked =
       data.live_transcribe ?? true;
+    document.getElementById("consolidation-max-duration").value =
+      data.consolidation_max_duration ?? 15;
+    document.getElementById("consolidation-max-gap").value =
+      data.consolidation_max_gap ?? 2;
   } catch (error) {
     setGlobalError(`Failed to load transcription settings: ${error.message}`);
   }
@@ -507,6 +511,8 @@ async function saveTranscriptionSettings() {
     auto_transcribe: document.getElementById("auto-transcribe").checked,
     stream_transcribe: document.getElementById("stream-transcribe").checked,
     live_transcribe: document.getElementById("live-transcribe").checked,
+    consolidation_max_duration: parseFloat(document.getElementById("consolidation-max-duration").value) || 15,
+    consolidation_max_gap: parseFloat(document.getElementById("consolidation-max-gap").value) || 2,
   };
   setTranscriptionOutput("Saving transcription settings...");
   setGlobalBusy("Saving transcription settings...");
@@ -787,6 +793,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
   document
     .getElementById("live-transcribe")
+    .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
+  document
+    .getElementById("consolidation-max-duration")
+    .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
+  document
+    .getElementById("consolidation-max-gap")
     .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
   document
     .getElementById("model-choice")

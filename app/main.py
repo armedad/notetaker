@@ -217,7 +217,7 @@ def create_app() -> FastAPI:
             )
         )
         logger.info("Boot: transcription router mounted")
-        app.include_router(create_meetings_router(meeting_store, summarization_service))
+        app.include_router(create_meetings_router(meeting_store, summarization_service, config_path))
         logger.info("Boot: meetings router mounted")
         app.include_router(create_summarization_router(meeting_store, summarization_service))
         logger.info("Boot: summarization router mounted")

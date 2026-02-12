@@ -8,7 +8,40 @@ when it's fully working, move it to a todo-done.md file
 
 ---
 
-in the meeting page, after i hit stop, every approx 5 seconds, i see "loading meeting" flash on the upper left.  explain why that is.  don't make a change.  just explain
+# user notes feature
+
+purpose: we want to enable the user to type in notes and have it logged in time with the topic being discussed at that moment.  but we need to recognize that the note taken might come a bit later than the actual discussion due to natural lag.  
+
+how this should work.
+
+when the user starts writing a note, take a timestamp for when the user starts.  have a "submit" button with the notes.  when the user hits "submit" it should be added logged above the notes entry box.  keep a running log of all notes.   the user should be able to go back to any note and edit it.  this should not change the original timestamp.
+
+the timestamp must be in the same format and basis as the transcript timestamp because we want the llm to know approximately what the note is referring to.
+
+the notes field should also have an 'x' button taht clears the notes field.  if the user hits this and then starts a new note, there should be a new timestamp.
+
+whenever the system summarizes the transcript, it should include these notes and the appropriate timestamp so that the llm knows what the user has said.  combine all of this to generate the summary.
+
+
+#  consolidate transcript chunks
+  - Type: new feature
+  - Status: done
+  - Plan: .cursor/plans/transcript_chunk_consolidation_9d374512.plan.md
+
+Merges consecutive transcript segments from the same speaker into larger chunks (configurable, default 15 seconds max). Settings in Transcription section. Debug toggle to view raw segments.
+
+Fixed: Raw segments toggle now works correctly. Also fixed scroll position in raw transcript textbox to not auto-scroll when user has scrolled up.
+
+---
+
+# meeting ai query
+
+provide an chat interface in the meeting page where the user can ask questions about a specific meeting.  the llm should answer questions primarily about that meeting, but it should also have access to all the other meetings to refer to if necessary as background context.  
+
+# overall ai query
+
+provide a chat interface in the main home page where the user can ask questions about the aggregate of all meetings.  the llm should be able to answer anything about all the meetings that have happened.  figure out what is the most efficient way for this to happen.   how can we enable this without necessarily sending the llm all the massive full transcripts of all meetings that have happened?
+
 
 ---
 
@@ -20,7 +53,7 @@ in the meeting page, after i hit stop, every approx 5 seconds, i see "loading me
 
 # redesign settings page to be more vertical space efficient
   - Type: UI redesign
-  - Status: in progress
+  - Status: done
   - Plan: .cursor/plans/settings_page_redesign_cae1ba7c.plan.md
 
 # final diarization
