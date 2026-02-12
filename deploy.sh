@@ -2,11 +2,21 @@
 set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEST_DIR="/Users/chee/projects/notetaker"
+DEST_DIR="${HOME}/projects/notetaker"
 VERSION_FILE="${SRC_DIR}/VERSION.txt"
 
 if [[ ! -f "${VERSION_FILE}" ]]; then
   echo "Missing VERSION.txt in ${SRC_DIR}"
+  exit 1
+fi
+
+if [[ "${SRC_DIR}" == "${DEST_DIR}" ]]; then
+  echo "Refusing to deploy: SRC_DIR and DEST_DIR are the same (${SRC_DIR})"
+  exit 1
+fi
+
+if [[ "${SRC_DIR}" != */coding/notetaker ]]; then
+  echo "Refusing to deploy: SRC_DIR must be .../coding/notetaker (got ${SRC_DIR})"
   exit 1
 fi
 

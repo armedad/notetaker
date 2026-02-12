@@ -7,6 +7,7 @@ os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
 import json
 import logging
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
@@ -15,6 +16,38 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 # Module import trace (stderr) for boot debugging.
 print(f"[boot] app.main module import cwd={os.getcwd()} pid={os.getpid()}", file=sys.stderr)
+
+# #region agent log
+_DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+
+
+def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
+    """Write one NDJSON debug line for this session. Best-effort only."""
+    try:
+        payload = {
+            "id": f"log_{int(time.time() * 1000)}_{os.getpid()}",
+            "timestamp": int(time.time() * 1000),
+            "location": location,
+            "message": message,
+            "data": data,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+def _boot_log(location: str, message: str, data: dict, hypothesis_id: str) -> None:
+    _dbg_ndjson(
+        location=location,
+        message=message,
+        data=data,
+        run_id="boot-debug",
+        hypothesis_id=hypothesis_id,
+    )
+# #endregion
 
 from app.routers.recording import create_recording_router
 from app.routers.logs import create_logs_router
@@ -31,6 +64,14 @@ from app.services.logging_setup import configure_logging
 from app.services.crash_logging import enable_crash_logging
 
 def create_app() -> FastAPI:
+    # #region agent log
+    _boot_log(
+        "app/main.py:create_app",
+        "create_app enter",
+        {"cwd": os.getcwd(), "pid": os.getpid()},
+        "H0",
+    )
+    # #endregion
     configure_logging()
     logger = logging.getLogger("notetaker.boot")
     logger.info("Boot: starting create_app")
@@ -43,13 +84,40 @@ def create_app() -> FastAPI:
     logger.info("Boot: data_dir=%s exists=%s", data_dir, os.path.exists(data_dir))
     config_path = os.path.join(data_dir, "config.json")
     config: dict = {}
-    if os.path.exists(config_path):
-        logger.info("Boot: loading config_path=%s", config_path)
-        with open(config_path, "r", encoding="utf-8") as config_file:
-            config = json.load(config_file)
-        logger.info("Boot: config keys=%s", sorted(config.keys()))
-    else:
-        logger.info("Boot: config_path missing=%s", config_path)
+    try:
+        if os.path.exists(config_path):
+            logger.info("Boot: loading config_path=%s", config_path)
+            with open(config_path, "r", encoding="utf-8") as config_file:
+                config = json.load(config_file)
+            logger.info("Boot: config keys=%s", sorted(config.keys()))
+            # #region agent log
+            _boot_log(
+                "app/main.py:create_app",
+                "config loaded",
+                {"config_path": config_path, "keys": sorted(config.keys())},
+                "H1",
+            )
+            # #endregion
+        else:
+            logger.info("Boot: config_path missing=%s", config_path)
+            # #region agent log
+            _boot_log(
+                "app/main.py:create_app",
+                "config missing",
+                {"config_path": config_path},
+                "H1",
+            )
+            # #endregion
+    except Exception as exc:
+        # #region agent log
+        _boot_log(
+            "app/main.py:create_app",
+            "config load failed",
+            {"config_path": config_path, "exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+            "H1",
+        )
+        # #endregion
+        raise
     version_path = os.path.join(os.path.dirname(base_dir), "VERSION.txt")
     version = "v0.0.0.0"
     if os.path.exists(version_path):
@@ -67,42 +135,118 @@ def create_app() -> FastAPI:
         recordings_dir,
         meetings_dir,
     )
-    audio_service = AudioCaptureService(recordings_dir=recordings_dir)
-    logger.info("Boot: audio_service ready")
-    meeting_store = MeetingStore(meetings_dir=meetings_dir)
-    logger.info("Boot: meeting_store ready")
-    # SummarizationService reads config dynamically to use the user's selected model
-    summarization_service = SummarizationService(config_path)
-    logger.info("Boot: summarization_service ready")
-    app.include_router(
-        create_recording_router(
-            audio_service, meeting_store, summarization_service, config_path
+    try:
+        audio_service = AudioCaptureService(recordings_dir=recordings_dir)
+        logger.info("Boot: audio_service ready")
+        # #region agent log
+        _boot_log(
+            "app/main.py:create_app",
+            "audio_service ready",
+            {"recordings_dir": recordings_dir},
+            "H2",
         )
-    )
-    logger.info("Boot: recording router mounted")
-    app.include_router(create_logs_router())
-    logger.info("Boot: logs router mounted")
-    app.include_router(
-        create_transcription_router(
-            config,
-            audio_service,
-            meeting_store,
-            summarization_service,
+        # #endregion
+    except Exception as exc:
+        # #region agent log
+        _boot_log(
+            "app/main.py:create_app",
+            "audio_service failed",
+            {"recordings_dir": recordings_dir, "exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+            "H2",
         )
-    )
-    logger.info("Boot: transcription router mounted")
-    app.include_router(create_meetings_router(meeting_store, summarization_service))
-    logger.info("Boot: meetings router mounted")
-    app.include_router(create_summarization_router(meeting_store, summarization_service))
-    logger.info("Boot: summarization router mounted")
-    app.include_router(create_settings_router(config_path))
-    logger.info("Boot: settings router mounted")
-    app.include_router(
-        create_uploads_router(
-            config_path, os.path.join(cwd, "data", "uploads")
+        # #endregion
+        raise
+    try:
+        meeting_store = MeetingStore(meetings_dir=meetings_dir)
+        logger.info("Boot: meeting_store ready")
+        # #region agent log
+        _boot_log(
+            "app/main.py:create_app",
+            "meeting_store ready",
+            {"meetings_dir": meetings_dir},
+            "H3",
         )
-    )
-    logger.info("Boot: uploads router mounted")
+        # #endregion
+    except Exception as exc:
+        # #region agent log
+        _boot_log(
+            "app/main.py:create_app",
+            "meeting_store failed",
+            {"meetings_dir": meetings_dir, "exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+            "H3",
+        )
+        # #endregion
+        raise
+    try:
+        # SummarizationService reads config dynamically to use the user's selected model
+        summarization_service = SummarizationService(config_path)
+        logger.info("Boot: summarization_service ready")
+        # #region agent log
+        _boot_log(
+            "app/main.py:create_app",
+            "summarization_service ready",
+            {"config_path": config_path},
+            "H4",
+        )
+        # #endregion
+    except Exception as exc:
+        # #region agent log
+        _boot_log(
+            "app/main.py:create_app",
+            "summarization_service failed",
+            {"config_path": config_path, "exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+            "H4",
+        )
+        # #endregion
+        raise
+    try:
+        app.include_router(
+            create_recording_router(
+                audio_service, meeting_store, summarization_service, config_path
+            )
+        )
+        logger.info("Boot: recording router mounted")
+        app.include_router(create_logs_router())
+        logger.info("Boot: logs router mounted")
+        app.include_router(
+            create_transcription_router(
+                config,
+                audio_service,
+                meeting_store,
+                summarization_service,
+            )
+        )
+        logger.info("Boot: transcription router mounted")
+        app.include_router(create_meetings_router(meeting_store, summarization_service))
+        logger.info("Boot: meetings router mounted")
+        app.include_router(create_summarization_router(meeting_store, summarization_service))
+        logger.info("Boot: summarization router mounted")
+        app.include_router(create_settings_router(config_path))
+        logger.info("Boot: settings router mounted")
+        app.include_router(
+            create_uploads_router(
+                config_path, os.path.join(cwd, "data", "uploads")
+            )
+        )
+        logger.info("Boot: uploads router mounted")
+        # #region agent log
+        _boot_log(
+            "app/main.py:create_app",
+            "routers mounted",
+            {"uploads_dir": os.path.join(cwd, "data", "uploads")},
+            "H5",
+        )
+        # #endregion
+    except Exception as exc:
+        # #region agent log
+        _boot_log(
+            "app/main.py:create_app",
+            "router mount failed",
+            {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+            "H5",
+        )
+        # #endregion
+        raise
 
     logs_dir = os.path.join(cwd, "logs")
     os.makedirs(logs_dir, exist_ok=True)

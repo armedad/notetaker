@@ -17,6 +17,8 @@ from typing import Optional, Callable
 import os
 
 from app.services.diarization.providers.base import DiarizationConfig
+from app.services.ndjson_debug import dbg as nd_dbg
+from app.services.diarization.providers.whisperx_provider import _patch_torch_load
 
 
 class DiartProvider:
@@ -44,8 +46,24 @@ class DiartProvider:
     def _create_pipeline(self, sample_rate: int = 16000):
         """Create the Diart speaker diarization pipeline."""
         try:
+            # PyTorch 2.6+ defaults to weights_only=True, which breaks pyannote model loading.
+            # Apply the shared patch used by WhisperX before any pyannote loads.
+            _patch_torch_load()
+            nd_dbg(
+                "app/services/diarization/providers/diart_provider.py:_create_pipeline",
+                "diart_create_pipeline_enter",
+                {
+                    "sample_rate": sample_rate,
+                    "device": str(getattr(self._config, "device", "") or ""),
+                    "performance_level": float(getattr(self._config, "performance_level", 0.0) or 0.0),
+                    "hf_token_present": bool(self._get_hf_token()),
+                },
+                run_id="pre-fix",
+                hypothesis_id="H2",
+            )
             from diart import SpeakerDiarization, SpeakerDiarizationConfig
             from diart.models import SegmentationModel, EmbeddingModel
+            import torch
             
             # Map performance_level (0-1) to latency (0.5-5 seconds)
             # Higher performance = higher latency = better accuracy
@@ -61,26 +79,145 @@ class DiartProvider:
             hf_token = self._get_hf_token()
             if hf_token:
                 os.environ["HF_TOKEN"] = hf_token
+
+            # IMPORTANT:
+            # diart defaults to `use_hf_token=True` (huggingface-cli login token),
+            # but in this app we store the token in config. Passing the string token
+            # avoids Model.from_pretrained(...) returning None without raising.
+            use_hf_token = hf_token or True
+            device = torch.device(self._config.device or "cpu")
+            nd_dbg(
+                "app/services/diarization/providers/diart_provider.py:_create_pipeline",
+                "diart_create_pipeline_token_mode",
+                {
+                    "device": str(device),
+                    "use_hf_token_type": type(use_hf_token).__name__,
+                    "use_hf_token_is_bool_true": use_hf_token is True,
+                },
+                run_id="pre-fix",
+                hypothesis_id="H2",
+            )
+            segmentation = SegmentationModel.from_pyannote("pyannote/segmentation", use_hf_token)
+            embedding = EmbeddingModel.from_pyannote("pyannote/embedding", use_hf_token)
+            # Preflight: ensure pyannote models actually load (avoid diart LazyModel returning None).
+            try:
+                import sys
+                from pyannote.audio import Model as PyannoteModel
+                import torch
+                import huggingface_hub
+                import diart
+                seg_model = PyannoteModel.from_pretrained("pyannote/segmentation", use_auth_token=use_hf_token)
+                emb_model = PyannoteModel.from_pretrained("pyannote/embedding", use_auth_token=use_hf_token)
+                # Probe HF API so we can distinguish gating/auth vs cache/library issues.
+                hf_probe: dict = {}
+                try:
+                    import requests
+                    for model_id in (
+                        "pyannote/segmentation",
+                        "pyannote/embedding",
+                        "pyannote/segmentation-3.0",
+                        "pyannote/embedding-2.0",
+                    ):
+                        try:
+                            r = requests.get(
+                                f"https://huggingface.co/api/models/{model_id}",
+                                headers={"Authorization": f"Bearer {use_hf_token}"} if isinstance(use_hf_token, str) else {},
+                                timeout=10,
+                            )
+                            hf_probe[model_id] = {
+                                "status": int(r.status_code),
+                                "ok": bool(r.status_code == 200),
+                            }
+                        except Exception as exc:
+                            hf_probe[model_id] = {"status": None, "ok": False, "err": str(exc)[:200]}
+                except Exception:
+                    pass
+                nd_dbg(
+                    "app/services/diarization/providers/diart_provider.py:_create_pipeline",
+                    "diart_pyannote_preflight",
+                    {
+                        "seg_is_none": seg_model is None,
+                        "seg_type": type(seg_model).__name__ if seg_model is not None else None,
+                        "emb_is_none": emb_model is None,
+                        "emb_type": type(emb_model).__name__ if emb_model is not None else None,
+                        "versions": {
+                            "python": sys.version.split(" ")[0],
+                            "torch": getattr(torch, "__version__", None),
+                            "pyannote_audio": getattr(__import__("pyannote.audio"), "__version__", None),
+                            "huggingface_hub": getattr(huggingface_hub, "__version__", None),
+                            "diart": getattr(diart, "__version__", None),
+                        },
+                        "hf_probe": hf_probe,
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H2",
+                )
+                if seg_model is None or emb_model is None:
+                    raise RuntimeError("pyannote Model.from_pretrained returned None")
+            except Exception as exc:
+                import traceback
+                nd_dbg(
+                    "app/services/diarization/providers/diart_provider.py:_create_pipeline",
+                    "diart_pyannote_preflight_error",
+                    {
+                        "exc_type": type(exc).__name__,
+                        "exc_str": str(exc)[:800],
+                        "traceback": traceback.format_exc()[-2500:],
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H2",
+                )
+                raise
             
             # Create pipeline config
             pipeline_config = SpeakerDiarizationConfig(
+                segmentation=segmentation,
+                embedding=embedding,
                 step=0.5,  # Process every 500ms
                 latency=latency,
                 tau_active=0.5,  # Activity threshold
                 rho_update=0.3,  # Update threshold
                 delta_new=1.0,  # New speaker threshold
+                device=device,
+                sample_rate=sample_rate,
             )
             
             pipeline = SpeakerDiarization(pipeline_config)
+            nd_dbg(
+                "app/services/diarization/providers/diart_provider.py:_create_pipeline",
+                "diart_create_pipeline_ok",
+                {"ok": True},
+                run_id="pre-fix",
+                hypothesis_id="H2",
+            )
             return pipeline
             
         except ImportError as exc:
+            nd_dbg(
+                "app/services/diarization/providers/diart_provider.py:_create_pipeline",
+                "diart_import_error",
+                {"exc_type": type(exc).__name__, "exc_str": str(exc)[:600]},
+                run_id="pre-fix",
+                hypothesis_id="H5",
+            )
             self._logger.error(
                 "Diart not installed. Install with: pip install diart"
             )
             raise RuntimeError("Diart not installed") from exc
         except Exception as exc:
+            import traceback
             error_str = str(exc).lower()
+            nd_dbg(
+                "app/services/diarization/providers/diart_provider.py:_create_pipeline",
+                "diart_create_pipeline_error",
+                {
+                    "exc_type": type(exc).__name__,
+                    "exc_str": str(exc)[:800],
+                    "traceback": traceback.format_exc()[-2500:],
+                },
+                run_id="pre-fix",
+                hypothesis_id="H2",
+            )
             if "403" in error_str or "forbidden" in error_str or "gated" in error_str:
                 self._logger.error(
                     "HuggingFace returned 403 Forbidden. Accept pyannote licenses at: "
@@ -109,6 +246,13 @@ class DiartProvider:
                 return
             
             try:
+                nd_dbg(
+                    "app/services/diarization/providers/diart_provider.py:start_stream",
+                    "diart_start_stream_enter",
+                    {"sample_rate": sample_rate},
+                    run_id="pre-fix",
+                    hypothesis_id="H1",
+                )
                 from diart.sources import AudioSource
                 from diart.inference import StreamingInference
                 import rx.operators as ops
@@ -121,8 +265,22 @@ class DiartProvider:
                 self._audio_buffer = AudioChunkBuffer(sample_rate)
                 
                 self._logger.info("Diart stream started: sample_rate=%s", sample_rate)
+                nd_dbg(
+                    "app/services/diarization/providers/diart_provider.py:start_stream",
+                    "diart_start_stream_ok",
+                    {"ok": True},
+                    run_id="pre-fix",
+                    hypothesis_id="H1",
+                )
                 
             except Exception as exc:
+                nd_dbg(
+                    "app/services/diarization/providers/diart_provider.py:start_stream",
+                    "diart_start_stream_error",
+                    {"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
+                    run_id="pre-fix",
+                    hypothesis_id="H1",
+                )
                 self._logger.exception("Failed to start Diart stream: %s", exc)
                 self._is_streaming = False
                 raise
@@ -143,6 +301,9 @@ class DiartProvider:
                 return []
             
             try:
+                # First few chunk-level logs only to avoid spam.
+                if not hasattr(self, "_dbg_feed_count"):
+                    self._dbg_feed_count = 0
                 import numpy as np
                 import torch
                 
@@ -178,31 +339,207 @@ class DiartProvider:
                         annotation = self._process_buffer()
                         if annotation:
                             self._current_annotations = annotation
+                if self._dbg_feed_count < 3:
+                    self._dbg_feed_count += 1
+                    nd_dbg(
+                        "app/services/diarization/providers/diart_provider.py:feed_chunk",
+                        "diart_feed_chunk",
+                        {
+                            "bytes": len(audio_bytes),
+                            "sample_rate_in": sample_rate,
+                            "channels_in": channels,
+                            "buffer_duration_s": round(getattr(self._audio_buffer, "duration", 0.0) or 0.0, 3),
+                            "annotations": len(self._current_annotations),
+                        },
+                        run_id="pre-fix",
+                        hypothesis_id="H3",
+                    )
                 
                 return self._current_annotations
                 
             except Exception as exc:
+                nd_dbg(
+                    "app/services/diarization/providers/diart_provider.py:feed_chunk",
+                    "diart_feed_chunk_error",
+                    {"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
+                    run_id="pre-fix",
+                    hypothesis_id="H3",
+                )
                 self._logger.warning("Failed to process audio chunk: %s", exc)
                 return self._current_annotations
     
     def _process_buffer(self) -> list[dict]:
-        """Process accumulated audio buffer through Diart."""
+        """Process accumulated audio buffer through Diart pipeline.
+        
+        Uses Diart's SpeakerDiarization pipeline to process audio and extract
+        speaker segments with embeddings and clustering.
+        """
         try:
             waveform = self._audio_buffer.get_waveform()
             if waveform is None:
                 return []
             
-            # Run segmentation and embedding
-            segmentation = self._pipeline.config.segmentation(waveform)
+            # #region agent log
+            # Track buffer processing for debugging
+            buffer_duration = waveform.shape[-1] / 16000.0  # samples / sample_rate
+            nd_dbg(
+                "app/services/diarization/providers/diart_provider.py:_process_buffer",
+                "diart_process_buffer_start",
+                {"buffer_duration_s": round(buffer_duration, 3), "waveform_shape": list(waveform.shape)},
+                run_id="pre-fix",
+                hypothesis_id="H4",
+            )
+            # #endregion
             
-            # Convert to annotation format
-            annotations = []
-            # Note: Full pipeline processing requires more complex integration
-            # For MVP, we use a simplified approach
-            
-            return annotations
+            # Process through the full pipeline (segmentation -> embedding -> clustering)
+            # Diart's __call__ expects Sequence[SlidingWindowFeature], not raw arrays
+            try:
+                import numpy as np
+                from pyannote.core import SlidingWindowFeature, SlidingWindow
+                
+                # Convert from torch tensor to numpy
+                if hasattr(waveform, 'numpy'):
+                    waveform_np = waveform.squeeze().numpy()  # Remove batch dim, convert to numpy
+                else:
+                    waveform_np = np.array(waveform.squeeze())
+                
+                # Ensure 1D array for mono audio, then reshape to (samples, 1) for pyannote
+                if waveform_np.ndim > 1:
+                    waveform_np = waveform_np.mean(axis=0)
+                waveform_np = waveform_np.reshape(-1, 1)  # Shape: (samples, 1 channel)
+                
+                # Get pipeline config for chunk duration
+                chunk_duration = self._pipeline.config.duration  # Default 5 seconds
+                chunk_samples = int(chunk_duration * 16000)  # 16kHz sample rate
+                
+                # Track cumulative time offset for this session
+                if not hasattr(self, "_cumulative_offset"):
+                    self._cumulative_offset = 0.0
+                
+                # Split audio into chunks of the expected duration
+                total_samples = waveform_np.shape[0]
+                all_annotations = []
+                
+                # #region agent log
+                nd_dbg(
+                    "app/services/diarization/providers/diart_provider.py:_process_buffer",
+                    "diart_waveform_converted",
+                    {
+                        "waveform_type": type(waveform_np).__name__,
+                        "waveform_shape": list(waveform_np.shape),
+                        "dtype": str(waveform_np.dtype),
+                        "chunk_duration": chunk_duration,
+                        "chunk_samples": chunk_samples,
+                        "total_samples": total_samples,
+                        "num_chunks": (total_samples + chunk_samples - 1) // chunk_samples,
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H4",
+                )
+                # #endregion
+                
+                # Process each chunk
+                chunk_idx = 0
+                sample_rate = 16000  # Diart uses 16kHz
+                
+                for start_sample in range(0, total_samples, chunk_samples):
+                    end_sample = min(start_sample + chunk_samples, total_samples)
+                    chunk_data = waveform_np[start_sample:end_sample]
+                    
+                    # Pad last chunk if needed
+                    if chunk_data.shape[0] < chunk_samples:
+                        padding = np.zeros((chunk_samples - chunk_data.shape[0], 1), dtype=chunk_data.dtype)
+                        chunk_data = np.concatenate([chunk_data, padding], axis=0)
+                    
+                    # Create SlidingWindowFeature with timing info
+                    # SlidingWindow defines per-sample timing resolution
+                    chunk_start_time = self._cumulative_offset + (start_sample / sample_rate)
+                    resolution = SlidingWindow(
+                        start=chunk_start_time,
+                        duration=1.0 / sample_rate,
+                        step=1.0 / sample_rate,
+                    )
+                    sliding_feature = SlidingWindowFeature(chunk_data, resolution)
+                    
+                    # Call pipeline with single chunk as sequence
+                    try:
+                        outputs = self._pipeline([sliding_feature])
+                        
+                        # Process outputs - each is (Annotation, SlidingWindowFeature)
+                        for annotation, _ in outputs:
+                            if annotation is not None:
+                                for segment, track, speaker in annotation.itertracks(yield_label=True):
+                                    all_annotations.append({
+                                        "start": segment.start,
+                                        "end": segment.end,
+                                        "speaker": speaker,
+                                    })
+                    except Exception as chunk_exc:
+                        # #region agent log
+                        import traceback
+                        nd_dbg(
+                            "app/services/diarization/providers/diart_provider.py:_process_buffer",
+                            "diart_chunk_error",
+                            {
+                                "chunk_idx": chunk_idx,
+                                "exc_type": type(chunk_exc).__name__,
+                                "exc_str": str(chunk_exc)[:600],
+                                "traceback": traceback.format_exc()[-1000:],
+                            },
+                            run_id="pre-fix",
+                            hypothesis_id="H4",
+                        )
+                        # #endregion
+                        self._logger.warning("Chunk %d processing failed: %s", chunk_idx, chunk_exc)
+                    
+                    chunk_idx += 1
+                
+                # Update cumulative offset for next buffer
+                self._cumulative_offset += buffer_duration
+                
+                # #region agent log
+                nd_dbg(
+                    "app/services/diarization/providers/diart_provider.py:_process_buffer",
+                    "diart_process_buffer_ok",
+                    {
+                        "returned_annotations": len(all_annotations),
+                        "speakers": list(set(a["speaker"] for a in all_annotations)) if all_annotations else [],
+                        "cumulative_offset": round(self._cumulative_offset, 3),
+                        "chunks_processed": chunk_idx,
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H4",
+                )
+                # #endregion
+                
+                return all_annotations
+                
+            except Exception as pipeline_exc:
+                # #region agent log
+                import traceback
+                nd_dbg(
+                    "app/services/diarization/providers/diart_provider.py:_process_buffer",
+                    "diart_pipeline_call_error",
+                    {
+                        "exc_type": type(pipeline_exc).__name__,
+                        "exc_str": str(pipeline_exc)[:800],
+                        "traceback": traceback.format_exc()[-1500:],
+                    },
+                    run_id="pre-fix",
+                    hypothesis_id="H4",
+                )
+                # #endregion
+                self._logger.warning("Diart pipeline call failed: %s", pipeline_exc)
+                return []
             
         except Exception as exc:
+            nd_dbg(
+                "app/services/diarization/providers/diart_provider.py:_process_buffer",
+                "diart_process_buffer_error",
+                {"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
+                run_id="pre-fix",
+                hypothesis_id="H4",
+            )
             self._logger.warning("Buffer processing failed: %s", exc)
             return []
     
@@ -238,6 +575,7 @@ class DiartProvider:
             self._pipeline = None
             self._audio_buffer = None
             self._current_annotations = []
+            self._cumulative_offset = 0.0  # Reset for next session
             
             self._logger.info("Diart stream stopped: %s annotations", len(final_annotations))
             return final_annotations

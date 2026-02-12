@@ -87,26 +87,86 @@
       </section>
 
       <section class="panel">
-        <h2>Speaker Diarization</h2>
+        <h2>Real-Time Diarization</h2>
         <p class="panel-description">
-          Identifies who is speaking in your recordings. Requires a free
-          <a href="https://huggingface.co/settings/tokens" target="_blank">Hugging Face account</a>
-          to download the models (runs locally on your machine).
+          Identifies speakers during live transcription. Provides immediate speaker labels but lower accuracy.
+          Only <strong>diart</strong> supports real-time operation.
         </p>
         <div class="row">
-          <label for="diarization-provider">Diarization</label>
-          <select id="diarization-provider">
+          <label for="realtime-diarization-enabled">
+            <input id="realtime-diarization-enabled" type="checkbox" />
+            Enable real-time speaker detection
+          </label>
+        </div>
+        <div class="row">
+          <label for="realtime-diarization-provider">Provider</label>
+          <select id="realtime-diarization-provider">
             <option value="none">Off</option>
             <option value="diart">diart — Real-time streaming</option>
-            <option value="whisperx">whisperx — Batch (after transcription)</option>
-            <option value="pyannote-3.1">pyannote 3.1 — Batch (after transcription)</option>
-            <option value="pyannote-3.0">pyannote 3.0 — Batch, faster on CPU</option>
           </select>
         </div>
-        <div class="hint" id="diarization-description"></div>
-        <div id="diarization-token-row" class="row" style="display: none;">
-          <label for="hf-token">Hugging Face token</label>
-          <input id="hf-token" type="password" placeholder="hf_..." />
+        <div class="row" id="realtime-device-row">
+          <label for="realtime-diarization-device">Device</label>
+          <select id="realtime-diarization-device">
+            <option value="cpu">CPU</option>
+            <option value="cuda">CUDA (GPU)</option>
+          </select>
+          <div class="hint" id="realtime-gpu-hint"></div>
+        </div>
+        <div class="row" id="realtime-performance-row">
+          <label for="realtime-performance-level">Latency / Accuracy tradeoff</label>
+          <input id="realtime-performance-level" type="range" min="0" max="1" step="0.1" value="0.5" />
+          <div class="hint">Lower = faster but less accurate. Higher = slower but more accurate.</div>
+        </div>
+        <div class="row" id="realtime-token-row">
+          <label for="realtime-hf-token">Hugging Face token</label>
+          <input id="realtime-hf-token" type="password" placeholder="hf_..." />
+          <div class="hint">
+            Get your free token at
+            <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>.
+          </div>
+        </div>
+        <div class="output" id="realtime-diarization-output"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Final Diarization</h2>
+        <p class="panel-description">
+          Identifies speakers after transcription completes. Higher accuracy with named speaker identification.
+          Runs during the finalization step.
+        </p>
+        <div class="row">
+          <label for="batch-diarization-enabled">
+            <input id="batch-diarization-enabled" type="checkbox" />
+            Enable final speaker identification
+          </label>
+        </div>
+        <div class="row">
+          <label for="batch-diarization-provider">Provider</label>
+          <select id="batch-diarization-provider">
+            <option value="none">Off</option>
+            <option value="pyannote">pyannote 3.1 — High accuracy</option>
+            <option value="whisperx">whisperx — WhisperX-based</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="batch-diarization-model">Model</label>
+          <select id="batch-diarization-model">
+            <option value="pyannote/speaker-diarization-3.1">pyannote/speaker-diarization-3.1</option>
+            <option value="pyannote/speaker-diarization-3.0">pyannote/speaker-diarization-3.0 (faster on CPU)</option>
+          </select>
+        </div>
+        <div class="row" id="batch-device-row">
+          <label for="batch-diarization-device">Device</label>
+          <select id="batch-diarization-device">
+            <option value="cpu">CPU</option>
+            <option value="cuda">CUDA (GPU)</option>
+          </select>
+          <div class="hint" id="batch-gpu-hint"></div>
+        </div>
+        <div class="row" id="batch-token-row">
+          <label for="batch-hf-token">Hugging Face token</label>
+          <input id="batch-hf-token" type="password" placeholder="hf_..." />
           <div class="hint">
             Get your free token at
             <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>.
@@ -114,7 +174,10 @@
             <a href="https://huggingface.co/pyannote/speaker-diarization-3.1" target="_blank">pyannote model page</a>.
           </div>
         </div>
-        <div class="output" id="diarization-output"></div>
+        <div class="actions">
+          <button id="test-diarization-access" class="secondary">Test HuggingFace Access</button>
+        </div>
+        <div class="output" id="batch-diarization-output"></div>
       </section>
 
       <section class="panel">

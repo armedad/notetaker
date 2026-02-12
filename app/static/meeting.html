@@ -10,35 +10,33 @@
     <main class="container wide">
       <header>
         <div class="title-row">
-          <h1>Meeting</h1>
+          <a href="/" class="app-brand">Notetaker</a>
           <span id="version-badge" class="version-badge">v0.0.0.0</span>
+          <div class="header-actions">
+            <button id="export-meeting" class="secondary">Export</button>
+            <button id="delete-meeting" class="secondary">Delete</button>
+            <button id="stop-transcription" class="secondary" style="display: none;">Stop</button>
+            <button id="resume-transcription" class="secondary" style="display: none;">Resume</button>
+            <span id="transcription-status-badge" class="status-badge"></span>
+          </div>
         </div>
-        <p class="subtitle">Meeting view</p>
         <div class="status error" id="global-error"></div>
         <div class="status" id="global-busy"></div>
       </header>
 
-      <section class="panel">
-        <div class="row">
-          <div class="meeting-nav">
-            <button id="back-home" class="secondary">Home</button>
-            <div class="transcription-controls">
-              <button id="stop-transcription" class="secondary" style="display: none;">Stop transcription</button>
-              <button id="resume-transcription" class="secondary" style="display: none;">Resume transcription</button>
-              <span id="transcription-status-badge" class="status-badge"></span>
-            </div>
+      <section class="panel flat">
+        <!-- Finalization status banner (shown when processing after recording stops) -->
+        <div id="finalization-status" class="finalization-status" style="display: none;">
+          <div class="finalization-spinner"></div>
+          <span id="finalization-status-text">Processing...</span>
+          <div id="finalization-progress-bar" class="finalization-progress-bar" style="display: none;">
+            <div id="finalization-progress-fill" class="finalization-progress-fill"></div>
           </div>
         </div>
-        <div class="row">
-          <label for="meeting-title">Meeting title</label>
-          <input id="meeting-title" type="text" placeholder="Meeting title" />
-        </div>
-        <div class="row">
-          <button id="save-title" class="secondary">Save title</button>
-        </div>
+        <input id="meeting-title" type="text" class="meeting-title-input" placeholder="Untitled meeting" />
       </section>
 
-      <section class="panel">
+      <section class="panel flat">
         <h2>Attendees</h2>
         <div class="attendees-container">
           <div class="attendees-list-column">
@@ -46,34 +44,29 @@
               <!-- Attendee items rendered by JS -->
               <div class="attendees-empty">No attendees detected yet.</div>
             </div>
+            <div class="auto-rename-status" id="auto-rename-status"></div>
           </div>
           <div class="attendees-detail-column" id="attendees-detail">
-            <div class="attendee-detail-header">
-              <div class="attendee-name-row">
-                <span class="attendee-name-display" id="selected-attendee-name">Select an attendee</span>
-                <input type="text" class="attendee-name-input" id="attendee-name-input" style="display: none;" />
-                <button id="rename-attendee-btn" class="secondary small" style="display: none;">Rename</button>
-                <button id="auto-rename-btn" class="secondary small" style="display: none;" title="Use AI to identify name">Auto</button>
-                <button id="save-rename-btn" class="small" style="display: none;">Save</button>
-                <button id="cancel-rename-btn" class="secondary small" style="display: none;">Cancel</button>
-              </div>
-              <div class="auto-rename-status" id="auto-rename-status"></div>
-            </div>
             <div class="attendee-segments" id="attendee-segments">
-              <div class="attendee-segments-placeholder">Select an attendee to see what they've said.</div>
+              <!-- Segments shown when attendee is selected -->
             </div>
           </div>
-        </div>
-        <div class="actions">
-          <button id="export-meeting" class="secondary">Export Markdown</button>
-          <button id="delete-meeting" class="secondary">Delete meeting</button>
         </div>
       </section>
 
-      <section class="panel meeting-grid">
+      <section class="panel flat">
+        <h2>Notes</h2>
+        <textarea id="manual-notes" rows="8" placeholder="Add your notes here..."></textarea>
+      </section>
+
+      <section class="panel flat meeting-grid">
         <div class="meeting-column">
-          <h2>Summary</h2>
+          <div class="panel-header">
+            <h2>Summary</h2>
+            <button id="manual-summarize" class="secondary small">Summarize</button>
+          </div>
           <div class="status" id="summary-status">Summary will appear here.</div>
+          <div class="status" id="manual-summary-status"></div>
           <div class="output" id="summary-output">No summary yet.</div>
         </div>
 
@@ -84,33 +77,25 @@
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel flat">
         <div class="row">
-          <button id="toggle-summary-debug" class="secondary">Manual summarization</button>
+          <button id="toggle-summary-debug" class="secondary">Debug panel</button>
         </div>
         <div id="summary-debug-panel" class="summary-debug-panel" style="display: none;">
           <div class="summary-debug-grid">
             <div class="summary-debug-column">
-              <h3>Transcription</h3>
+              <h3>Transcription (raw)</h3>
               <textarea id="manual-transcription" rows="10" readonly></textarea>
             </div>
             <div class="summary-debug-column">
-              <h3>User notes</h3>
-              <textarea id="manual-notes" rows="10"></textarea>
-            </div>
-            <div class="summary-debug-column">
-              <h3>Summary</h3>
+              <h3>Summary (raw)</h3>
               <textarea id="manual-summary" rows="10"></textarea>
-              <div class="row" style="margin-top: 8px;">
-                <button id="manual-summarize" class="primary">Summarize</button>
-              </div>
-              <div class="status" id="manual-summary-status"></div>
             </div>
           </div>
         </div>
       </section>
     </main>
 
-    <script src="/static/meeting.js?v=145"></script>
+    <script src="/static/meeting.js?v=172"></script>
   </body>
 </html>

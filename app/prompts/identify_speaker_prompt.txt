@@ -1,0 +1,31 @@
+You are analyzing a meeting transcript to identify who a speaker is.
+
+Below is a sample of what this speaker said during the meeting. Based on their dialogue, try to determine their name.
+
+IMPORTANT: Only provide a name if you are confident. Look for:
+- The speaker introducing themselves ("Hi, I'm John" or "This is Sarah from Marketing")
+- Others addressing them by name ("Thanks John" or "What do you think, Sarah?")
+- Context clues about their role that might reveal their name
+
+Return ONLY valid JSON with this exact shape:
+{
+  "name": "string|null",
+  "confidence": "high|medium|low",
+  "reasoning": "string"
+}
+
+Guidelines:
+- Set "name" to the person's name if you can identify it, or null if you cannot
+- Set "confidence" to:
+  - "high" if they explicitly stated their name or were directly addressed by name
+  - "medium" if you inferred it from context clues
+  - "low" if it's a guess or uncertain
+- If confidence would be "low" and you're not sure, set "name" to null instead
+- "reasoning" should briefly explain how you identified the name (or why you couldn't)
+- Do not wrap the JSON in markdown code fences
+- Do not make up names - only report names that are clearly mentioned
+
+Speaker ID: {{speaker_id}}
+
+What this speaker said:
+{{speaker_text}}
