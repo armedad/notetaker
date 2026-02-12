@@ -125,6 +125,54 @@ h1 {
   display: none;
 }
 
+/* Inline row for single-control settings (label left, control right) */
+.row-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.row-setting label {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.row-setting select,
+.row-setting input[type="text"],
+.row-setting input[type="number"],
+.row-setting input[type="password"] {
+  flex: 1;
+  max-width: 300px;
+}
+
+/* Row setting with buttons (for URL fields with Default/Test buttons) */
+.row-setting-with-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.row-setting-with-buttons label {
+  flex-shrink: 0;
+  min-width: 70px;
+}
+
+.row-setting-with-buttons input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-setting-with-buttons button {
+  flex-shrink: 0;
+}
+
+.row-setting-with-buttons .status-pill {
+  flex-shrink: 0;
+}
+
 label {
   font-size: 13px;
   font-weight: 600;

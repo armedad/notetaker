@@ -7,7 +7,32 @@ update the status of each of the items below.  mrak them as "in progress" once y
 when it's fully working, move it to a todo-done.md file
 
 ---
+
+in the meeting page, after i hit stop, every approx 5 seconds, i see "loading meeting" flash on the upper left.  explain why that is.  don't make a change.  just explain
+
+---
+
+# redesign the meeting page.  do not make functional changes.
+  - Type: UI redesign
+  - Status: done
+
+----
+
+# redesign settings page to be more vertical space efficient
+  - Type: UI redesign
+  - Status: in progress
+  - Plan: .cursor/plans/settings_page_redesign_cae1ba7c.plan.md
+
+# final diarization
+  - Type: new feature
+  - Status: done
+
+Implemented LLM-based speaker identification and enhanced finalization pipeline with status updates.
+
+----
 # manual summarization
+
+done!
 
 let's take a more manual approach to summarization until the transcription is done.  
 
