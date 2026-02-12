@@ -229,7 +229,8 @@ function renderModelDatalist() {
     return;
   }
   list.innerHTML = "";
-  const models = state.registry.filter((model) => model.visible);
+  // Only show visible models from enabled providers
+  const models = state.registry.filter((model) => model.visible && isProviderEnabled(model.provider));
   const emptyHint = document.getElementById("model-empty-hint");
   if (emptyHint) {
     emptyHint.style.display = models.length ? "none" : "block";
@@ -272,6 +273,11 @@ function updateRegistryFromProvider(provider) {
   renderModelDatalist();
 }
 
+function isProviderEnabled(provider) {
+  const checkbox = document.getElementById(`${provider}-enabled`);
+  return checkbox ? checkbox.checked : true; // Default to enabled if checkbox not found
+}
+
 function renderRegistry() {
   const container = document.getElementById("model-registry");
   if (!container) {
@@ -281,6 +287,10 @@ function renderRegistry() {
   const filter = state.modelFilter.trim().toLowerCase();
   const tokens = filter.split(/\s+/).filter(Boolean);
   const filtered = state.registry.filter((model) => {
+    // Filter out models from disabled providers
+    if (!isProviderEnabled(model.provider)) {
+      return false;
+    }
     if (!tokens.length) {
       return true;
     }
@@ -531,12 +541,39 @@ async function saveTranscriptionSettings() {
   }
 }
 
+function updateProviderUI(provider) {
+  const enabledCheckbox = document.getElementById(`${provider}-enabled`);
+  const settingsDiv = document.getElementById(`${provider}-settings`);
+  const block = document.getElementById(`${provider}-block`);
+  if (!enabledCheckbox || !settingsDiv || !block) return;
+  
+  const isEnabled = enabledCheckbox.checked;
+  if (isEnabled) {
+    settingsDiv.classList.remove("collapsed");
+    block.classList.remove("disabled");
+  } else {
+    settingsDiv.classList.add("collapsed");
+    block.classList.add("disabled");
+  }
+}
+
 async function loadSummarizationSettings() {
   try {
     const data = await fetchJson("/api/settings/providers");
     if (!data || Object.keys(data).length === 0) {
       return;
     }
+    // Load enabled state and settings for each provider
+    const providers = ["openai", "anthropic", "gemini", "grok", "ollama", "lmstudio"];
+    for (const provider of providers) {
+      const enabledCheckbox = document.getElementById(`${provider}-enabled`);
+      if (enabledCheckbox) {
+        // Default to true if enabled field is not set (backward compatibility)
+        enabledCheckbox.checked = data[provider]?.enabled !== false;
+        updateProviderUI(provider);
+      }
+    }
+    
     document.getElementById("openai-api-key").value =
       data.openai?.api_key || "";
     document.getElementById("openai-base-url").value =
@@ -656,26 +693,32 @@ async function saveSummarizationSettings() {
   syncConfigFromModelChoice();
   const payload = {
     openai: {
+      enabled: document.getElementById("openai-enabled").checked,
       api_key: document.getElementById("openai-api-key").value.trim(),
       base_url: document.getElementById("openai-base-url").value.trim(),
     },
     anthropic: {
+      enabled: document.getElementById("anthropic-enabled").checked,
       api_key: document.getElementById("anthropic-api-key").value.trim(),
       base_url: document.getElementById("anthropic-base-url").value.trim(),
     },
     gemini: {
+      enabled: document.getElementById("gemini-enabled").checked,
       api_key: document.getElementById("gemini-api-key").value.trim(),
       base_url: document.getElementById("gemini-base-url").value.trim(),
     },
     grok: {
+      enabled: document.getElementById("grok-enabled").checked,
       api_key: document.getElementById("grok-api-key").value.trim(),
       base_url: document.getElementById("grok-base-url").value.trim(),
     },
     ollama: {
+      enabled: document.getElementById("ollama-enabled").checked,
       api_key: document.getElementById("ollama-api-key").value.trim(),
       base_url: document.getElementById("ollama-base-url").value.trim(),
     },
     lmstudio: {
+      enabled: document.getElementById("lmstudio-enabled").checked,
       api_key: document.getElementById("lmstudio-api-key").value.trim(),
       base_url: document.getElementById("lmstudio-base-url").value.trim(),
     },
@@ -716,6 +759,20 @@ async function refreshVersion() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // Provider enabled toggles
+  const providers = ["openai", "anthropic", "gemini", "grok", "ollama", "lmstudio"];
+  for (const provider of providers) {
+    const toggle = document.getElementById(`${provider}-enabled`);
+    if (toggle) {
+      toggle.addEventListener("change", () => {
+        updateProviderUI(provider);
+        renderRegistry();
+        renderModelDatalist();
+        scheduleSave(saveSummarizationSettings);
+      });
+    }
+  }
+  
   document
     .getElementById("refresh-devices")
     .addEventListener("click", async () => {

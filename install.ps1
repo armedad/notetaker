@@ -221,26 +221,32 @@ if (-not (Test-Path $configPath)) {
   },
   "providers": {
     "openai": {
+      "enabled": false,
       "api_key": "",
       "base_url": "https://api.openai.com"
     },
     "anthropic": {
+      "enabled": false,
       "api_key": "",
       "base_url": "https://api.anthropic.com"
     },
     "gemini": {
+      "enabled": false,
       "api_key": "",
       "base_url": "https://generativelanguage.googleapis.com"
     },
     "grok": {
+      "enabled": false,
       "api_key": "",
       "base_url": "https://api.x.ai"
     },
     "ollama": {
+      "enabled": true,
       "api_key": "",
       "base_url": "http://127.0.0.1:11434"
     },
     "lmstudio": {
+      "enabled": false,
       "api_key": "",
       "base_url": "http://127.0.0.1:1234"
     }

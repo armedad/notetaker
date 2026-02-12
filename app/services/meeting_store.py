@@ -41,6 +41,7 @@ class MeetingStore:
         self._lock = threading.RLock()
         self._events_lock = threading.RLock()
         self._events: list[dict] = []
+        self._events_condition = threading.Condition(self._events_lock)  # For push-based SSE
         self._logger = logging.getLogger("notetaker.meetings")
         self._trace = logging.getLogger("notetaker.trace")
         os.makedirs(self._meetings_dir, exist_ok=True)
@@ -189,16 +190,22 @@ class MeetingStore:
         # Kept for compatibility with existing callers; now returns the directory.
         return self._meetings_dir
 
-    def publish_event(self, event_type: str, meeting_id: Optional[str]) -> None:
-        with self._events_lock:
+    def publish_event(
+        self, event_type: str, meeting_id: Optional[str], data: Optional[dict] = None
+    ) -> None:
+        with self._events_condition:
             payload = {
                 "type": event_type,
                 "meeting_id": meeting_id,
                 "timestamp": datetime.utcnow().isoformat(),
             }
+            if data:
+                payload["data"] = data
             self._events.append(payload)
             if len(self._events) > 200:
                 self._events = self._events[-100:]
+            # Wake up any waiting SSE connections immediately
+            self._events_condition.notify_all()
 
     def publish_finalization_status(
         self,
@@ -213,7 +220,7 @@ class MeetingStore:
             status_text: Human-readable status text (e.g., "Analyzing speakers...")
             progress: Optional progress percentage (0.0 to 1.0)
         """
-        with self._events_lock:
+        with self._events_condition:
             payload = {
                 "type": "finalization_status",
                 "meeting_id": meeting_id,
@@ -224,6 +231,8 @@ class MeetingStore:
             self._events.append(payload)
             if len(self._events) > 200:
                 self._events = self._events[-100:]
+            # Wake up any waiting SSE connections immediately
+            self._events_condition.notify_all()
         
         # Also update the meeting's finalization_status field
         self.update_finalization_status(meeting_id, status_text, progress)
@@ -270,7 +279,33 @@ class MeetingStore:
             return meeting
 
     def get_events_since(self, cursor: int) -> tuple[list[dict], int]:
-        with self._events_lock:
+        with self._events_condition:
+            events = self._events[cursor:]
+            return events, len(self._events)
+
+    def wait_for_events(self, cursor: int, timeout: float = 5.0) -> tuple[list[dict], int]:
+        """Block until new events are available or timeout expires.
+        
+        This enables true push-based SSE - the caller blocks until notified
+        that new events exist, rather than polling.
+        
+        Args:
+            cursor: Current position in the events list
+            timeout: Max seconds to wait (for heartbeat/keepalive)
+            
+        Returns:
+            Tuple of (new events since cursor, new cursor position)
+        """
+        with self._events_condition:
+            # Check if events already available
+            if cursor < len(self._events):
+                events = self._events[cursor:]
+                return events, len(self._events)
+            
+            # Wait for notification or timeout
+            self._events_condition.wait(timeout=timeout)
+            
+            # Return whatever events are now available
             events = self._events[cursor:]
             return events, len(self._events)
 
@@ -673,7 +708,7 @@ class MeetingStore:
             meeting["title_generated_at"] = datetime.utcnow().isoformat()
             self._write_meeting_file(path, meeting)
             self._logger.info("Auto title saved: id=%s", meeting_id)
-            self.publish_event("meeting_updated", meeting_id)
+            self.publish_event("title_updated", meeting_id, {"title": title, "source": "auto"})
             return meeting
 
     def update_title(
@@ -694,6 +729,7 @@ class MeetingStore:
                 meeting["title_source"] = "manual"
                 meeting["title_generated_at"] = None
             self._write_meeting_file(path, meeting)
+            self.publish_event("title_updated", meeting_id, {"title": title, "source": source})
             return meeting
 
     def update_attendees(self, meeting_id: str, attendees: list[dict]) -> Optional[dict]:
@@ -706,6 +742,7 @@ class MeetingStore:
                 return None
             meeting["attendees"] = attendees
             self._write_meeting_file(path, meeting)
+            self.publish_event("attendees_updated", meeting_id, {"attendees": attendees})
             return meeting
 
     def update_status(self, meeting_id: str, status: str) -> Optional[dict]:
@@ -759,12 +796,9 @@ class MeetingStore:
             )
             # #endregion
             self.publish_event(
-                "meeting_completed"
-                if status == "completed"
-                else "meeting_started"
-                if status == "in_progress"
-                else "meeting_updated",
+                "status_updated",
                 meeting_id,
+                {"status": status, "ended_at": meeting.get("ended_at")},
             )
             return meeting
 
@@ -788,7 +822,8 @@ class MeetingStore:
                         seg["speaker"] = segment_map[seg["start"]]
                 meeting["transcript"] = transcript
                 self._write_meeting_file(path, meeting)
-                self.publish_event("meeting_updated", meeting_id)
+                # Emit full transcript update after diarization
+                self.publish_event("transcript_updated", meeting_id, {"segments": existing_segments})
             return meeting
 
     def update_attendee_name(
@@ -965,6 +1000,8 @@ class MeetingStore:
                 summarized_len=len((meeting.get("summary_state") or {}).get("summarized_summary", "") or ""),
                 interim_len=len((meeting.get("summary_state") or {}).get("interim_summary", "") or ""),
             )
+            # Emit event for new transcript segment
+            self.publish_event("transcript_segment", meeting_id, {"segment": segment})
             return meeting
 
     def append_live_meta(self, meeting_id: str, language: Optional[str]) -> Optional[dict]:

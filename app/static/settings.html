@@ -204,93 +204,141 @@
           </div>
         </div>
 
-        <div class="provider-block">
-          <h3>OpenAI</h3>
-          <div class="row-setting">
-            <label for="openai-api-key">API key</label>
-            <input id="openai-api-key" type="password" placeholder="sk-..." />
+        <div class="provider-block" id="openai-block">
+          <div class="provider-header">
+            <h3>OpenAI</h3>
+            <label class="toggle-switch">
+              <input type="checkbox" id="openai-enabled" />
+              <span class="toggle-slider"></span>
+            </label>
           </div>
-          <div class="row-setting-with-buttons">
-            <label for="openai-base-url">Base URL</label>
-            <input id="openai-base-url" type="text" value="https://api.openai.com" />
-            <button id="openai-default" class="secondary">Default</button>
-            <button id="test-openai" class="secondary">Test</button>
-            <span id="openai-status" class="status-pill"></span>
-          </div>
-        </div>
-
-        <div class="provider-block">
-          <h3>Anthropic</h3>
-          <div class="row-setting">
-            <label for="anthropic-api-key">API key</label>
-            <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." />
-          </div>
-          <div class="row-setting-with-buttons">
-            <label for="anthropic-base-url">Base URL</label>
-            <input id="anthropic-base-url" type="text" value="https://api.anthropic.com" />
-            <button id="anthropic-default" class="secondary">Default</button>
-            <button id="test-anthropic" class="secondary">Test</button>
-            <span id="anthropic-status" class="status-pill"></span>
+          <div class="provider-settings" id="openai-settings">
+            <div class="row-setting">
+              <label for="openai-api-key">API key</label>
+              <input id="openai-api-key" type="password" placeholder="sk-..." />
+            </div>
+            <div class="row-setting-with-buttons">
+              <label for="openai-base-url">Base URL</label>
+              <input id="openai-base-url" type="text" value="https://api.openai.com" />
+              <button id="openai-default" class="secondary">Default</button>
+              <button id="test-openai" class="secondary">Test</button>
+              <span id="openai-status" class="status-pill"></span>
+            </div>
           </div>
         </div>
 
-        <div class="provider-block">
-          <h3>Gemini</h3>
-          <div class="row-setting">
-            <label for="gemini-api-key">API key</label>
-            <input id="gemini-api-key" type="password" placeholder="AIza..." />
+        <div class="provider-block" id="anthropic-block">
+          <div class="provider-header">
+            <h3>Anthropic</h3>
+            <label class="toggle-switch">
+              <input type="checkbox" id="anthropic-enabled" />
+              <span class="toggle-slider"></span>
+            </label>
           </div>
-          <div class="row-setting-with-buttons">
-            <label for="gemini-base-url">Base URL</label>
-            <input id="gemini-base-url" type="text" value="https://generativelanguage.googleapis.com" />
-            <button id="gemini-default" class="secondary">Default</button>
-            <button id="test-gemini" class="secondary">Test</button>
-            <span id="gemini-status" class="status-pill"></span>
-          </div>
-        </div>
-
-        <div class="provider-block">
-          <h3>Grok</h3>
-          <div class="row-setting">
-            <label for="grok-api-key">API key</label>
-            <input id="grok-api-key" type="password" placeholder="xai-..." />
-          </div>
-          <div class="row-setting-with-buttons">
-            <label for="grok-base-url">Base URL</label>
-            <input id="grok-base-url" type="text" value="https://api.x.ai" />
-            <button id="grok-default" class="secondary">Default</button>
-            <button id="test-grok" class="secondary">Test</button>
-            <span id="grok-status" class="status-pill"></span>
+          <div class="provider-settings" id="anthropic-settings">
+            <div class="row-setting">
+              <label for="anthropic-api-key">API key</label>
+              <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." />
+            </div>
+            <div class="row-setting-with-buttons">
+              <label for="anthropic-base-url">Base URL</label>
+              <input id="anthropic-base-url" type="text" value="https://api.anthropic.com" />
+              <button id="anthropic-default" class="secondary">Default</button>
+              <button id="test-anthropic" class="secondary">Test</button>
+              <span id="anthropic-status" class="status-pill"></span>
+            </div>
           </div>
         </div>
 
-        <div class="provider-block">
-          <h3>Ollama</h3>
-          <div class="row-setting">
-            <label for="ollama-api-key">API key (optional)</label>
-            <input id="ollama-api-key" type="password" placeholder="optional" />
+        <div class="provider-block" id="gemini-block">
+          <div class="provider-header">
+            <h3>Gemini</h3>
+            <label class="toggle-switch">
+              <input type="checkbox" id="gemini-enabled" />
+              <span class="toggle-slider"></span>
+            </label>
           </div>
-          <div class="row-setting-with-buttons">
-            <label for="ollama-base-url">Base URL</label>
-            <input id="ollama-base-url" type="text" value="http://127.0.0.1:11434" />
-            <button id="ollama-default" class="secondary">Default</button>
-            <button id="test-ollama" class="secondary">Test</button>
-            <span id="ollama-status" class="status-pill"></span>
+          <div class="provider-settings" id="gemini-settings">
+            <div class="row-setting">
+              <label for="gemini-api-key">API key</label>
+              <input id="gemini-api-key" type="password" placeholder="AIza..." />
+            </div>
+            <div class="row-setting-with-buttons">
+              <label for="gemini-base-url">Base URL</label>
+              <input id="gemini-base-url" type="text" value="https://generativelanguage.googleapis.com" />
+              <button id="gemini-default" class="secondary">Default</button>
+              <button id="test-gemini" class="secondary">Test</button>
+              <span id="gemini-status" class="status-pill"></span>
+            </div>
           </div>
         </div>
 
-        <div class="provider-block">
-          <h3>LM Studio</h3>
-          <div class="row-setting">
-            <label for="lmstudio-api-key">API key (optional)</label>
-            <input id="lmstudio-api-key" type="password" placeholder="optional" />
+        <div class="provider-block" id="grok-block">
+          <div class="provider-header">
+            <h3>Grok</h3>
+            <label class="toggle-switch">
+              <input type="checkbox" id="grok-enabled" />
+              <span class="toggle-slider"></span>
+            </label>
           </div>
-          <div class="row-setting-with-buttons">
-            <label for="lmstudio-base-url">Base URL</label>
-            <input id="lmstudio-base-url" type="text" value="http://127.0.0.1:1234" />
-            <button id="lmstudio-default" class="secondary">Default</button>
-            <button id="test-lmstudio" class="secondary">Test</button>
-            <span id="lmstudio-status" class="status-pill"></span>
+          <div class="provider-settings" id="grok-settings">
+            <div class="row-setting">
+              <label for="grok-api-key">API key</label>
+              <input id="grok-api-key" type="password" placeholder="xai-..." />
+            </div>
+            <div class="row-setting-with-buttons">
+              <label for="grok-base-url">Base URL</label>
+              <input id="grok-base-url" type="text" value="https://api.x.ai" />
+              <button id="grok-default" class="secondary">Default</button>
+              <button id="test-grok" class="secondary">Test</button>
+              <span id="grok-status" class="status-pill"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="provider-block" id="ollama-block">
+          <div class="provider-header">
+            <h3>Ollama</h3>
+            <label class="toggle-switch">
+              <input type="checkbox" id="ollama-enabled" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="provider-settings" id="ollama-settings">
+            <div class="row-setting">
+              <label for="ollama-api-key">API key (optional)</label>
+              <input id="ollama-api-key" type="password" placeholder="optional" />
+            </div>
+            <div class="row-setting-with-buttons">
+              <label for="ollama-base-url">Base URL</label>
+              <input id="ollama-base-url" type="text" value="http://127.0.0.1:11434" />
+              <button id="ollama-default" class="secondary">Default</button>
+              <button id="test-ollama" class="secondary">Test</button>
+              <span id="ollama-status" class="status-pill"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="provider-block" id="lmstudio-block">
+          <div class="provider-header">
+            <h3>LM Studio</h3>
+            <label class="toggle-switch">
+              <input type="checkbox" id="lmstudio-enabled" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="provider-settings" id="lmstudio-settings">
+            <div class="row-setting">
+              <label for="lmstudio-api-key">API key (optional)</label>
+              <input id="lmstudio-api-key" type="password" placeholder="optional" />
+            </div>
+            <div class="row-setting-with-buttons">
+              <label for="lmstudio-base-url">Base URL</label>
+              <input id="lmstudio-base-url" type="text" value="http://127.0.0.1:1234" />
+              <button id="lmstudio-default" class="secondary">Default</button>
+              <button id="test-lmstudio" class="secondary">Test</button>
+              <span id="lmstudio-status" class="status-pill"></span>
+            </div>
           </div>
         </div>
 
@@ -308,6 +356,6 @@
       </section>
     </main>
 
-    <script src="/static/settings.js"></script>
+    <script src="/static/settings.js?v=2"></script>
   </body>
 </html>

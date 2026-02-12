@@ -71,11 +71,14 @@ def create_meetings_router(
         def event_stream():
             cursor = 0
             while True:
-                events, cursor = meeting_store.get_events_since(cursor)
+                # Block until events are available (true push-based SSE)
+                # Timeout after 5s to send heartbeat for connection keepalive
+                events, cursor = meeting_store.wait_for_events(cursor, timeout=5.0)
                 for event in events:
                     yield f"data: {json.dumps(event)}\n\n"
-                yield "data: {\"type\":\"heartbeat\"}\n\n"
-                time.sleep(2)
+                # Send heartbeat if no events (timeout expired)
+                if not events:
+                    yield "data: {\"type\":\"heartbeat\"}\n\n"
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 

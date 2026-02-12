@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from typing import Generator
+
 import requests
 
 from app.services.llm.base import BaseLLMProvider, LLMProviderError
@@ -50,3 +53,65 @@ class OllamaProvider(BaseLLMProvider):
 
         data = response.json()
         return data.get("response", "").strip()
+
+    def _call_api_stream(
+        self,
+        prompt: str,
+        temperature: float = 0.2,
+        timeout: int = 120,
+        system_prompt: str | None = None,
+    ) -> Generator[str, None, None]:
+        """Make a streaming call to the Ollama API, yielding tokens as they arrive."""
+        # #region agent log
+        import time as _time
+        _log_path = "/Users/chee/zapier ai project/.cursor/debug.log"
+        def _dbg(msg, data=None):
+            import json as _json
+            with open(_log_path, "a") as _f:
+                _f.write(_json.dumps({"location":"ollama_provider.py:_call_api_stream","message":msg,"data":data or {},"timestamp":int(_time.time()*1000),"hypothesisId":"H1,H4"})+"\n")
+        _dbg("stream_start", {"model": self._model})
+        # #endregion
+        full_prompt = prompt
+        if system_prompt:
+            full_prompt = f"{system_prompt}\n\n{prompt}"
+        
+        request_body = {
+            "model": self._model,
+            "prompt": full_prompt,
+            "stream": True,
+        }
+        
+        try:
+            response = requests.post(
+                f"{self._base_url}/api/generate",
+                json=request_body,
+                timeout=timeout,
+                stream=True,
+            )
+        except requests.RequestException as exc:
+            raise LLMProviderError("Failed to reach Ollama") from exc
+
+        if response.status_code != 200:
+            raise LLMProviderError(f"Ollama error: {response.status_code}")
+
+        # #region agent log
+        _token_count = 0
+        # #endregion
+        for line in response.iter_lines():
+            if line:
+                try:
+                    data = json.loads(line)
+                    if token := data.get("response"):
+                        # #region agent log
+                        _token_count += 1
+                        if _token_count <= 5 or _token_count % 20 == 0:
+                            _dbg("token_yielded", {"token_num": _token_count, "token_preview": token[:20] if len(token) > 20 else token})
+                        # #endregion
+                        yield token
+                    if data.get("done"):
+                        # #region agent log
+                        _dbg("stream_done", {"total_tokens": _token_count})
+                        # #endregion
+                        break
+                except json.JSONDecodeError:
+                    continue
