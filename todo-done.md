@@ -134,3 +134,85 @@ Commits:
 - f2b4c02: Fix diarization in simulated transcription, improve HF error messages
 - ab0a105: Unify transcription code flows with TranscriptionPipeline
 - 4b70efa: Add real-time speaker diarization with Diart
+
+---
+
+## consolidate transcript chunks
+  - Type: new feature
+  - Status: done
+  - Plan: .cursor/plans/transcript_chunk_consolidation_9d374512.plan.md
+
+Merges consecutive transcript segments from the same speaker into larger chunks (configurable, default 15 seconds max). Settings in Transcription section. Debug toggle to view raw segments.
+
+Fixed: Raw segments toggle now works correctly. Also fixed scroll position in raw transcript textbox to not auto-scroll when user has scrolled up.
+
+---
+
+## redesign the meeting page
+  - Type: UI redesign
+  - Status: done
+
+---
+
+## redesign settings page to be more vertical space efficient
+  - Type: UI redesign
+  - Status: done
+  - Plan: .cursor/plans/settings_page_redesign_cae1ba7c.plan.md
+
+---
+
+## final diarization
+  - Type: new feature
+  - Status: done
+
+Implemented LLM-based speaker identification and enhanced finalization pipeline with status updates.
+
+---
+
+## manual summarization
+  - Type: new feature
+  - Status: done
+
+Manual approach to summarization with three text buffers (transcription, user notes, summary). Summarize button prompts LLM to summarize transcription. LLM prompt stored in separate file for iteration.
+
+---
+
+## Bug 2: Hard to stop transcription
+  - Type: bug
+  - Status: done
+  - Plan: docs/plans/responsive-audio-architecture.md
+
+When hitting stop, transcription continues for 60+ seconds before actually stopping.
+
+**Root cause:** Whisper processes audio in fixed 30-second windows due to its transformer architecture. The encoder runs on the full 30-second spectrogram regardless of actual content length (smaller inputs are padded with silence). The cancel_event was only checked between encoder passes, not during file reading.
+
+**Solution implemented:**
+
+1. **Chunked file transcription** (`chunked_transcribe_and_format`):
+   - Audio files are now read in model-optimal chunks (30s for Whisper)
+   - Cancellation is checked BEFORE reading each new chunk
+   - When stop is pressed, file reading stops immediately
+   - Only the current chunk continues through transcription
+   - Already-transcribed segments are preserved
+
+2. **Live audio capture improvements**:
+   - Added `signal_capture_stopped()` and `drain_live_queue()` to AudioCaptureService
+   - When stop is pressed, audio capture stops immediately
+   - Remaining buffered audio is drained and sent as final chunk
+   - Live transcription stream aborted first, then recording stopped
+
+3. **UI improvements**:
+   - Summary timer and countdown stop immediately when stop is pressed
+   - Clear status messages: "Audio capture stopped. Finishing transcription..."
+   - Polling continues in background until transcription completes
+   - Different messages for file vs live transcription
+
+**Files changed:**
+- `app/services/audio_capture.py` - Added drain_live_queue(), signal_capture_stopped(), is_capture_stopped()
+- `app/services/transcription/base.py` - Added get_chunk_size() to TranscriptionProvider
+- `app/services/transcription/whisper_local.py` - Implemented get_chunk_size() returning 30.0
+- `app/services/transcription_pipeline.py` - Added chunked_transcribe_and_format() and get_chunk_size()
+- `app/services/live_transcription.py` - New decoupled live transcription service
+- `app/routers/transcription.py` - Updated _run_simulated_transcription to use chunked method
+- `app/static/app.js` - Updated stopRecording() and stopFileRecording() for responsive UI
+- `app/static/meeting.js` - Updated stopTranscription() to stop timer immediately
