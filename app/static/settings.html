@@ -10,6 +10,7 @@
     <main class="container">
       <header>
         <div class="title-row">
+          <a href="/" class="app-brand">Notetaker</a>
           <h1>Settings</h1>
           <span id="version-badge" class="version-badge">v0.0.0.0</span>
         </div>
@@ -19,33 +20,27 @@
       </header>
 
       <section class="panel">
-        <div class="actions">
-          <button id="back-home" class="secondary">Home</button>
+        <div class="panel-header">
+          <h2>Audio Devices</h2>
+          <button id="refresh-devices" class="secondary">Refresh</button>
         </div>
-      </section>
-
-      <section class="panel">
-        <h2>Audio Devices</h2>
-        <div class="row">
+        <div class="row-setting">
           <label for="device-select">Input device</label>
           <select id="device-select"></select>
         </div>
-        <div class="row">
+        <div class="row-setting">
           <label for="samplerate">Sample rate</label>
           <input id="samplerate" type="number" value="48000" min="8000" step="1000" />
         </div>
-        <div class="row">
+        <div class="row-setting">
           <label for="channels">Channels</label>
           <input id="channels" type="number" value="2" min="1" max="8" />
-        </div>
-        <div class="actions">
-          <button id="refresh-devices">Refresh devices</button>
         </div>
       </section>
 
       <section class="panel">
         <h2>Transcription</h2>
-        <div class="row">
+        <div class="row-setting">
           <label for="live-model-size">Live model size</label>
           <select id="live-model-size">
             <option value="tiny">tiny</option>
@@ -55,7 +50,7 @@
             <option value="large-v3">large-v3</option>
           </select>
         </div>
-        <div class="row">
+        <div class="row-setting">
           <label for="final-model-size">Final model size</label>
           <select id="final-model-size">
             <option value="tiny">tiny</option>
@@ -98,20 +93,19 @@
             Enable real-time speaker detection
           </label>
         </div>
-        <div class="row">
+        <div class="row-setting">
           <label for="realtime-diarization-provider">Provider</label>
           <select id="realtime-diarization-provider">
             <option value="none">Off</option>
             <option value="diart">diart — Real-time streaming</option>
           </select>
         </div>
-        <div class="row" id="realtime-device-row">
+        <div class="row-setting" id="realtime-device-row">
           <label for="realtime-diarization-device">Device</label>
           <select id="realtime-diarization-device">
             <option value="cpu">CPU</option>
             <option value="cuda">CUDA (GPU)</option>
           </select>
-          <div class="hint" id="realtime-gpu-hint"></div>
         </div>
         <div class="row" id="realtime-performance-row">
           <label for="realtime-performance-level">Latency / Accuracy tradeoff</label>
@@ -141,7 +135,7 @@
             Enable final speaker identification
           </label>
         </div>
-        <div class="row">
+        <div class="row-setting">
           <label for="batch-diarization-provider">Provider</label>
           <select id="batch-diarization-provider">
             <option value="none">Off</option>
@@ -149,20 +143,19 @@
             <option value="whisperx">whisperx — WhisperX-based</option>
           </select>
         </div>
-        <div class="row">
+        <div class="row-setting">
           <label for="batch-diarization-model">Model</label>
           <select id="batch-diarization-model">
             <option value="pyannote/speaker-diarization-3.1">pyannote/speaker-diarization-3.1</option>
             <option value="pyannote/speaker-diarization-3.0">pyannote/speaker-diarization-3.0 (faster on CPU)</option>
           </select>
         </div>
-        <div class="row" id="batch-device-row">
+        <div class="row-setting" id="batch-device-row">
           <label for="batch-diarization-device">Device</label>
           <select id="batch-diarization-device">
             <option value="cpu">CPU</option>
             <option value="cuda">CUDA (GPU)</option>
           </select>
-          <div class="hint" id="batch-gpu-hint"></div>
         </div>
         <div class="row" id="batch-token-row">
           <label for="batch-hf-token">Hugging Face token</label>
@@ -182,13 +175,13 @@
 
       <section class="panel">
         <h2>AI Models</h2>
-        <div class="row">
+        <div class="row-setting">
           <label for="model-choice">Choose model</label>
           <input id="model-choice" type="text" placeholder="Select or type a model" list="model-options" />
           <datalist id="model-options"></datalist>
-          <div class="hint" id="model-empty-hint">
-            No visible models yet. Enable models below.
-          </div>
+        </div>
+        <div class="hint" id="model-empty-hint" style="margin-bottom: 12px;">
+          No visible models yet. Enable models below.
         </div>
         <div class="row">
           <label>Discovered models</label>
@@ -205,103 +198,91 @@
 
         <div class="provider-block">
           <h3>OpenAI</h3>
-          <div class="row">
+          <div class="row-setting">
             <label for="openai-api-key">API key</label>
             <input id="openai-api-key" type="password" placeholder="sk-..." />
           </div>
-          <div class="row">
+          <div class="row-setting-with-buttons">
             <label for="openai-base-url">Base URL</label>
-            <div class="row-inline">
-              <input id="openai-base-url" type="text" value="https://api.openai.com" />
-              <button id="openai-default" class="secondary">Default</button>
-              <button id="test-openai" class="secondary">Test</button>
-              <span id="openai-status" class="status-pill"></span>
-            </div>
+            <input id="openai-base-url" type="text" value="https://api.openai.com" />
+            <button id="openai-default" class="secondary">Default</button>
+            <button id="test-openai" class="secondary">Test</button>
+            <span id="openai-status" class="status-pill"></span>
           </div>
         </div>
 
         <div class="provider-block">
           <h3>Anthropic</h3>
-          <div class="row">
+          <div class="row-setting">
             <label for="anthropic-api-key">API key</label>
             <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." />
           </div>
-          <div class="row">
+          <div class="row-setting-with-buttons">
             <label for="anthropic-base-url">Base URL</label>
-            <div class="row-inline">
-              <input id="anthropic-base-url" type="text" value="https://api.anthropic.com" />
-              <button id="anthropic-default" class="secondary">Default</button>
-              <button id="test-anthropic" class="secondary">Test</button>
-              <span id="anthropic-status" class="status-pill"></span>
-            </div>
+            <input id="anthropic-base-url" type="text" value="https://api.anthropic.com" />
+            <button id="anthropic-default" class="secondary">Default</button>
+            <button id="test-anthropic" class="secondary">Test</button>
+            <span id="anthropic-status" class="status-pill"></span>
           </div>
         </div>
 
         <div class="provider-block">
           <h3>Gemini</h3>
-          <div class="row">
+          <div class="row-setting">
             <label for="gemini-api-key">API key</label>
             <input id="gemini-api-key" type="password" placeholder="AIza..." />
           </div>
-          <div class="row">
+          <div class="row-setting-with-buttons">
             <label for="gemini-base-url">Base URL</label>
-            <div class="row-inline">
-              <input id="gemini-base-url" type="text" value="https://generativelanguage.googleapis.com" />
-              <button id="gemini-default" class="secondary">Default</button>
-              <button id="test-gemini" class="secondary">Test</button>
-              <span id="gemini-status" class="status-pill"></span>
-            </div>
+            <input id="gemini-base-url" type="text" value="https://generativelanguage.googleapis.com" />
+            <button id="gemini-default" class="secondary">Default</button>
+            <button id="test-gemini" class="secondary">Test</button>
+            <span id="gemini-status" class="status-pill"></span>
           </div>
         </div>
 
         <div class="provider-block">
           <h3>Grok</h3>
-          <div class="row">
+          <div class="row-setting">
             <label for="grok-api-key">API key</label>
             <input id="grok-api-key" type="password" placeholder="xai-..." />
           </div>
-          <div class="row">
+          <div class="row-setting-with-buttons">
             <label for="grok-base-url">Base URL</label>
-            <div class="row-inline">
-              <input id="grok-base-url" type="text" value="https://api.x.ai" />
-              <button id="grok-default" class="secondary">Default</button>
-              <button id="test-grok" class="secondary">Test</button>
-              <span id="grok-status" class="status-pill"></span>
-            </div>
+            <input id="grok-base-url" type="text" value="https://api.x.ai" />
+            <button id="grok-default" class="secondary">Default</button>
+            <button id="test-grok" class="secondary">Test</button>
+            <span id="grok-status" class="status-pill"></span>
           </div>
         </div>
 
         <div class="provider-block">
           <h3>Ollama</h3>
-          <div class="row">
+          <div class="row-setting">
             <label for="ollama-api-key">API key (optional)</label>
             <input id="ollama-api-key" type="password" placeholder="optional" />
           </div>
-          <div class="row">
+          <div class="row-setting-with-buttons">
             <label for="ollama-base-url">Base URL</label>
-            <div class="row-inline">
-              <input id="ollama-base-url" type="text" value="http://127.0.0.1:11434" />
-              <button id="ollama-default" class="secondary">Default</button>
-              <button id="test-ollama" class="secondary">Test</button>
-              <span id="ollama-status" class="status-pill"></span>
-            </div>
+            <input id="ollama-base-url" type="text" value="http://127.0.0.1:11434" />
+            <button id="ollama-default" class="secondary">Default</button>
+            <button id="test-ollama" class="secondary">Test</button>
+            <span id="ollama-status" class="status-pill"></span>
           </div>
         </div>
 
         <div class="provider-block">
           <h3>LM Studio</h3>
-          <div class="row">
+          <div class="row-setting">
             <label for="lmstudio-api-key">API key (optional)</label>
             <input id="lmstudio-api-key" type="password" placeholder="optional" />
           </div>
-          <div class="row">
+          <div class="row-setting-with-buttons">
             <label for="lmstudio-base-url">Base URL</label>
-            <div class="row-inline">
-              <input id="lmstudio-base-url" type="text" value="http://127.0.0.1:1234" />
-              <button id="lmstudio-default" class="secondary">Default</button>
-              <button id="test-lmstudio" class="secondary">Test</button>
-              <span id="lmstudio-status" class="status-pill"></span>
-            </div>
+            <input id="lmstudio-base-url" type="text" value="http://127.0.0.1:1234" />
+            <button id="lmstudio-default" class="secondary">Default</button>
+            <button id="test-lmstudio" class="secondary">Test</button>
+            <span id="lmstudio-status" class="status-pill"></span>
           </div>
         </div>
 

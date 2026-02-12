@@ -1002,12 +1002,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
-  document
-    .getElementById("back-home")
-    .addEventListener("click", () => {
-      window.location.href = "/";
-    });
-
   await refreshVersion();
   await refreshDevices();
   await loadAudioSettings();
