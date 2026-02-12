@@ -9,32 +9,204 @@ const state = {
   renameMode: false,
   pollIntervalId: null,
   showRawSegments: false,
+  eventsSource: null,  // SSE connection for meeting events
 };
 
-// Conditional polling: only poll when meeting needs updates
+// Polling removed - using SSE for all real-time updates
+// Keep these stub functions for any legacy code paths
 function meetingNeedsPolling() {
-  const meeting = state.meeting;
-  return meeting?.status === "in_progress" || !!meeting?.finalization_status;
+  return false; // Never poll, SSE handles updates
 }
 
 function startPollingIfNeeded() {
-  if (state.pollIntervalId) return; // Already polling
-  if (!meetingNeedsPolling()) return; // No need to poll
-  
-  state.pollIntervalId = setInterval(async () => {
-    if (meetingNeedsPolling()) {
-      await refreshMeeting();
-    } else {
-      // Meeting is complete, stop polling
-      stopPolling();
-    }
-  }, 5000);
+  // No-op: SSE subscription handles all updates
 }
 
 function stopPolling() {
   if (state.pollIntervalId) {
     clearInterval(state.pollIntervalId);
     state.pollIntervalId = null;
+  }
+}
+
+// SSE subscription for real-time meeting events (including streaming summary)
+function subscribeToMeetingEvents() {
+  if (state.eventsSource) {
+    state.eventsSource.close();
+  }
+  
+  state.eventsSource = new EventSource("/api/meetings/events");
+  
+  state.eventsSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      
+      // Only handle events for this meeting
+      if (data.meeting_id !== state.meetingId) return;
+      
+      // #region agent log
+      if (data.type === "summary_start" || data.type === "summary_complete" || 
+          (data.type === "summary_token" && Math.random() < 0.05)) {
+        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:subscribeToMeetingEvents',message:'event_received',data:{type:data.type,hasText:!!data.data?.text,textLen:data.data?.text?.length},timestamp:Date.now(),hypothesisId:'H7'})}).catch(()=>{});
+      }
+      // #endregion
+      
+      handleMeetingEvent(data);
+    } catch (e) {
+      // Ignore parse errors (heartbeats, etc.)
+    }
+  };
+  
+  state.eventsSource.onerror = () => {
+    // Reconnect after a delay
+    setTimeout(() => {
+      if (state.meetingId) {
+        subscribeToMeetingEvents();
+      }
+    }, 3000);
+  };
+}
+
+function unsubscribeFromMeetingEvents() {
+  if (state.eventsSource) {
+    state.eventsSource.close();
+    state.eventsSource = null;
+  }
+}
+
+function handleMeetingEvent(event) {
+  const summaryEl = document.getElementById("manual-summary");
+  const summaryOutputEl = document.getElementById("summary-output");
+  
+  switch (event.type) {
+    case "summary_start":
+      // Clear summary areas when streaming starts
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleMeetingEvent',message:'summary_start',data:{meetingId:state.meetingId},timestamp:Date.now(),hypothesisId:'SUMFIX'})}).catch(()=>{});
+      // #endregion
+      if (summaryEl) summaryEl.value = "";
+      if (summaryOutputEl) summaryOutputEl.textContent = "";
+      setSummaryStatus("Generating summary...");
+      break;
+      
+    case "summary_token":
+      // Progressive update with accumulated text
+      if (event.data?.text) {
+        if (summaryEl) {
+          summaryEl.value = event.data.text;
+          summaryEl.scrollTop = summaryEl.scrollHeight;
+        }
+        if (summaryOutputEl) {
+          summaryOutputEl.textContent = event.data.text;
+        }
+      }
+      break;
+      
+    case "summary_complete":
+      // Final summary received
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleMeetingEvent',message:'summary_complete',data:{meetingId:state.meetingId,textLen:event.data?.text?.length||0,textPreview:(event.data?.text||'').substring(0,100)},timestamp:Date.now(),hypothesisId:'SUMFIX'})}).catch(()=>{});
+      // #endregion
+      if (event.data?.text) {
+        if (summaryEl) {
+          summaryEl.value = event.data.text;
+          summaryEl.scrollTop = summaryEl.scrollHeight;
+        }
+        if (summaryOutputEl) {
+          summaryOutputEl.textContent = event.data.text;
+        }
+      }
+      setSummaryStatus("Summary complete.");
+      // Refresh to get the complete final meeting state (action items, etc.)
+      refreshMeeting();
+      break;
+    
+    case "status_updated":
+      // Meeting status changed (in_progress, completed, etc.)
+      if (event.data?.status) {
+        if (state.meeting) {
+          state.meeting.status = event.data.status;
+          state.meeting.ended_at = event.data.ended_at;
+        }
+        updateTranscriptionControls();
+        // Update UI status displays
+        const meetingStatus = event.data.status === "in_progress" ? "In progress" : "Completed";
+        const transcriptCount = state.meeting?.transcript?.segments?.length || 0;
+        if (transcriptCount > 0) {
+          setTranscriptStatus(`${meetingStatus} • Transcript (${transcriptCount} segments)`);
+        } else {
+          setTranscriptStatus(`${meetingStatus} • No transcript yet.`);
+        }
+      }
+      break;
+    
+    case "title_updated":
+      // Title changed
+      if (event.data?.title) {
+        if (state.meeting) {
+          state.meeting.title = event.data.title;
+        }
+        setMeetingTitle(event.data.title);
+      }
+      break;
+    
+    case "attendees_updated":
+      // Attendees list changed
+      if (event.data?.attendees) {
+        if (state.meeting) {
+          state.meeting.attendees = event.data.attendees;
+        }
+        setAttendeeEditor(event.data.attendees);
+      }
+      break;
+    
+    case "transcript_segment":
+      // Single new transcript segment added
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleMeetingEvent',message:'transcript_segment',data:{meetingId:state.meetingId,segmentText:(event.data?.segment?.text||'').substring(0,50)},timestamp:Date.now(),hypothesisId:'TXFIX'})}).catch(()=>{});
+      // #endregion
+      if (event.data?.segment && state.meeting) {
+        if (!state.meeting.transcript) {
+          state.meeting.transcript = { segments: [] };
+        }
+        state.meeting.transcript.segments.push(event.data.segment);
+        state.lastTranscriptSegments = state.meeting.transcript.segments;
+        // Only update display if not in live streaming mode (live streaming has its own SSE)
+        if (!state.liveStreaming) {
+          setTranscriptOutput(state.meeting.transcript.segments);
+        }
+        // Also update the debug panel transcript
+        updateSummaryDebugPanel(state.meeting);
+        const meetingStatus = state.meeting.status === "in_progress" ? "In progress" : "Completed";
+        setTranscriptStatus(`${meetingStatus} • Transcript (${state.meeting.transcript.segments.length} segments)`);
+      }
+      break;
+    
+    case "transcript_updated":
+      // Full transcript update (e.g., after diarization)
+      if (event.data?.segments && state.meeting) {
+        if (!state.meeting.transcript) {
+          state.meeting.transcript = { segments: [] };
+        }
+        state.meeting.transcript.segments = event.data.segments;
+        state.lastTranscriptSegments = event.data.segments;
+        if (!state.liveStreaming) {
+          setTranscriptOutput(event.data.segments);
+        }
+        const meetingStatus = state.meeting.status === "in_progress" ? "In progress" : "Completed";
+        setTranscriptStatus(`${meetingStatus} • Transcript (${event.data.segments.length} segments)`);
+      }
+      break;
+    
+    case "finalization_status":
+      // Finalization progress update
+      showFinalizationStatus(event.status_text, event.progress);
+      break;
+      
+    case "meeting_updated":
+      // General meeting update - do a full refresh
+      refreshMeeting();
+      break;
   }
 }
 
@@ -539,28 +711,103 @@ async function manualSummarize() {
   setManualSummaryStatus("Summarizing…");
   setGlobalBusy("Summarizing...");
 
+  // Clear both summary areas before streaming
+  const summaryEl = document.getElementById("manual-summary");
+  const summaryOutputEl = document.getElementById("summary-output");
+  if (summaryEl) summaryEl.value = "";
+  if (summaryOutputEl) summaryOutputEl.textContent = "";
+
   try {
-    const result = await fetchJson(`/api/meetings/${state.meetingId}/manual-summarize`, {
+    // Use streaming endpoint
+    const response = await fetch(`/api/meetings/${state.meetingId}/summarize-stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ transcript_text: transcriptText }),
     });
-    if (result.meeting) {
-      state.meeting = result.meeting;
-      setMeetingTitle(state.meeting.title || "");
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || `Request failed: ${response.status}`);
     }
-    const summaryEl = document.getElementById("manual-summary");
-    if (summaryEl) {
-      summaryEl.value = result.summary_text || "";
-      summaryEl.scrollTop = summaryEl.scrollHeight;
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let accumulatedText = "";
+    let buffer = "";
+
+    // #region agent log
+    let _chunkCount = 0;
+    let _tokenCount = 0;
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:manualSummarize',message:'stream_reader_start',data:{},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
+
+    while (true) {
+      const { done, value } = await reader.read();
+      // #region agent log
+      _chunkCount++;
+      if (_chunkCount <= 10 || _chunkCount % 20 === 0) {
+        const chunkLen = value ? value.length : 0;
+        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:manualSummarize',message:'chunk_received',data:{chunkNum:_chunkCount,chunkLen,done},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
+      }
+      // #endregion
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (!trimmedLine || !trimmedLine.startsWith("data: ")) continue;
+
+        const dataStr = trimmedLine.slice(6); // Remove "data: " prefix
+        if (dataStr === "[DONE]") {
+          // Stream completed
+          continue;
+        }
+
+        try {
+          const data = JSON.parse(dataStr);
+          if (data.token) {
+            accumulatedText += data.token;
+            // #region agent log
+            _tokenCount++;
+            if (_tokenCount <= 5 || _tokenCount % 20 === 0) {
+              fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:manualSummarize',message:'token_parsed',data:{tokenNum:_tokenCount,accLen:accumulatedText.length},timestamp:Date.now(),hypothesisId:'H3,H5'})}).catch(()=>{});
+            }
+            // #endregion
+            // Update both textareas progressively
+            if (summaryEl) {
+              summaryEl.value = accumulatedText;
+              summaryEl.scrollTop = summaryEl.scrollHeight;
+            }
+            if (summaryOutputEl) {
+              summaryOutputEl.textContent = accumulatedText;
+            }
+            setManualSummaryStatus("Receiving summary...");
+          } else if (data.error) {
+            throw new Error(data.error);
+          }
+        } catch (parseError) {
+          if (parseError.message && !parseError.message.includes("JSON")) {
+            throw parseError;
+          }
+          // Ignore JSON parse errors for incomplete data
+        }
+      }
     }
-    setManualSummaryStatus("Summary updated.");
-    // Summary is already persisted server-side; still schedule a save to catch any edits.
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:manualSummarize',message:'stream_complete',data:{totalChunks:_chunkCount,totalTokens:_tokenCount,finalLen:accumulatedText.length},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
+
+    setManualSummaryStatus("Summary complete.");
+    // Schedule a save to persist the streamed summary
     scheduleManualBuffersSave();
-    // Refresh the main Summary section immediately.
-    await refreshMeeting();
+    // Don't refresh meeting here - it would overwrite the textarea with stale data
+    // before the scheduled save completes. The streamed content is already displayed.
   } catch (error) {
     setManualSummaryStatus(`Summarize failed: ${error.message}`);
+    debugError("Streaming summarization failed", error);
   } finally {
     setGlobalBusy("");
     if (button) button.disabled = false;
@@ -642,12 +889,7 @@ async function refreshMeeting() {
     }).catch(() => {});
     await updateTranscriptionControls();
     
-    // Start or stop polling based on meeting state
-    if (meetingNeedsPolling()) {
-      startPollingIfNeeded();
-    } else {
-      stopPolling();
-    }
+    // SSE subscription handles all real-time updates
   } catch (error) {
     fetch("/api/logs/client", {
       method: "POST",
@@ -848,8 +1090,10 @@ async function updateSummaryDebugPanel(meeting) {
     notesEl.value = meeting?.manual_notes || "";
   }
   const summaryEl = document.getElementById("manual-summary");
-  if (summaryEl && summaryEl.value !== (meeting?.manual_summary || "")) {
-    summaryEl.value = meeting?.manual_summary || "";
+  // Use manual_summary if present, otherwise fall back to the auto-generated summary
+  const summaryText = meeting?.manual_summary || meeting?.summary?.text || "";
+  if (summaryEl && summaryEl.value !== summaryText) {
+    summaryEl.value = summaryText;
   }
 }
 
@@ -1194,7 +1438,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   
   window.addEventListener("beforeunload", () => {
     stopLiveTranscript();
+    unsubscribeFromMeetingEvents();
   });
+
+  // Subscribe to SSE for real-time events (streaming summary, etc.)
+  subscribeToMeetingEvents();
 
   await refreshVersion();
   await refreshMeeting();

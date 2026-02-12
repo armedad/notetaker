@@ -731,7 +731,8 @@ class TranscriptionPipeline:
                         meeting_id, exc
                     )
             
-            # Step 7-9: Generate summary
+            # Step 7-9: Generate summary with streaming events
+            # Backend always generates - frontend subscribes to events if connected
             self._meeting_store.publish_finalization_status(
                 meeting_id, "Generating summary...", 0.6
             )
@@ -745,7 +746,60 @@ class TranscriptionPipeline:
             result = None
             if summary_text.strip():
                 try:
-                    result = self._summarization.summarize(summary_text)
+                    # Emit summary_start event for any connected frontends
+                    self._meeting_store.publish_event("summary_start", meeting_id)
+                    
+                    # Use streaming summarization, emitting tokens as they arrive
+                    accumulated_summary = ""
+                    token_count = 0
+                    # #region agent log
+                    _log_path = "/Users/chee/zapier ai project/.cursor/debug.log"
+                    import json as _json
+                    import time as _time
+                    def _dbg(msg, data=None):
+                        with open(_log_path, "a") as _f:
+                            _f.write(_json.dumps({"location":"transcription_pipeline.py:finalize","message":msg,"data":data or {},"timestamp":int(_time.time()*1000),"hypothesisId":"STREAM"})+"\n")
+                    _dbg("summary_stream_start", {"meeting_id": meeting_id})
+                    # #endregion
+                    for token in self._summarization.summarize_stream(summary_text):
+                        accumulated_summary += token
+                        token_count += 1
+                        # #region agent log
+                        if token_count <= 5 or token_count % 20 == 0:
+                            _dbg("summary_token_emit", {"token_num": token_count, "accum_len": len(accumulated_summary)})
+                        # #endregion
+                        # Emit each token for progressive display
+                        self._meeting_store.publish_event(
+                            "summary_token",
+                            meeting_id,
+                            {"text": accumulated_summary}
+                        )
+                    # #region agent log
+                    _dbg("summary_stream_done", {"total_tokens": token_count, "final_len": len(accumulated_summary)})
+                    # #endregion
+                    
+                    # Parse the final result (may be JSON with summary + action_items)
+                    final_text = accumulated_summary.strip()
+                    
+                    # Try to parse as JSON for structured response
+                    import json
+                    try:
+                        parsed = json.loads(final_text)
+                        result = {
+                            "summary": str(parsed.get("summary", final_text)).strip(),
+                            "action_items": parsed.get("action_items", []) or [],
+                        }
+                    except json.JSONDecodeError:
+                        result = {"summary": final_text, "action_items": []}
+                    
+                    # Emit summary_complete event
+                    self._meeting_store.publish_event(
+                        "summary_complete",
+                        meeting_id,
+                        {"text": result.get("summary", "")}
+                    )
+                    
+                    # Save to meeting store
                     self._meeting_store.add_summary(
                         meeting_id,
                         summary=result.get("summary", ""),

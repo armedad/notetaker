@@ -2,7 +2,7 @@ import json
 import logging
 import os
 
-from typing import Optional
+from typing import Generator, Optional
 
 from app.services.llm import (
     AnthropicProvider,
@@ -225,6 +225,36 @@ class SummarizationService:
         provider = self._get_provider(provider_override)
         self._logger.info("Raw prompt using provider=%s", provider.__class__.__name__)
         return provider.prompt(prompt)
+
+    def summarize_stream(
+        self, transcript: str, provider_override: Optional[str] = None
+    ) -> Generator[str, None, None]:
+        """Stream summary tokens as they are generated.
+        
+        Uses the summary prompt template and streams the LLM response token by token.
+        
+        Args:
+            transcript: The transcript to summarize
+            provider_override: Optional override for the LLM provider
+            
+        Yields:
+            Token strings as they arrive from the LLM
+        """
+        if not transcript.strip():
+            raise LLMProviderError("Transcript is empty")
+        
+        provider = self._get_provider(provider_override)
+        self._logger.info("Streaming summarization using provider=%s", provider.__class__.__name__)
+
+        prompt_path = os.path.join(self._prompts_dir, "summary_prompt.txt")
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                template = f.read()
+        except OSError as exc:
+            raise LLMProviderError(f"Missing summary prompt file: {prompt_path}") from exc
+
+        prompt = template.replace("{{transcript}}", transcript)
+        yield from provider.prompt_stream(prompt)
 
     def identify_speaker_name(
         self,

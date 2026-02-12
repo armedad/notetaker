@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from abc import ABC, abstractmethod
+from typing import Generator
 
 
 class LLMProviderError(RuntimeError):
@@ -33,6 +34,11 @@ class LLMProvider(ABC):
     @abstractmethod
     def prompt(self, prompt: str) -> str:
         """Send a raw prompt and return the response text."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def prompt_stream(self, prompt: str) -> Generator[str, None, None]:
+        """Stream a response from the LLM, yielding tokens as they arrive."""
         raise NotImplementedError
 
 
@@ -101,6 +107,31 @@ class BaseLLMProvider(LLMProvider):
             The response text content
         """
         raise NotImplementedError
+
+    def _call_api_stream(
+        self,
+        prompt: str,
+        temperature: float = 0.2,
+        timeout: int = 120,
+        system_prompt: str | None = None,
+    ) -> Generator[str, None, None]:
+        """Make a streaming API call, yielding tokens as they arrive.
+        
+        Default implementation falls back to non-streaming.
+        Subclasses should override this to implement actual streaming.
+        
+        Args:
+            prompt: The user prompt to send
+            temperature: Sampling temperature (0.0-1.0)
+            timeout: Request timeout in seconds
+            system_prompt: Optional system prompt
+            
+        Yields:
+            Token strings as they arrive from the API
+        """
+        # Default fallback: return full response as single chunk
+        result = self._call_api(prompt, temperature, timeout, system_prompt)
+        yield result
     
     @staticmethod
     def _strip_markdown_code_blocks(text: str) -> str:
@@ -238,3 +269,7 @@ class BaseLLMProvider(LLMProvider):
     def prompt(self, prompt_text: str) -> str:
         """Send a raw prompt and return the response text."""
         return self._call_api(prompt_text, temperature=0.3, timeout=60)
+
+    def prompt_stream(self, prompt_text: str) -> Generator[str, None, None]:
+        """Stream a response from the LLM, yielding tokens as they arrive."""
+        yield from self._call_api_stream(prompt_text, temperature=0.3, timeout=120)

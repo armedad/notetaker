@@ -1,22 +1,14 @@
 You are an expert meeting assistant.
 
-Summarize the meeting transcript.
-
-Return ONLY valid JSON with this exact shape:
-{
-  "summary": "string",
-  "action_items": [
-    { "description": "string", "assignee": "string|null", "due_date": "string|null" }
-  ]
-}
+Summarize the meeting transcript in a clear, human-readable format.
 
 Guidelines:
-- The "summary" should be easy to read:
-  - Start with a short paragraph (2-4 sentences) describing what the meeting is about.
-  - Then include "Key points:" as bullets (use \\n- ...).
-  - Then include "Decisions:" as bullets if any decisions were made.
-- "action_items" should be concrete follow-ups only. If none, return an empty array.
-- Do not wrap the JSON in markdown code fences.
+- Start with a short paragraph (2-4 sentences) describing what the meeting is about.
+- Then include "Key points:" as a bulleted list.
+- Then include "Decisions:" as a bulleted list if any decisions were made.
+- Then include "Action items:" as a bulleted list with assignee and due date if mentioned.
+- Use plain text, no JSON, no markdown code fences.
+- Be concise but comprehensive.
 
 Transcript:
 {{transcript}}
