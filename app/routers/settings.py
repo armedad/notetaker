@@ -74,6 +74,8 @@ class TranscriptionSettingsRequest(BaseModel):
     auto_transcribe: bool
     stream_transcribe: bool
     live_transcribe: bool
+    consolidation_max_duration: float = 15.0
+    consolidation_max_gap: float = 2.0
 
 
 class TestingSettingsRequest(BaseModel):
@@ -474,6 +476,8 @@ def create_settings_router(config_path: str) -> APIRouter:
         transcription["auto_transcribe"] = payload.auto_transcribe
         transcription["stream_transcribe"] = payload.stream_transcribe
         transcription["live_transcribe"] = payload.live_transcribe
+        transcription["consolidation_max_duration"] = payload.consolidation_max_duration
+        transcription["consolidation_max_gap"] = payload.consolidation_max_gap
         data["transcription"] = transcription
         with open(config_path, "w", encoding="utf-8") as config_file:
             json.dump(data, config_file, indent=2)

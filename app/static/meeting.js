@@ -8,6 +8,7 @@ const state = {
   selectedAttendeeId: null,
   renameMode: false,
   pollIntervalId: null,
+  showRawSegments: false,
 };
 
 // Conditional polling: only poll when meeting needs updates
@@ -486,8 +487,12 @@ function setManualSummaryStatus(message) {
 function setManualTranscriptionBuffer(text) {
   const el = document.getElementById("manual-transcription");
   if (!el) return;
+  // Only auto-scroll if user was already at bottom (within 5px threshold)
+  const wasAtBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) <= 5;
   el.value = text || "";
-  el.scrollTop = el.scrollHeight;
+  if (wasAtBottom) {
+    el.scrollTop = el.scrollHeight;
+  }
 }
 
 function buildTranscriptTextSafe(meeting) {
@@ -584,7 +589,9 @@ async function refreshMeeting() {
   }
   setGlobalBusy("Loading meeting...");
   try {
-    const meeting = await fetchJson(`/api/meetings/${state.meetingId}`);
+    // Add ?raw=true if showing raw segments
+    const rawParam = state.showRawSegments ? "?raw=true" : "";
+    const meeting = await fetchJson(`/api/meetings/${state.meetingId}${rawParam}`);
     state.meeting = meeting;
     setMeetingTitle(meeting.title || "");
     setAttendeeEditor(meeting.attendees || []);
@@ -1163,6 +1170,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (manualSummaryEl) {
     manualSummaryEl.addEventListener("input", scheduleManualBuffersSave);
   }
+  
+  // Raw segments toggle in debug panel
+  const showRawToggle = document.getElementById("show-raw-segments");
+  if (showRawToggle) {
+    showRawToggle.addEventListener("change", async (e) => {
+      state.showRawSegments = e.target.checked;
+      await refreshMeeting();
+    });
+  }
+  
   window.addEventListener("beforeunload", () => {
     stopLiveTranscript();
   });
