@@ -589,9 +589,8 @@ async function refreshMeeting() {
   }
   setGlobalBusy("Loading meeting...");
   try {
-    // Add ?raw=true if showing raw segments
-    const rawParam = state.showRawSegments ? "?raw=true" : "";
-    const meeting = await fetchJson(`/api/meetings/${state.meetingId}${rawParam}`);
+    // Always fetch consolidated segments for main display
+    const meeting = await fetchJson(`/api/meetings/${state.meetingId}`);
     state.meeting = meeting;
     setMeetingTitle(meeting.title || "");
     setAttendeeEditor(meeting.attendees || []);
@@ -825,12 +824,24 @@ async function saveMeetingTitle() {
 
 // Attendee saving is now done via inline rename - see saveAttendeeName()
 
-function updateSummaryDebugPanel(meeting) {
+async function updateSummaryDebugPanel(meeting) {
   const panel = document.getElementById("summary-debug-panel");
   if (!panel || panel.style.display === "none") {
     return;
   }
-  setManualTranscriptionBuffer(buildTranscriptTextSafe(meeting));
+  
+  // If showing raw segments, fetch them separately for the debug panel
+  if (state.showRawSegments && state.meetingId) {
+    try {
+      const rawMeeting = await fetchJson(`/api/meetings/${state.meetingId}?raw=true`);
+      setManualTranscriptionBuffer(buildTranscriptTextSafe(rawMeeting));
+    } catch (e) {
+      // Fall back to consolidated if raw fetch fails
+      setManualTranscriptionBuffer(buildTranscriptTextSafe(meeting));
+    }
+  } else {
+    setManualTranscriptionBuffer(buildTranscriptTextSafe(meeting));
+  }
 
   const notesEl = document.getElementById("manual-notes");
   if (notesEl && notesEl.value !== (meeting?.manual_notes || "")) {
@@ -1171,12 +1182,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     manualSummaryEl.addEventListener("input", scheduleManualBuffersSave);
   }
   
-  // Raw segments toggle in debug panel
+  // Raw segments toggle in debug panel - only affects the debug panel's transcript
   const showRawToggle = document.getElementById("show-raw-segments");
   if (showRawToggle) {
     showRawToggle.addEventListener("change", async (e) => {
       state.showRawSegments = e.target.checked;
-      await refreshMeeting();
+      // Only update the debug panel, not the whole page
+      await updateSummaryDebugPanel(state.meeting);
     });
   }
   

@@ -180,16 +180,6 @@ def create_transcription_router(
     
     # Real-time diarization service (for live transcription with diart)
     realtime_diarization = RealtimeDiarizationService(realtime_diar_cfg)
-    
-    # Keep legacy config for backwards compatibility with existing code paths
-    diarization_cfg = DiarizationConfig(
-        enabled=bool(diarization_config.get("enabled", False)),
-        provider=diarization_config.get("provider", "pyannote"),
-        model=diarization_config.get("model", "pyannote/speaker-diarization-3.1"),
-        device=diarization_config.get("device", "cpu"),
-        hf_token=diarization_config.get("hf_token"),
-        performance_level=float(diarization_config.get("performance_level", 0.5)),
-    )
 
     live_device = transcription_config.get("live_device", "cpu")
     live_compute = transcription_config.get("live_compute_type", "int8")
@@ -358,7 +348,8 @@ def create_transcription_router(
                 return
             
             pipeline = get_pipeline(model_size, final_device, final_compute)
-            realtime_diarization = RealtimeDiarizationService(diarization_cfg)
+            # Use the properly parsed realtime config, not the legacy config
+            sim_rt_diar = RealtimeDiarizationService(realtime_diar_cfg)
             rt_started = False
             last_rt_offset = 0.0
             
@@ -373,7 +364,7 @@ def create_transcription_router(
                 nonlocal rt_started, last_rt_offset
                 # Start RT diarization once when we see first audio chunk.
                 if not rt_started:
-                    rt_started = bool(realtime_diarization.start(samplerate, channels))
+                    rt_started = bool(sim_rt_diar.start(samplerate, channels))
                     dbg_rt(
                         "app/routers/transcription.py:_run_simulated_transcription",
                         "rt_start_result_simulate",
@@ -386,8 +377,8 @@ def create_transcription_router(
                         run_id="pre-fix",
                         hypothesis_id="H1",
                     )
-                if rt_started and realtime_diarization.is_active():
-                    realtime_diarization.feed_audio(audio_bytes)
+                if rt_started and sim_rt_diar.is_active():
+                    sim_rt_diar.feed_audio(audio_bytes)
                     last_rt_offset = offset_seconds
 
             for segment, seg_language, was_cancelled in pipeline.chunked_transcribe_and_format(
@@ -415,8 +406,14 @@ def create_transcription_router(
                 segments.append(segment)
 
                 # If RT diarization is active, attempt to assign speaker using segment start time.
-                if rt_started and realtime_diarization.is_active():
-                    speaker = realtime_diarization.get_speaker_at(segment["start"])
+                if rt_started and sim_rt_diar.is_active():
+                    speaker = sim_rt_diar.get_speaker_at(segment["start"])
+                    # #region agent log
+                    import json as _json
+                    _log_path = "/Users/chee/zapier ai project/.cursor/debug.log"
+                    with open(_log_path, "a") as _f:
+                        _f.write(_json.dumps({"location":"transcription.py:_run_simulated","message":"speaker_lookup","data":{"seg_start":segment.get("start"),"speaker_found":speaker,"rt_active":sim_rt_diar.is_active(),"annotations_count":len(sim_rt_diar.get_current_annotations())},"timestamp":int(__import__('time').time()*1000),"runId":"attendee-debug","hypothesisId":"H1"})+"\n")
+                    # #endregion
                     if speaker:
                         segment["speaker"] = speaker
                 meeting_store.append_live_segment(meeting_id, segment, language or seg_language)
@@ -427,7 +424,7 @@ def create_transcription_router(
             
             # Stop RT diarization (best-effort) and log stats.
             try:
-                realtime_diarization.stop()
+                sim_rt_diar.stop()
             except Exception:
                 pass
             
