@@ -118,6 +118,21 @@ function setRecordingToggleLabel(recording) {
   button.textContent = recording ? "Stop recording" : "Start recording";
 }
 
+function updateGoToMeetingButton() {
+  const btn = document.getElementById("go-to-meeting");
+  if (!btn) return;
+  
+  const meetingId = state.selectedMeetingId || state.fileMeetingId;
+  const isRecording = state.recording || state.testTranscribing;
+  
+  if (isRecording && meetingId) {
+    btn.style.display = "inline-block";
+    btn.onclick = () => window.location.href = `/meeting.html?id=${meetingId}`;
+  } else {
+    btn.style.display = "none";
+  }
+}
+
 function setTranscriptOutput(message) {
   const output = document.getElementById("transcript-output");
   if (!output) {
@@ -422,6 +437,7 @@ async function refreshRecordingStatus() {
     setStatusError("Status refresh failed. See Console Errors below.");
     setGlobalError("Recording status failed.");
   }
+  updateGoToMeetingButton();
 }
 
 async function loadTestAudioPath() {
@@ -456,6 +472,10 @@ async function startFileRecording() {
         ? `Transcribing file (meeting ${response.meeting_id})`
         : "Transcribing file"
     );
+    // Navigate to the newly created meeting
+    if (response.meeting_id) {
+      window.location.href = `/meeting.html?id=${response.meeting_id}`;
+    }
   } catch (error) {
     if (error.name !== "AbortError") {
       setStatusError(`File transcription failed: ${error.message}`);
@@ -1063,6 +1083,10 @@ async function startRecording() {
     await refreshRecordingStatus();
     startLiveTranscription();
     refreshMeetings();
+    // Navigate to the newly created meeting
+    if (data.recording_id) {
+      window.location.href = `/meeting.html?id=${data.recording_id}`;
+    }
   } catch (error) {
     setOutput(`Failed to start: ${error.message}`);
     setStatusError("Start recording failed. Check Console Errors below.");
