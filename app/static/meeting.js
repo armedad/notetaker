@@ -2,14 +2,12 @@ const state = {
   meetingId: null,
   meeting: null,
   lastTranscriptSegments: null,
-  liveController: null,
-  liveStreaming: false,
   titleSaveTimer: null,
   selectedAttendeeId: null,
   renameMode: false,
   pollIntervalId: null,
   showRawSegments: false,
-  eventsSource: null,  // SSE connection for meeting events
+  eventsSource: null,  // SSE connection for meeting events (handles both mic and file transcription)
 };
 
 // Polling removed - using SSE for all real-time updates
@@ -164,7 +162,7 @@ function handleMeetingEvent(event) {
       break;
     
     case "transcript_segment":
-      // Single new transcript segment added
+      // Single new transcript segment added (unified for both mic and file modes)
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleMeetingEvent',message:'transcript_segment',data:{meetingId:state.meetingId,segmentText:(event.data?.segment?.text||'').substring(0,50)},timestamp:Date.now(),hypothesisId:'TXFIX'})}).catch(()=>{});
       // #endregion
@@ -174,10 +172,8 @@ function handleMeetingEvent(event) {
         }
         state.meeting.transcript.segments.push(event.data.segment);
         state.lastTranscriptSegments = state.meeting.transcript.segments;
-        // Only update display if not in live streaming mode (live streaming has its own SSE)
-        if (!state.liveStreaming) {
-          setTranscriptOutput(state.meeting.transcript.segments);
-        }
+        // Always update display - unified SSE for both mic and file modes
+        setTranscriptOutput(state.meeting.transcript.segments);
         // Also update the debug panel transcript
         updateSummaryDebugPanel(state.meeting);
         const meetingStatus = state.meeting.status === "in_progress" ? "In progress" : "Completed";
@@ -193,9 +189,8 @@ function handleMeetingEvent(event) {
         }
         state.meeting.transcript.segments = event.data.segments;
         state.lastTranscriptSegments = event.data.segments;
-        if (!state.liveStreaming) {
-          setTranscriptOutput(event.data.segments);
-        }
+        // Always update display
+        setTranscriptOutput(event.data.segments);
         const meetingStatus = state.meeting.status === "in_progress" ? "In progress" : "Completed";
         setTranscriptStatus(`${meetingStatus} • Transcript (${event.data.segments.length} segments)`);
       }
@@ -204,6 +199,16 @@ function handleMeetingEvent(event) {
     case "finalization_status":
       // Finalization progress update
       showFinalizationStatus(event.status_text, event.progress);
+      break;
+    
+    case "transcription_error":
+      // Transcription error - unified for both mic and file modes
+      debugError("Transcription error event", event.data);
+      if (event.data?.message) {
+        setTranscriptStatus(`Error: ${event.data.message}`);
+        // Show a non-blocking error notification
+        setGlobalError(`Transcription error: ${event.data.message}`);
+      }
       break;
       
     case "meeting_updated":
@@ -879,15 +884,13 @@ async function refreshMeeting() {
       updateSummaryDebugPanel(meeting);
     }
 
-    // Only start live transcript when this meeting is actually actively transcribing.
-    // If a meeting is "in_progress" but not currently active (paused/stopped), starting
-    // `/api/transcribe/live` causes an SSE error ("Not recording") and can lead to a tight loop.
-    const active = await getActiveTranscription();
-    const isThisMeetingActive = active.active && active.meeting_id === state.meetingId;
-    if (isThisMeetingActive && meeting.status === "in_progress" && !meeting.simulated) {
-      startLiveTranscript();
-    } else {
-      stopLiveTranscript();
+    // Try to start backend transcription for any in-progress meeting
+    // The API handles all cases gracefully:
+    // - "already_running" if transcription is already active
+    // - "not_applicable" if this is a file transcription (which auto-starts)
+    // - "started" if this is a mic recording that needs transcription triggered
+    if (meeting.status === "in_progress") {
+      await startBackendTranscription();
     }
     
     // Update transcription controls (stop/resume buttons)
@@ -911,130 +914,59 @@ async function refreshMeeting() {
   }
 }
 
-function startLiveTranscript() {
-  if (state.liveController || !state.meetingId) {
+/**
+ * Start backend transcription for an active mic recording.
+ * 
+ * This triggers a background transcription thread on the server that:
+ * 1. Reads audio from the microphone
+ * 2. Transcribes chunks and publishes transcript_segment events
+ * 3. All subscribers to /api/meetings/events receive the segments
+ * 
+ * Unlike the old /api/transcribe/live SSE approach, this supports
+ * multiple browser windows viewing the same meeting simultaneously.
+ */
+async function startBackendTranscription() {
+  if (!state.meetingId) {
     return;
   }
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:startLiveTranscript',message:'startLiveTranscript enter',data:{meetingId:state.meetingId,hasController:!!state.liveController,meetingStatus:state.meeting?.status||null},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'LOOP1'})}).catch(()=>{});
-  // #endregion
-  const controller = new AbortController();
-  state.liveController = controller;
-  state.liveStreaming = true;
-  debugLog("Starting live transcript", { meetingId: state.meetingId });
-  streamLiveTranscript(controller)
-    .catch((error) => {
-      if (controller.signal.aborted) {
-        return;
-      }
-      debugError("Live transcript failed", error);
-      setTranscriptStatus(`Live transcript error: ${error.message}`);
-      setGlobalError("Live transcript failed.");
-      logClientError("Live transcript failed", {
+  
+  debugLog("Starting backend transcription", { meetingId: state.meetingId });
+  
+  try {
+    const response = await fetch("/api/transcribe/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
         meeting_id: state.meetingId,
-        message: error.message,
-        name: error.name,
-        stack: error.stack,
-      });
-    })
-    .finally(() => {
-      if (state.liveController === controller) {
-        state.liveController = null;
-      }
-      state.liveStreaming = false;
-      debugLog("Live transcript ended");
+      }),
     });
-}
-
-function stopLiveTranscript() {
-  if (!state.liveController) {
-    return;
-  }
-  debugLog("Stopping live transcript");
-  state.liveController.abort();
-  state.liveController = null;
-  state.liveStreaming = false;
-}
-
-async function streamLiveTranscript(controller) {
-  const segments = state.lastTranscriptSegments
-    ? [...state.lastTranscriptSegments]
-    : [];
-  let language = "unknown";
-  let done = false;
-
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:streamLiveTranscript',message:'fetch live start',data:{meetingId:state.meetingId,segmentsSeeded:segments.length},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'LOOP1'})}).catch(()=>{});
-  // #endregion
-  const response = await fetch("/api/transcribe/live", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: controller.signal,
-    body: JSON.stringify({
-      meeting_id: state.meetingId,
-    }),
-  });
-
-  if (!response.ok || !response.body) {
-    const text = await response.text();
-    throw new Error(text || `Request failed: ${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-
-  while (!done) {
-    const { value, done: streamDone } = await reader.read();
-    if (streamDone) {
-      break;
+    
+    const result = await response.json();
+    
+    // Handle various status responses gracefully
+    if (result.status === "already_running") {
+      debugLog("Backend transcription already running");
+      return;
     }
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() || "";
-
-    for (const part of parts) {
-      const line = part.trim();
-      if (!line.startsWith("data:")) {
-        continue;
-      }
-      const payloadText = line.replace(/^data:\s*/, "");
-      if (!payloadText) {
-        continue;
-      }
-      const event = JSON.parse(payloadText);
-      if (event.type === "meta") {
-        language = event.language || "unknown";
-        setTranscriptStatus(`In progress • Live transcript (${language})`);
-      } else if (event.type === "segment") {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:streamLiveTranscript',message:'segment_received',data:{meetingId:state.meetingId,segIdx:segments.length,start:event.start,end:event.end,textLen:(event.text||'').length,textPreview:(event.text||'').slice(0,50)},timestamp:Date.now(),runId:'bugs-debug',hypothesisId:'H3b'})}).catch(()=>{});
-        // #endregion
-        segments.push(event);
-        state.lastTranscriptSegments = segments;
-        setTranscriptOutput(segments);
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:streamLiveTranscript',message:'setTranscriptOutput_called',data:{meetingId:state.meetingId,segmentsCount:segments.length},timestamp:Date.now(),runId:'bugs-debug',hypothesisId:'H3b'})}).catch(()=>{});
-        // #endregion
-        setManualTranscriptionBuffer(buildTranscriptText(segments));
-      } else if (event.type === "done") {
-        done = true;
-      } else if (event.type === "error") {
-        // Handle "Not recording" as a graceful stop, not an error
-        // This happens when the recording was stopped before we connected
-        if (event.message === "Not recording") {
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:streamLiveTranscript',message:'live got Not recording error event',data:{meetingId:state.meetingId,meetingStatus:state.meeting?.status||null},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'LOOP1'})}).catch(()=>{});
-          // #endregion
-          debugLog("Live transcript: recording already stopped");
-          done = true;
-          // Refresh meeting to get the updated status
-          refreshMeeting().catch(() => {});
-        } else {
-          throw new Error(event.message || "Live transcription failed");
-        }
-      }
+    if (result.status === "not_applicable") {
+      // File transcription or no active recording - this is fine
+      debugLog("Backend transcription not applicable", result.reason);
+      return;
     }
+    if (!response.ok) {
+      throw new Error(result.detail || `Failed to start transcription: ${response.status}`);
+    }
+    
+    debugLog("Backend transcription started", result);
+    setTranscriptStatus("In progress • Live transcript");
+    
+    // Transcript segments will arrive via meeting events SSE
+    // No need to maintain a separate SSE connection
+    
+  } catch (error) {
+    debugError("Failed to start backend transcription", error);
+    // Don't show error to user - meeting events will still work
+    // and transcription may already be running
   }
 }
 

@@ -19,7 +19,7 @@ import tempfile
 import threading
 import time
 import uuid
-from typing import TYPE_CHECKING, Callable, Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, Optional
 
 import numpy as np
 import soundfile as sf
@@ -261,169 +261,6 @@ class TranscriptionPipeline:
                 "speaker": None,
             }, language
 
-    def chunked_transcribe_and_format(
-        self,
-        audio_path: str,
-        cancel_event: Optional[threading.Event] = None,
-        on_chunk_ingested: Optional[Callable[[int, float], None]] = None,
-        on_chunk_audio: Optional[Callable[[bytes, int, int, float], None]] = None,
-    ) -> Iterator[tuple[dict, Optional[str], bool]]:
-        """Transcribe file in chunks with cancellation between chunks.
-        
-        This method reads the audio file in chunks matching the model's optimal
-        chunk size. Cancellation is checked BEFORE each chunk is transcribed,
-        allowing for responsive stop behavior:
-        
-        1. When cancel_event is set, no more audio is ingested
-        2. The current chunk being transcribed will complete
-        3. Any subsequent chunks will be skipped
-        
-        Args:
-            audio_path: Path to audio file
-            cancel_event: Optional threading.Event to check for cancellation
-            on_chunk_ingested: Callback(chunk_num, offset_seconds) when chunk is read
-            
-        Yields:
-            Tuples of (segment dict, detected language, was_cancelled)
-            The was_cancelled flag is True only on the final yield if cancelled
-        """
-        import time
-        chunk_seconds = self.get_chunk_size()
-        
-        # Read audio file info
-        try:
-            info = sf.info(audio_path)
-            samplerate = info.samplerate
-            channels = info.channels
-            total_frames = info.frames
-            total_duration = info.duration
-        except Exception as exc:
-            self._logger.error("Failed to read audio file: %s", exc)
-            return
-        
-        chunk_frames = int(samplerate * chunk_seconds)
-        offset_frames = 0
-        chunk_num = 0
-        language = None
-        was_cancelled = False
-        
-        self._logger.info(
-            "Chunked transcription start: audio=%s duration=%.1fs chunk_size=%.1fs",
-            audio_path,
-            total_duration,
-            chunk_seconds,
-        )
-        
-        while offset_frames < total_frames:
-            # Check for cancellation BEFORE reading next chunk
-            if cancel_event and cancel_event.is_set():
-                cancel_detected_time = time.perf_counter()
-                self._logger.info(
-                    "TIMING: Cancel detected before chunk %d (offset=%.1fs) - stop will complete now",
-                    chunk_num,
-                    offset_frames / samplerate,
-                )
-                was_cancelled = True
-                break
-            
-            # Calculate chunk bounds
-            end_frames = min(offset_frames + chunk_frames, total_frames)
-            frames_to_read = end_frames - offset_frames
-            offset_seconds = offset_frames / samplerate
-            
-            # Read chunk from file
-            try:
-                audio_data, _ = sf.read(
-                    audio_path,
-                    start=offset_frames,
-                    stop=end_frames,
-                    dtype='int16',
-                )
-            except Exception as exc:
-                self._logger.error("Failed to read audio chunk: %s", exc)
-                break
-            
-            # Notify that chunk has been ingested
-            if on_chunk_ingested:
-                on_chunk_ingested(chunk_num, offset_seconds)
-            
-            # Write chunk to temp file for transcription
-            temp_path = None
-            try:
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                    temp_path = tmp.name
-                
-                with sf.SoundFile(
-                    temp_path,
-                    mode="w",
-                    samplerate=samplerate,
-                    channels=channels,
-                    subtype="PCM_16",
-                ) as f:
-                    f.write(audio_data)
-                
-                # Transcribe the chunk with timing instrumentation
-                chunk_start_time = time.perf_counter()
-                self._logger.info(
-                    "TIMING: Chunk %d transcription START (audio offset=%.1fs, audio_duration=%.1fs)",
-                    chunk_num,
-                    offset_seconds,
-                    frames_to_read / samplerate,
-                )
-                
-                segments, chunk_lang, chunk_duration = self.transcribe_chunk(
-                    temp_path,
-                    offset_seconds,
-                )
-                
-                chunk_elapsed = time.perf_counter() - chunk_start_time
-                self._logger.info(
-                    "TIMING: Chunk %d transcription END (took %.2fs for %.1fs audio, ratio=%.2fx)",
-                    chunk_num,
-                    chunk_elapsed,
-                    frames_to_read / samplerate,
-                    chunk_elapsed / (frames_to_read / samplerate) if frames_to_read > 0 else 0,
-                )
-                
-                if chunk_lang and not language:
-                    language = chunk_lang
-
-                # Optional hook: provide raw chunk audio bytes for downstream (e.g. real-time diarization).
-                if on_chunk_audio:
-                    try:
-                        on_chunk_audio(audio_data.tobytes(), samplerate, channels, offset_seconds)
-                    except Exception:
-                        pass
-                
-                # Yield segments from this chunk
-                for segment in segments:
-                    yield segment, language, False
-                    
-            except Exception as exc:
-                self._logger.warning("Chunk %d transcription error: %s", chunk_num, exc)
-            finally:
-                if temp_path and os.path.exists(temp_path):
-                    try:
-                        os.unlink(temp_path)
-                    except OSError:
-                        pass
-            
-            offset_frames = end_frames
-            chunk_num += 1
-        
-        # Final yield to signal completion status
-        if was_cancelled:
-            # Yield a marker that transcription was cancelled
-            self._logger.info(
-                "Chunked transcription cancelled: processed %d chunks",
-                chunk_num,
-            )
-        else:
-            self._logger.info(
-                "Chunked transcription complete: %d chunks",
-                chunk_num,
-            )
-    
     def run_diarization(
         self,
         audio_path: str,
@@ -549,7 +386,7 @@ class TranscriptionPipeline:
     ) -> list[dict]:
         """Persist transcript and finalize meeting via a single shared pipeline.
         
-        This is the convergence point for live vs simulated flows once audio is obtained.
+        This is the convergence point for live (mic) vs file flows once audio is obtained.
         
         Behavior:
         - Optionally applies batch diarization (if enabled) and updates stored speakers
@@ -829,6 +666,27 @@ class TranscriptionPipeline:
                 len(segments) if segments else 0,
                 audio_path,
             )
+            
+            # Guard against double finalization
+            meeting = self._meeting_store.get_meeting(meeting_id)
+            if meeting:
+                current_status = meeting.get("status")
+                finalization_status = meeting.get("finalization_status")
+                # If already completed or currently processing, skip
+                if current_status == "completed" and finalization_status and finalization_status.get("step") == "complete":
+                    self._logger.warning(
+                        "finalize_meeting_with_diarization: skipping - already finalized: meeting_id=%s",
+                        meeting_id,
+                    )
+                    _dbg_fin("finalize_skipped_already_complete", {"meeting_id": meeting_id, "status": current_status})
+                    return meeting.get("summary")
+                if current_status == "processing":
+                    self._logger.warning(
+                        "finalize_meeting_with_diarization: skipping - already processing: meeting_id=%s",
+                        meeting_id,
+                    )
+                    _dbg_fin("finalize_skipped_already_processing", {"meeting_id": meeting_id, "status": current_status})
+                    return None
             
             # Update status to processing
             self._meeting_store.update_status(meeting_id, "processing")

@@ -94,13 +94,13 @@ class TranscriptionFlowSuite(TestSuite):
         """Clean up: stop any running transcription."""
         import aiohttp
 
-        if self.context.get("audio_path"):
+        # Try to stop any running transcription using unified stop endpoint
+        meeting_id = self.context.get("meeting_id")
+        if meeting_id:
             try:
                 async with aiohttp.ClientSession() as session:
-                    # Try to stop any running transcription
-                    url = f"{self.context['api_base']}/api/transcribe/simulate/stop"
-                    params = {"audio_path": self.context["audio_path"]}
-                    async with session.post(url, params=params) as resp:
+                    url = f"{self.context['api_base']}/api/transcribe/stop/{meeting_id}"
+                    async with session.post(url) as resp:
                         pass
             except Exception:
                 pass
@@ -550,26 +550,25 @@ class TranscriptionFlowSuite(TestSuite):
             )
 
     async def _test_stop_transcription(self, ctx: dict) -> TestResult:
-        """Test stopping transcription."""
+        """Test stopping transcription using unified stop endpoint."""
         import aiohttp
 
-        if not ctx.get("audio_path"):
+        meeting_id = ctx.get("meeting_id")
+        if not meeting_id:
             return TestResult(
                 test_id="TF-009",
                 name="Stop transcription works",
                 status=TestStatus.SKIPPED,
-                message="No audio_path available",
+                message="No meeting_id available",
             )
 
         api_base = ctx["api_base"]
-        audio_path = ctx["audio_path"]
 
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"{api_base}/api/transcribe/simulate/stop"
-                params = {"audio_path": audio_path}
+                url = f"{api_base}/api/transcribe/stop/{meeting_id}"
 
-                async with session.post(url, params=params) as resp:
+                async with session.post(url) as resp:
                     if resp.status != 200:
                         text = await resp.text()
                         return TestResult(
