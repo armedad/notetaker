@@ -463,7 +463,19 @@ class MeetingStore:
             )
             return meeting
 
-    def create_simulated_meeting(self, audio_path: str) -> dict:
+    def create_simulated_meeting(
+        self,
+        audio_path: str,
+        samplerate: Optional[int] = None,
+        channels: Optional[int] = None,
+    ) -> dict:
+        """Create a meeting from a file input (simulated or direct).
+        
+        Args:
+            audio_path: Path to the audio file (should be WAV after conversion)
+            samplerate: Audio sample rate (from conversion, matches mic format)
+            channels: Audio channel count (from conversion, matches mic format)
+        """
         with self._lock:
             meeting_id = str(uuid.uuid4())
             created_at = datetime.utcnow().isoformat()
@@ -476,8 +488,8 @@ class MeetingStore:
                 "created_at": created_at,
                 "audio_path": audio_path,
                 "recording_id": None,
-                "samplerate": None,
-                "channels": None,
+                "samplerate": samplerate,
+                "channels": channels,
                 "status": "in_progress",
                 "ended_at": None,
                 "attendees": [],
@@ -491,7 +503,7 @@ class MeetingStore:
             }
             path = self._meeting_path_for_new(created_at, meeting_id)
             self._write_meeting_file(path, meeting)
-            self._logger.info("Simulated meeting created: id=%s", meeting_id)
+            self._logger.info("Simulated meeting created: id=%s audio=%s", meeting_id, audio_path)
             self.publish_event("meeting_started", meeting_id)
             return meeting
 
@@ -734,6 +746,19 @@ class MeetingStore:
 
     def update_attendees(self, meeting_id: str, attendees: list[dict]) -> Optional[dict]:
         with self._lock:
+            # #region agent log
+            _dbg_ndjson(
+                location="meeting_store.py:update_attendees",
+                message="update_attendees called",
+                data={
+                    "meeting_id": meeting_id,
+                    "attendees_count": len(attendees),
+                    "attendee_ids": [a.get("id") for a in attendees[:5]],
+                },
+                run_id="attendee-debug",
+                hypothesis_id="H3",
+            )
+            # #endregion
             path = self._find_meeting_path(meeting_id)
             if not path:
                 return None
@@ -742,6 +767,15 @@ class MeetingStore:
                 return None
             meeting["attendees"] = attendees
             self._write_meeting_file(path, meeting)
+            # #region agent log
+            _dbg_ndjson(
+                location="meeting_store.py:update_attendees:event",
+                message="publishing attendees_updated event",
+                data={"meeting_id": meeting_id, "attendees_count": len(attendees)},
+                run_id="attendee-debug",
+                hypothesis_id="H3",
+            )
+            # #endregion
             self.publish_event("attendees_updated", meeting_id, {"attendees": attendees})
             return meeting
 
@@ -843,6 +877,20 @@ class MeetingStore:
             source: Optional source of the name ("manual", "llm", etc.)
             confidence: Optional confidence level ("high", "medium", "low")
         """
+        # #region agent log
+        _dbg_ndjson(
+            location="meeting_store.py:update_attendee_name",
+            message="update_attendee_name called",
+            data={
+                "meeting_id": meeting_id,
+                "attendee_id": attendee_id,
+                "name": name,
+                "source": source,
+            },
+            run_id="attendee-debug",
+            hypothesis_id="H3",
+        )
+        # #endregion
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
@@ -942,6 +990,20 @@ class MeetingStore:
         self, meeting_id: str, segment: dict, language: Optional[str]
     ) -> Optional[dict]:
         with self._lock:
+            # #region agent log
+            _dbg_ndjson(
+                location="meeting_store.py:append_live_segment:entry",
+                message="append_live_segment called",
+                data={
+                    "meeting_id": meeting_id,
+                    "segment_speaker": segment.get("speaker"),
+                    "segment_speaker_id": segment.get("speaker_id"),
+                    "segment_text_preview": (segment.get("text", "") or "")[:50],
+                },
+                run_id="attendee-debug",
+                hypothesis_id="H1,H2",
+            )
+            # #endregion
             self._trace_log(
                 "meeting_append_live_segment_enter",
                 meeting_id=meeting_id,
