@@ -377,12 +377,14 @@ class MeetingStore:
     def create_from_recording(self, recording: dict, status: str = "in_progress") -> dict:
         with self._lock:
             meeting_id = recording.get("recording_id") or str(uuid.uuid4())
+            session_id = recording.get("session_id") or meeting_id  # Use recording_id as session_id for mic
             existing_path = self._find_meeting_path(meeting_id)
             if existing_path:
                 existing = self._read_meeting_file(existing_path) or {}
                 existing["schema_version"] = existing.get("schema_version", 1)
                 existing["audio_path"] = recording.get("file_path")
                 existing["recording_id"] = recording.get("recording_id")
+                existing["session_id"] = existing.get("session_id") or session_id
                 existing["samplerate"] = recording.get("samplerate")
                 existing["channels"] = recording.get("channels")
                 existing["status"] = status
@@ -427,6 +429,7 @@ class MeetingStore:
                 "created_at": created_at,
                 "audio_path": recording.get("file_path"),
                 "recording_id": recording.get("recording_id"),
+                "session_id": session_id,
                 "samplerate": recording.get("samplerate"),
                 "channels": recording.get("channels"),
                 "status": status,
@@ -456,25 +459,27 @@ class MeetingStore:
                 hypothesis_id="H4",
             )
             # #endregion
-            self._logger.info("Meeting created: id=%s", meeting_id)
+            self._logger.info("Meeting created: id=%s session_id=%s", meeting_id, session_id)
             self.publish_event(
                 "meeting_completed" if status == "completed" else "meeting_started",
                 meeting_id,
             )
             return meeting
 
-    def create_simulated_meeting(
+    def create_file_meeting(
         self,
         audio_path: str,
         samplerate: Optional[int] = None,
         channels: Optional[int] = None,
+        session_id: Optional[str] = None,
     ) -> dict:
-        """Create a meeting from a file input (simulated or direct).
+        """Create a meeting from a file input.
         
         Args:
             audio_path: Path to the audio file (should be WAV after conversion)
             samplerate: Audio sample rate (from conversion, matches mic format)
             channels: Audio channel count (from conversion, matches mic format)
+            session_id: Optional session ID from AudioDataSource (generated if not provided)
         """
         with self._lock:
             meeting_id = str(uuid.uuid4())
@@ -488,6 +493,7 @@ class MeetingStore:
                 "created_at": created_at,
                 "audio_path": audio_path,
                 "recording_id": None,
+                "session_id": session_id or str(uuid.uuid4()),
                 "samplerate": samplerate,
                 "channels": channels,
                 "status": "in_progress",
@@ -499,11 +505,10 @@ class MeetingStore:
                 "summary_state": self._default_summary_state(),
                 "manual_notes": "",
                 "manual_summary": "",
-                "simulated": True,
             }
             path = self._meeting_path_for_new(created_at, meeting_id)
             self._write_meeting_file(path, meeting)
-            self._logger.info("Simulated meeting created: id=%s audio=%s", meeting_id, audio_path)
+            self._logger.info("File meeting created: id=%s audio=%s session_id=%s", meeting_id, audio_path, meeting["session_id"])
             self.publish_event("meeting_started", meeting_id)
             return meeting
 
