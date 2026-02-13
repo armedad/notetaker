@@ -821,7 +821,25 @@ class TranscriptionPipeline:
                         meeting_id, exc
                     )
             
-            # Step 10: Complete
+            # Step 10: Ensure attendees are created from speaker labels
+            # This handles cases where real-time diarization added speakers but batch diarization was skipped
+            meeting = self._meeting_store.get_meeting(meeting_id)
+            if meeting:
+                transcript = meeting.get("transcript", {})
+                current_segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
+                existing_attendees = meeting.get("attendees", [])
+                
+                # Check if any segments have speakers but no attendees exist
+                has_speakers = any(seg.get("speaker") for seg in current_segments)
+                if has_speakers and not existing_attendees:
+                    # Create attendees from speaker labels
+                    self._meeting_store.update_transcript_speakers(meeting_id, current_segments)
+                    self._logger.info(
+                        "Created attendees from existing speaker labels: meeting_id=%s",
+                        meeting_id
+                    )
+            
+            # Step 11: Complete
             self._meeting_store.update_status(meeting_id, "completed")
             self._meeting_store.clear_finalization_status(meeting_id)
             self._meeting_store.publish_event("meeting_updated", meeting_id)
