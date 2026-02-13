@@ -844,7 +844,10 @@ class MeetingStore:
     def update_transcript_speakers(
         self, meeting_id: str, segments: list[dict]
     ) -> Optional[dict]:
-        """Update speaker labels in transcript segments after diarization."""
+        """Update speaker labels in transcript segments after diarization.
+        
+        Also creates/updates attendees based on speaker labels found in segments.
+        """
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
@@ -860,9 +863,35 @@ class MeetingStore:
                     if seg["start"] in segment_map:
                         seg["speaker"] = segment_map[seg["start"]]
                 meeting["transcript"] = transcript
+                
+                # Create/update attendees from speaker labels
+                existing_attendees = meeting.get("attendees", [])
+                attendees, normalized_segments = self._assign_attendees(
+                    existing_attendees, existing_segments
+                )
+                meeting["attendees"] = attendees
+                meeting["transcript"]["segments"] = normalized_segments
+                
+                # #region agent log
+                _dbg_ndjson(
+                    location="meeting_store.py:update_transcript_speakers",
+                    message="attendees_assigned",
+                    data={
+                        "meeting_id": meeting_id,
+                        "existing_attendees_count": len(existing_attendees),
+                        "new_attendees_count": len(attendees),
+                        "attendee_ids": [a.get("id") for a in attendees[:5]],
+                    },
+                    run_id="post-fix",
+                    hypothesis_id="H1",
+                )
+                # #endregion
+                
                 self._write_meeting_file(path, meeting)
                 # Emit full transcript update after diarization
-                self.publish_event("transcript_updated", meeting_id, {"segments": existing_segments})
+                self.publish_event("transcript_updated", meeting_id, {"segments": normalized_segments})
+                # Also emit attendees update
+                self.publish_event("attendees_updated", meeting_id, {"attendees": attendees})
             return meeting
 
     def update_attendee_name(
