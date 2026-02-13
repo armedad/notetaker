@@ -214,6 +214,7 @@ def create_app() -> FastAPI:
                 audio_service,
                 meeting_store,
                 summarization_service,
+                recordings_dir,
             )
         )
         logger.info("Boot: transcription router mounted")

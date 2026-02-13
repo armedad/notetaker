@@ -152,6 +152,9 @@ function handleMeetingEvent(event) {
     
     case "attendees_updated":
       // Attendees list changed
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:attendees_updated',message:'SSE attendees_updated received',data:{attendeesCount:event.data?.attendees?.length||0,attendeeIds:(event.data?.attendees||[]).map(a=>a.id).slice(0,5)},timestamp:Date.now(),runId:'attendee-debug',hypothesisId:'H4'})}).catch(()=>{});
+      // #endregion
       if (event.data?.attendees) {
         if (state.meeting) {
           state.meeting.attendees = event.data.attendees;
@@ -592,6 +595,9 @@ async function autoRenameAttendee() {
 }
 
 function setAttendeeEditor(attendees) {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:setAttendeeEditor',message:'setAttendeeEditor called',data:{attendeesCount:(attendees||[]).length,attendeeIds:(attendees||[]).map(a=>a.id).slice(0,5)},timestamp:Date.now(),runId:'attendee-debug',hypothesisId:'H4,H5'})}).catch(()=>{});
+  // #endregion
   // Render the new attendee list UI
   renderAttendeesList(attendees);
 
@@ -838,6 +844,9 @@ async function refreshMeeting() {
   try {
     // Always fetch consolidated segments for main display
     const meeting = await fetchJson(`/api/meetings/${state.meetingId}`);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:refreshMeeting',message:'meeting fetched',data:{attendeesCount:(meeting.attendees||[]).length,attendeeIds:(meeting.attendees||[]).map(a=>a.id).slice(0,5),segmentsCount:(meeting.transcript?.segments||[]).length},timestamp:Date.now(),runId:'attendee-debug',hypothesisId:'H5'})}).catch(()=>{});
+    // #endregion
     state.meeting = meeting;
     setMeetingTitle(meeting.title || "");
     setAttendeeEditor(meeting.attendees || []);
@@ -1256,6 +1265,9 @@ async function updateTranscriptionControls() {
   } else if (meetingStatus === "in_progress") {
     // Meeting is in_progress but transcription stopped (shouldn't happen normally)
     logToServer("in_progress but not active, showing resume");
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:updateTranscriptionControls',message:'BUG: showing Paused state',data:{meetingId:state.meetingId,meetingStatus,isThisMeetingActive,isAnyActive,active,audioPath:meeting.audio_path},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H3-UI-PAUSED'})}).catch(()=>{});
+    // #endregion
     stopBtn.style.display = "none";
     resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
     statusBadge.textContent = isAnyActive ? "Paused (another active)" : "Paused";
