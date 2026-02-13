@@ -101,10 +101,72 @@ Default to stdlib first. For new packages, explain why and alternatives briefly 
 ## Transcription Architecture (CRITICAL)
 
 - **TranscriptionPipeline:** Centralizes all post-audio processing in `app/services/transcription_pipeline.py`
-- **Simulated transcription:** Uses `stream_transcribe_and_format()` for cancellation support
-- **Cancellation:** `threading.Event` checked after each segment, not just at start/end
 - **Finalization on stop:** When user stops transcription, ALWAYS run summarization and title generation with whatever segments exist
 - **Audio source:** Configured in `config.json` → `audio.source` ("device" for live, "file" for simulated)
+
+## AudioDataSource Abstraction (CRITICAL — DO NOT VIOLATE)
+
+The `AudioDataSource` abstraction exists to ensure the transcription pipeline is **completely opaque to audio source type**. File mode exists purely to test the same code path that mic mode uses.
+
+### Architecture Diagram
+
+```
+┌─────────────────┐     ┌─────────────────┐
+│  MicAudioSource │     │ FileAudioSource │
+└────────┬────────┘     └────────┬────────┘
+         │                       │
+         └───────────┬───────────┘
+                     │
+                     ▼
+         ┌───────────────────────┐
+         │  AudioDataSource      │
+         │  (abstract interface) │
+         │  - get_chunk()        │
+         │  - get_metadata()     │
+         │  - is_complete()      │
+         │  - stop()             │
+         └───────────┬───────────┘
+                     │
+                     ▼
+         ┌───────────────────────┐
+         │  _run_transcription() │
+         │  (SINGLE function)    │
+         └───────────────────────┘
+```
+
+### Invariants (NEVER VIOLATE)
+
+1. **NO `source_type` checks in processing code.** After audio ingestion begins, code must NOT check whether audio comes from mic or file. No `if source_type == "mic"`, no `if isinstance(audio_source, FileAudioSource)`.
+
+2. **Single transcription function.** There is ONE `_run_transcription()` function in `transcription.py` that works with any `AudioDataSource`. Do NOT create separate functions for mic vs file.
+
+3. **Stop via `audio_source.stop()` only.** To stop transcription, call `audio_source.stop()`. The implementation handles source-specific cleanup:
+   - `MicAudioSource.stop()` → signals capture stopped AND stops recording device
+   - `FileAudioSource.stop()` → sets stopped flag and interrupts playback delays
+
+4. **No `source_type` in data structures.** These must NOT contain source_type:
+   - `AudioMetadata` dataclass
+   - `transcription_jobs` registry
+   - API responses from `/api/transcribe/*`
+   - Meeting metadata in `meeting_store`
+
+5. **Unified API endpoints.** Use these source-agnostic endpoints:
+   - `GET /api/transcribe/active` — check if any transcription is running
+   - `POST /api/transcribe/stop/{meeting_id}` — stop any transcription
+
+6. **Frontend must be source-agnostic.** Frontend code must NOT check source type to decide behavior. The backend handles all source-specific logic.
+
+### Allowed Differences (Audio Acquisition ONLY)
+
+The ONLY place where mic vs file may differ is the **audio acquisition layer**:
+- `/api/transcribe/start` — starts mic transcription (creates `MicAudioSource`)
+- `/api/transcribe/simulate` — starts file transcription (creates `FileAudioSource`)
+
+After the `AudioDataSource` is created, all code paths must be identical.
+
+### Reference Documentation
+
+See `docs/post-ingestion-divergences.md` for the full audit of divergences and their resolution.
 
 ## Continuous Documentation
 

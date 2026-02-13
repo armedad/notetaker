@@ -489,7 +489,7 @@ async function startFileRecording() {
 }
 
 async function stopFileRecording() {
-  debugLog("stopFileRecording", { audioPath: state.testAudioPath });
+  debugLog("stopFileRecording", { meetingId: state.fileMeetingId, audioPath: state.testAudioPath });
   
   // Disable toggle button to prevent multiple clicks
   const toggleBtn = document.getElementById("recording-toggle");
@@ -502,10 +502,13 @@ async function stopFileRecording() {
   setStatus("Stopped reading file. Finishing transcription of read audio...");
   
   try {
+    // Use unified stop endpoint with meeting_id
+    const meetingId = state.fileMeetingId;
+    if (!meetingId) {
+      throw new Error("No file meeting ID available");
+    }
     const result = await fetchJson(
-      `/api/transcribe/simulate/stop?audio_path=${encodeURIComponent(
-        state.testAudioPath
-      )}`,
+      `/api/transcribe/stop/${encodeURIComponent(meetingId)}`,
       { method: "POST" }
     );
     debugLog("File stop requested", { result });
@@ -523,12 +526,10 @@ async function stopFileRecording() {
       await new Promise(resolve => setTimeout(resolve, 1000));
       attempts++;
       
-      // Check if transcription has stopped
+      // Check if transcription has stopped using unified active endpoint
       try {
-        const status = await fetchJson(
-          `/api/transcribe/simulate/status?audio_path=${encodeURIComponent(state.testAudioPath)}`
-        );
-        if (status.status === "idle") {
+        const active = await fetchJson(`/api/transcribe/active`);
+        if (!active.active || active.meeting_id !== meetingId) {
           debugLog("File transcription fully stopped", { attempts });
           break;
         }
@@ -635,29 +636,31 @@ async function saveAudioSource(source, deviceIndex) {
 }
 
 async function syncTestTranscriptionStatus() {
-  if (!state.testAudioPath) {
-    return;
-  }
-  debugLog("syncTestTranscriptionStatus", { audioPath: state.testAudioPath });
+  debugLog("syncTestTranscriptionStatus", { fileMeetingId: state.fileMeetingId, audioPath: state.testAudioPath });
   try {
-    const status = await fetchJson(
-      `/api/transcribe/simulate/status?audio_path=${encodeURIComponent(
-        state.testAudioPath
-      )}`
-    );
-    debugLog("simulate status", status);
-    if (status.status === "running") {
-      state.testTranscribing = true;
-      state.recordingSource = "file";
-      state.fileMeetingId = status.meeting_id || state.fileMeetingId;
-      setRecordingToggleLabel(true);
-      setRecordingSourceNote("Recording source: File");
-      setStatus(
-        status.meeting_id
-          ? `Transcribing file (meeting ${status.meeting_id})`
-          : "Transcribing file"
-      );
-      return;
+    // Use unified active endpoint
+    const active = await fetchJson(`/api/transcribe/active`);
+    debugLog("transcription active status", active);
+    
+    // Check if there's an active file transcription (matching our audio path or meeting id)
+    if (active.active) {
+      const isOurTranscription = 
+        (state.fileMeetingId && active.meeting_id === state.fileMeetingId) ||
+        (state.testAudioPath && active.audio_path === state.testAudioPath);
+      
+      if (isOurTranscription) {
+        state.testTranscribing = true;
+        state.recordingSource = "file";
+        state.fileMeetingId = active.meeting_id || state.fileMeetingId;
+        setRecordingToggleLabel(true);
+        setRecordingSourceNote("Recording source: File");
+        setStatus(
+          active.meeting_id
+            ? `Transcribing file (meeting ${active.meeting_id})`
+            : "Transcribing file"
+        );
+        return;
+      }
     }
     state.testTranscribing = false;
     setRecordingToggleLabel(state.recording);
@@ -1081,7 +1084,10 @@ async function startRecording() {
       state.selectedMeetingId = data.recording_id;
     }
     await refreshRecordingStatus();
-    startLiveTranscription();
+    // NOTE: Do NOT call startLiveTranscription() here!
+    // We navigate to meeting.js immediately, which will establish its own
+    // SSE connection for live transcription. Starting one here creates
+    // two competing consumers for the same audio queue, causing audio starvation.
     refreshMeetings();
     // Navigate to the newly created meeting
     if (data.recording_id) {
