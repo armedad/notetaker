@@ -100,7 +100,9 @@ async function fetchJson(url, options = {}) {
 
 function setOutput(message) {
   const output = document.getElementById("recording-output");
-  output.textContent = message;
+  if (output) {
+    output.textContent = message;
+  }
 }
 
 function setStatus(message) {
@@ -112,7 +114,9 @@ function setStatus(message) {
 
 function setStatusError(message) {
   const statusError = document.getElementById("status-error");
-  statusError.textContent = message;
+  if (statusError) {
+    statusError.textContent = message;
+  }
 }
 
 function appendLogLine(message) {
@@ -198,7 +202,9 @@ function bindFilePicker() {
 
 function setDiarizationOutput(message) {
   const output = document.getElementById("diarization-output");
-  output.textContent = message;
+  if (output) {
+    output.textContent = message;
+  }
 }
 
 function setMeetingDetail(message) {
@@ -489,6 +495,9 @@ async function loadTestAudioPath() {
 }
 
 async function startFileRecording() {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startFileRecording',message:'startFileRecording_ENTER',data:{audioPath:state.testAudioPath,audioName:state.testAudioName},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H3'})}).catch(()=>{});
+  // #endregion
   debugLog("startFileRecording", { audioPath: state.testAudioPath });
   setStatus("Recording from file");
   setOutput(`Transcribing file: ${state.testAudioName || state.testAudioPath}`);
@@ -502,6 +511,9 @@ async function startFileRecording() {
         audio_path: state.testAudioPath,
       }),
     });
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startFileRecording',message:'simulate_response_OK',data:{meetingId:response.meeting_id,status:response.status,speedPercent:response.speed_percent},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
     state.fileMeetingId = response.meeting_id || null;
     setStatus("Recording from file");
     // Navigate to the newly created meeting
@@ -509,6 +521,9 @@ async function startFileRecording() {
       window.location.href = `/meeting?id=${response.meeting_id}`;
     }
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startFileRecording',message:'startFileRecording_ERROR',data:{errorMessage:error.message,errorName:error.name,errorStack:error.stack?.substring(0,500)},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
     if (error.name !== "AbortError") {
       setStatusError(`File transcription failed: ${error.message}`);
       setGlobalError("File transcription failed.");
@@ -1049,6 +1064,9 @@ async function deleteMeeting() {
 }
 
 async function startRecording() {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startRecording',message:'startRecording_ENTER',data:{recordingSource:state.recordingSource,testAudioPath:state.testAudioPath,testTranscribing:state.testTranscribing,recording:state.recording},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H1'})}).catch(()=>{});
+  // #endregion
   setOutput("Starting recording...");
   setStatusError("");
   setGlobalBusy("Starting recording...");
@@ -1056,6 +1074,9 @@ async function startRecording() {
     const audioSettings = await fetchJson("/api/settings/audio");
     const source = audioSettings.source || "device";
     const storedDeviceIndex = audioSettings.device_index;
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startRecording',message:'audioSettings_fetched',data:{source,storedDeviceIndex,audioSettings},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
     state.recordingSource =
       source === "device" && storedDeviceIndex !== null && storedDeviceIndex !== undefined
         ? `device:${storedDeviceIndex}`
@@ -1079,6 +1100,9 @@ async function startRecording() {
     const maxChannels = selected ? selected.max_input_channels : channels;
     const safeChannels = Math.min(channels, maxChannels || channels);
 
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startRecording',message:'about_to_call_recording_start',data:{deviceIndex,samplerate,channels:safeChannels},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
     const data = await fetchJson("/api/recording/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1088,6 +1112,9 @@ async function startRecording() {
         channels: safeChannels,
       }),
     });
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startRecording',message:'recording_start_OK',data:{recording_id:data.recording_id,file_path:data.file_path},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H1,H2'})}).catch(()=>{});
+    // #endregion
     setOutput(`Recording started: ${data.recording_id}`);
     if (data.file_path) {
       state.lastRecordingPath = data.file_path;
@@ -1106,6 +1133,9 @@ async function startRecording() {
       window.location.href = `/meeting?id=${data.recording_id}`;
     }
   } catch (error) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startRecording',message:'startRecording_CATCH',data:{errorMessage:error.message,errorName:error.name,errorStack:error.stack?.substring(0,500)},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
     setOutput(`Failed to start: ${error.message}`);
     setStatusError("Start recording failed. Check Console Errors below.");
     setGlobalError("Start recording failed.");

@@ -1,3 +1,6 @@
+// #region agent log - parse test (fires synchronously during script load, before DOMContentLoaded)
+fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:TOP_OF_FILE',message:'meeting.js script body executing (no parse error)',data:{},timestamp:Date.now(),runId:'parse-test',hypothesisId:'PARSE'})}).catch(function(){});
+// #endregion
 const state = {
   meetingId: null,
   meeting: null,
@@ -10,14 +13,6 @@ const state = {
   eventsSource: null,  // SSE connection for meeting events (handles both mic and file transcription)
   meetingChat: null,   // ChatUI instance for meeting-specific chat
 };
-
-// #region agent log
-// Debug instrumentation - logs to debug server
-function dbgLog(location, message, data = {}, hypothesisId = '') {
-  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:location,message:message,data:data,timestamp:Date.now(),runId:'meeting-debug',hypothesisId:hypothesisId})}).catch(()=>{});
-  console.log(`[DBG:${location}]`, message, data);
-}
-// #endregion
 
 // Polling removed - using SSE for all real-time updates
 // Keep these stub functions for any legacy code paths
@@ -40,33 +35,18 @@ function stopPolling() {
  * Initialize the meeting chat UI component.
  */
 function initMeetingChat() {
-  // #region agent log
-  dbgLog("initMeetingChat", "START", { hasChatUI: typeof ChatUI !== "undefined" }, "H1");
-  // #endregion
   const container = document.getElementById("meeting-chat-container");
-  // #region agent log
-  dbgLog("initMeetingChat", "container check", { hasContainer: !!container, containerId: container?.id }, "H1");
-  // #endregion
   if (!container || typeof ChatUI === "undefined") {
     console.warn("Chat container or ChatUI not available");
-    // #region agent log
-    dbgLog("initMeetingChat", "BAIL - no container or ChatUI", { hasContainer: !!container, hasChatUI: typeof ChatUI !== "undefined" }, "H1");
-    // #endregion
     return;
   }
   
   // Don't initialize until we have a meeting ID
   if (!state.meetingId) {
     console.debug("Waiting for meeting ID before initializing chat");
-    // #region agent log
-    dbgLog("initMeetingChat", "BAIL - no meetingId", {}, "H1");
-    // #endregion
     return;
   }
   
-  // #region agent log
-  dbgLog("initMeetingChat", "about to create ChatUI", { meetingId: state.meetingId }, "H1");
-  // #endregion
   try {
     state.meetingChat = new ChatUI({
       container: container,
@@ -78,12 +58,10 @@ function initMeetingChat() {
       placeholder: "Ask a question about this meeting...",
       minimal: true, // Hide clear/collapse buttons, no title
     });
-    // #region agent log
-    dbgLog("initMeetingChat", "ChatUI created OK", {}, "H1");
-    // #endregion
   } catch (err) {
+    console.error("ChatUI initialization failed:", err);
     // #region agent log
-    dbgLog("initMeetingChat", "ChatUI ERROR", { error: err.message, stack: err.stack }, "H1");
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:initMeetingChat:ERROR',message:'ChatUI constructor threw',data:{error:err.message,stack:err.stack?.substring(0,300)},timestamp:Date.now(),runId:'post-fix',hypothesisId:'CHAT'})}).catch(()=>{});
     // #endregion
   }
 }
@@ -101,15 +79,7 @@ function subscribeToMeetingEvents() {
       const data = JSON.parse(event.data);
       
       // Only handle events for this meeting
-      if (data.meeting_id !== state.meetingId) return;
-      
-      // #region agent log
-      if (data.type === "summary_start" || data.type === "summary_complete" || 
-          (data.type === "summary_token" && Math.random() < 0.05)) {
-        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:subscribeToMeetingEvents',message:'event_received',data:{type:data.type,hasText:!!data.data?.text,textLen:data.data?.text?.length},timestamp:Date.now(),hypothesisId:'H7'})}).catch(()=>{});
-      }
-      // #endregion
-      
+      if (data.meeting_id !== state.meetingId) return;      
       handleMeetingEvent(data);
     } catch (e) {
       // Ignore parse errors (heartbeats, etc.)
@@ -140,9 +110,6 @@ function handleMeetingEvent(event) {
   switch (event.type) {
     case "summary_start":
       // Clear summary areas when streaming starts
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleMeetingEvent',message:'summary_start',data:{meetingId:state.meetingId},timestamp:Date.now(),hypothesisId:'SUMFIX'})}).catch(()=>{});
-      // #endregion
       if (summaryEl) summaryEl.value = "";
       if (summaryOutputEl) summaryOutputEl.textContent = "";
       setSummaryStatus("Generating summary...");
@@ -163,9 +130,6 @@ function handleMeetingEvent(event) {
       
     case "summary_complete":
       // Final summary received
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleMeetingEvent',message:'summary_complete',data:{meetingId:state.meetingId,textLen:event.data?.text?.length||0,textPreview:(event.data?.text||'').substring(0,100)},timestamp:Date.now(),hypothesisId:'SUMFIX'})}).catch(()=>{});
-      // #endregion
       if (event.data?.text) {
         if (summaryEl) {
           summaryEl.value = event.data.text;
@@ -211,9 +175,6 @@ function handleMeetingEvent(event) {
     
     case "attendees_updated":
       // Attendees list changed
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:attendees_updated',message:'SSE attendees_updated received',data:{attendeesCount:event.data?.attendees?.length||0,attendeeIds:(event.data?.attendees||[]).map(a=>a.id).slice(0,5)},timestamp:Date.now(),runId:'attendee-debug',hypothesisId:'H4'})}).catch(()=>{});
-      // #endregion
       if (event.data?.attendees) {
         if (state.meeting) {
           state.meeting.attendees = event.data.attendees;
@@ -224,9 +185,6 @@ function handleMeetingEvent(event) {
     
     case "transcript_segment":
       // Single new transcript segment added (unified for both mic and file modes)
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleMeetingEvent',message:'transcript_segment',data:{meetingId:state.meetingId,segmentText:(event.data?.segment?.text||'').substring(0,50)},timestamp:Date.now(),hypothesisId:'TXFIX'})}).catch(()=>{});
-      // #endregion
       if (event.data?.segment && state.meeting) {
         if (!state.meeting.transcript) {
           state.meeting.transcript = { segments: [] };
@@ -749,9 +707,6 @@ async function autoRenameAttendee() {
 }
 
 function setAttendeeEditor(attendees) {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:setAttendeeEditor',message:'setAttendeeEditor called',data:{attendeesCount:(attendees||[]).length,attendeeIds:(attendees||[]).map(a=>a.id).slice(0,5)},timestamp:Date.now(),runId:'attendee-debug',hypothesisId:'H4,H5'})}).catch(()=>{});
-  // #endregion
   // Render the new attendee list UI
   renderAttendeesList(attendees);
 
@@ -788,46 +743,19 @@ function buildTranscriptText(segments) {
 
 function setTranscriptOutput(segments) {
   const output = document.getElementById("transcript-output");
-  // #region agent log
-  dbgLog("setTranscriptOutput", "called", { 
-    hasOutputEl: !!output, 
-    segmentCount: segments?.length || 0,
-    outputElId: output?.id,
-    outputElTagName: output?.tagName,
-    outputElClientHeight: output?.clientHeight,
-    outputElOffsetHeight: output?.offsetHeight,
-    outputElDisplay: output ? getComputedStyle(output).display : null,
-    outputElVisibility: output ? getComputedStyle(output).visibility : null,
-  }, "H3,H4,H5");
-  // #endregion
   if (!output) {
-    // #region agent log
-    dbgLog("setTranscriptOutput", "ERROR: transcript-output element not found!", {}, "H3");
-    // #endregion
     return;
   }
   if (!segments || !segments.length) {
     output.textContent = "No transcript yet.";
-    // #region agent log
-    dbgLog("setTranscriptOutput", "set to 'No transcript yet.'", {}, "H4");
-    // #endregion
     return;
   }
   const text = buildTranscriptText(segments);
-  // #region agent log
-  dbgLog("setTranscriptOutput", "setting textContent", { textLength: text.length, textPreview: text.substring(0,100) }, "H4");
-  // #endregion
   output.textContent = text;
-  // #region agent log
-  dbgLog("setTranscriptOutput", "AFTER setting", { actualTextLength: output.textContent.length }, "H4");
-  // #endregion
 }
 
 function setTranscriptStatus(message) {
   const status = document.getElementById("transcript-status");
-  // #region agent log
-  dbgLog("setTranscriptStatus", "called", { hasStatusEl: !!status, message }, "H3,H4");
-  // #endregion
   if (status) {
     status.textContent = message;
   }
@@ -835,9 +763,6 @@ function setTranscriptStatus(message) {
 
 function setSummaryStatus(message) {
   const status = document.getElementById("summary-status");
-  // #region agent log
-  dbgLog("setSummaryStatus", "called", { hasStatusEl: !!status, message }, "H3,H4");
-  // #endregion
   if (status) {
     status.textContent = message;
   }
@@ -845,25 +770,10 @@ function setSummaryStatus(message) {
 
 function setSummaryOutput(message) {
   const output = document.getElementById("summary-output");
-  // #region agent log
-  dbgLog("setSummaryOutput", "called", { 
-    hasOutputEl: !!output, 
-    messageLength: message?.length || 0,
-    outputElClientHeight: output?.clientHeight,
-    outputElOffsetHeight: output?.offsetHeight,
-    outputElDisplay: output ? getComputedStyle(output).display : null,
-  }, "H3,H4,H5");
-  // #endregion
   if (!output) {
-    // #region agent log
-    dbgLog("setSummaryOutput", "ERROR: summary-output element not found!", {}, "H3");
-    // #endregion
     return;
   }
   output.textContent = message;
-  // #region agent log
-  dbgLog("setSummaryOutput", "AFTER setting", { actualTextLength: output.textContent.length }, "H4");
-  // #endregion
 }
 
 function setManualSummaryStatus(message) {
@@ -950,23 +860,8 @@ async function manualSummarize() {
     const decoder = new TextDecoder();
     let accumulatedText = "";
     let buffer = "";
-
-    // #region agent log
-    let _chunkCount = 0;
-    let _tokenCount = 0;
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:manualSummarize',message:'stream_reader_start',data:{},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
-    // #endregion
-
     while (true) {
-      const { done, value } = await reader.read();
-      // #region agent log
-      _chunkCount++;
-      if (_chunkCount <= 10 || _chunkCount % 20 === 0) {
-        const chunkLen = value ? value.length : 0;
-        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:manualSummarize',message:'chunk_received',data:{chunkNum:_chunkCount,chunkLen,done},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
-      }
-      // #endregion
-      if (done) break;
+      const { done, value } = await reader.read();      if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -985,14 +880,7 @@ async function manualSummarize() {
         try {
           const data = JSON.parse(dataStr);
           if (data.token) {
-            accumulatedText += data.token;
-            // #region agent log
-            _tokenCount++;
-            if (_tokenCount <= 5 || _tokenCount % 20 === 0) {
-              fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:manualSummarize',message:'token_parsed',data:{tokenNum:_tokenCount,accLen:accumulatedText.length},timestamp:Date.now(),hypothesisId:'H3,H5'})}).catch(()=>{});
-            }
-            // #endregion
-            // Update both textareas progressively
+            accumulatedText += data.token;            // Update both textareas progressively
             if (summaryEl) {
               summaryEl.value = accumulatedText;
               summaryEl.scrollTop = summaryEl.scrollHeight;
@@ -1012,10 +900,6 @@ async function manualSummarize() {
         }
       }
     }
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:manualSummarize',message:'stream_complete',data:{totalChunks:_chunkCount,totalTokens:_tokenCount,finalLen:accumulatedText.length},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
-    // #endregion
-
     setManualSummaryStatus("Summary complete.");
     // Schedule a save to persist the streamed summary
     scheduleManualBuffersSave();
@@ -1041,34 +925,17 @@ function loadMeetingId() {
 
 async function refreshMeeting() {
   // #region agent log
-  dbgLog("refreshMeeting", "START", { meetingId: state.meetingId }, "H1,H2");
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:refreshMeeting:enter',message:'refreshMeeting called',data:{meetingId:state.meetingId},timestamp:Date.now(),runId:'post-fix',hypothesisId:'REFRESH'})}).catch(()=>{});
   // #endregion
-  
   if (!state.meetingId) {
-    // #region agent log
-    dbgLog("refreshMeeting", "ABORT - no meetingId", {}, "H1");
-    // #endregion
     return;
   }
   setGlobalBusy("Loading meeting...");
   try {
-    // #region agent log
-    dbgLog("refreshMeeting", "fetching meeting from API", {}, "H2");
-    // #endregion
     const meeting = await fetchJson(`/api/meetings/${state.meetingId}`);
     // #region agent log
-    dbgLog("refreshMeeting", "API response received", {
-      hasTitle: !!meeting.title,
-      title: meeting.title,
-      hasTranscript: !!meeting.transcript,
-      segmentCount: meeting.transcript?.segments?.length || 0,
-      hasSummary: !!meeting.summary?.text,
-      summaryPreview: meeting.summary?.text?.substring(0,50),
-      hasNotes: !!meeting.manual_notes,
-      status: meeting.status,
-    }, "H2");
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:refreshMeeting:loaded',message:'meeting data loaded',data:{meetingId:state.meetingId,status:meeting.status,hasTranscript:!!(meeting.transcript?.segments?.length),segmentCount:meeting.transcript?.segments?.length||0,hasSummary:!!meeting.summary?.text,title:meeting.title},timestamp:Date.now(),runId:'post-fix',hypothesisId:'REFRESH'})}).catch(()=>{});
     // #endregion
-    
     state.meeting = meeting;
     
     setMeetingTitle(meeting.title || "");
@@ -1079,9 +946,6 @@ async function refreshMeeting() {
     
     if (meeting.transcript?.segments?.length) {
       state.lastTranscriptSegments = meeting.transcript.segments;
-      // #region agent log
-      dbgLog("refreshMeeting", "has transcript segments", { count: meeting.transcript.segments.length }, "H2");
-      // #endregion
       setTranscriptStatus(
         `${meetingStatus} • Transcript (${meeting.transcript.segments.length} segments)`
       );
@@ -1089,9 +953,6 @@ async function refreshMeeting() {
         setTranscriptOutput(meeting.transcript.segments);
       }
     } else {
-      // #region agent log
-      dbgLog("refreshMeeting", "no transcript segments", {}, "H2");
-      // #endregion
       setTranscriptStatus(`${meetingStatus} • No transcript yet.`);
       if (!state.liveStreaming) {
         setTranscriptOutput([]);
@@ -1102,81 +963,31 @@ async function refreshMeeting() {
       const summaryUpdated = meeting.summary?.updated_at
         ? `Last updated ${meeting.summary.updated_at}`
         : "Summary ready";
-      // #region agent log
-      dbgLog("refreshMeeting", "has summary", { length: meeting.summary.text.length }, "H2");
-      // #endregion
       setSummaryStatus(`${meetingStatus} • ${summaryUpdated}`);
       setSummaryOutput(meeting.summary.text);
     } else {
-      // #region agent log
-      dbgLog("refreshMeeting", "no summary", {}, "H2");
-      // #endregion
       setSummaryStatus(`${meetingStatus} • No summary yet.`);
       setSummaryOutput("No summary yet.");
     }
     
     // Load manual notes
     const notesEl = document.getElementById("manual-notes");
-    // #region agent log
-    dbgLog("refreshMeeting", "loading notes", { hasNotesEl: !!notesEl, hasNotes: !!meeting?.manual_notes }, "H3");
-    // #endregion
     if (notesEl && notesEl.value !== (meeting?.manual_notes || "")) {
       notesEl.value = meeting?.manual_notes || "";
     }
     
     // Update debug panel if visible
     updateSummaryDebugPanel(meeting);
-    // #region agent log
-    dbgLog("refreshMeeting", "content loading complete", {}, "H1,H2");
-
-    // Try to start backend transcription for any in-progress meeting
-    // The API handles all cases gracefully:
-    // - "already_running" if transcription is already active
-    // - "not_applicable" if this is a file transcription (which auto-starts)
-    // - "started" if this is a mic recording that needs transcription triggered
-    if (meeting.status === "in_progress") {
-      await startBackendTranscription();
-    }
-    
-    // Update transcription controls (stop/resume buttons)
-    fetch("/api/logs/client", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ level: "info", message: "[refreshMeeting] about to call updateTranscriptionControls" }),
-    }).catch(() => {});
-    await updateTranscriptionControls();
-    
-    // SSE subscription handles all real-time updates
   } catch (error) {
-    fetch("/api/logs/client", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ level: "error", message: "[refreshMeeting] error: " + error.message }),
-    }).catch(() => {});
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:refreshMeeting:ERROR',message:'refreshMeeting failed',data:{error:error.message,stack:error.stack?.substring(0,300)},timestamp:Date.now(),runId:'post-fix',hypothesisId:'REFRESH'})}).catch(()=>{});
+    // #endregion
     setGlobalError(`Failed to load meeting: ${error.message}`);
   } finally {
     setGlobalBusy("");
   }
-}
 
-/**
- * Start backend transcription for an active mic recording.
- * 
- * This triggers a background transcription thread on the server that:
- * 1. Reads audio from the microphone
- * 2. Transcribes chunks and publishes transcript_segment events
- * 3. All subscribers to /api/meetings/events receive the segments
- * 
- * Unlike the old /api/transcribe/live SSE approach, this supports
- * multiple browser windows viewing the same meeting simultaneously.
- */
-async function startBackendTranscription() {
-  if (!state.meetingId) {
-    return;
-  }
-  
-  debugLog("Starting backend transcription", { meetingId: state.meetingId });
-  
+  // Start backend transcription (separate try/catch so meeting load errors don't block this)
   try {
     const response = await fetch("/api/transcribe/start", {
       method: "POST",
@@ -1186,24 +997,19 @@ async function startBackendTranscription() {
       }),
     });
     
-    const result = await response.json();
-    
+    const result = await response.json();    
     // Handle various status responses gracefully
     if (result.status === "already_running") {
       debugLog("Backend transcription already running");
-      return;
-    }
-    if (result.status === "not_applicable") {
+    } else if (result.status === "not_applicable") {
       // File transcription or no active recording - this is fine
       debugLog("Backend transcription not applicable", result.reason);
-      return;
-    }
-    if (!response.ok) {
+    } else if (!response.ok) {
       throw new Error(result.detail || `Failed to start transcription: ${response.status}`);
+    } else {
+      debugLog("Backend transcription started", result);
+      setTranscriptStatus("In progress • Live transcript");
     }
-    
-    debugLog("Backend transcription started", result);
-    setTranscriptStatus("In progress • Live transcript");
     
     // Transcript segments will arrive via meeting events SSE
     // No need to maintain a separate SSE connection
@@ -1213,6 +1019,13 @@ async function startBackendTranscription() {
     // Don't show error to user - meeting events will still work
     // and transcription may already be running
   }
+
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:refreshMeeting:end',message:'refreshMeeting completed, calling updateTranscriptionControls',data:{meetingId:state.meetingId,meetingStatus:state.meeting?.status,hasAudioPath:!!state.meeting?.audio_path},timestamp:Date.now(),runId:'meeting-controls-fix',hypothesisId:'H1-H2'})}).catch(()=>{});
+  // #endregion
+
+  // Update transcription controls on initial load (not just on SSE events)
+  await updateTranscriptionControls();
 }
 
 async function saveMeetingTitle() {
@@ -1315,8 +1128,14 @@ function exportMeeting() {
 let initialServerVersion = null;
 
 async function refreshVersion() {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:refreshVersion:enter',message:'refreshVersion called',data:{},timestamp:Date.now(),runId:'post-fix',hypothesisId:'VERSION'})}).catch(()=>{});
+  // #endregion
   try {
     const data = await fetchJson("/api/health");
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:refreshVersion:data',message:'health data received',data:{version:data.version,status:data.status},timestamp:Date.now(),runId:'post-fix',hypothesisId:'VERSION'})}).catch(()=>{});
+    // #endregion
     const badge = document.getElementById("version-badge");
     badge.textContent = data.version;
     
@@ -1383,6 +1202,9 @@ async function getActiveTranscription() {
 }
 
 async function updateTranscriptionControls() {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:updateTranscriptionControls:enter',message:'updateTranscriptionControls called',data:{meetingId:state.meetingId,hasMeeting:!!state.meeting,meetingStatus:state.meeting?.status},timestamp:Date.now(),runId:'meeting-controls-fix',hypothesisId:'H1-H2'})}).catch(()=>{});
+  // #endregion
   const stopBtn = document.getElementById("stop-transcription");
   const resumeBtn = document.getElementById("resume-transcription");
   const statusBadge = document.getElementById("transcription-status-badge");
@@ -1421,6 +1243,10 @@ async function updateTranscriptionControls() {
   const isAnyActive = active.active;
   const meetingStatus = meeting.status;
   
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:updateTranscriptionControls:state',message:'transcription controls state',data:{meetingId:state.meetingId,meetingStatus,isThisMeetingActive,isAnyActive,activeResponse:active,audioPath:meeting.audio_path},timestamp:Date.now(),runId:'meeting-controls-fix',hypothesisId:'H1-H2-H3'})}).catch(()=>{});
+  // #endregion
+  
   logToServer("state", {
     meetingStatus,
     audioPath: meeting.audio_path,
@@ -1439,9 +1265,6 @@ async function updateTranscriptionControls() {
   } else if (meetingStatus === "in_progress") {
     // Meeting is in_progress but transcription stopped (shouldn't happen normally)
     logToServer("in_progress but not active, showing resume");
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:updateTranscriptionControls',message:'BUG: showing Paused state',data:{meetingId:state.meetingId,meetingStatus,isThisMeetingActive,isAnyActive,active,audioPath:meeting.audio_path},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H3-UI-PAUSED'})}).catch(()=>{});
-    // #endregion
     stopBtn.style.display = "none";
     resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
     statusBadge.textContent = isAnyActive ? "Paused (another active)" : "Paused";
@@ -1464,17 +1287,7 @@ async function updateTranscriptionControls() {
 }
 
 async function stopTranscription() {
-  if (!state.meetingId) return;
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:stopTranscription',message:'stop click',data:{meetingId:state.meetingId},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'STOP500'})}).catch(()=>{});
-  // #endregion
-  // #region agent log
-  try {
-    localStorage.setItem("lastStoppedMeetingId", state.meetingId);
-  } catch (_) {}
-  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:stopTranscription',message:'lastStoppedMeetingId set',data:{meetingId:state.meetingId},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H5'})}).catch(()=>{});
-  // #endregion
-  
+  if (!state.meetingId) return;  
   // Disable the stop button immediately to prevent multiple clicks
   const stopBtn = document.getElementById("stop-transcription");
   if (stopBtn) {
@@ -1487,9 +1300,6 @@ async function stopTranscription() {
   
   try {
     const result = await fetchJson(`/api/transcribe/stop/${state.meetingId}`, { method: "POST" });
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:stopTranscription',message:'stop ok',data:{meetingId:state.meetingId,result},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'STOP500'})}).catch(()=>{});
-    // #endregion
     debugLog("Transcription stop requested", { meetingId: state.meetingId, result });
     
     // The stop request returns immediately. Audio capture has stopped.
@@ -1524,9 +1334,6 @@ async function stopTranscription() {
     setTranscriptStatus("Transcription complete.");
     await refreshMeeting();
   } catch (error) {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/meeting.js:stopTranscription',message:'stop error',data:{meetingId:state.meetingId,errorMessage:error?.message||String(error)},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'STOP500'})}).catch(()=>{});
-    // #endregion
     setGlobalError(`Failed to stop transcription: ${error.message}`);
     debugError("Stop transcription failed", error);
   } finally {
@@ -1556,35 +1363,22 @@ async function resumeTranscription() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   // #region agent log
-  dbgLog("DOMContentLoaded", "START", {}, "H1");
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:DOMContentLoaded',message:'meeting.js DOMContentLoaded fired',data:{url:window.location.href},timestamp:Date.now(),runId:'meeting-controls-fix',hypothesisId:'H1'})}).catch(()=>{});
   // #endregion
-  
   try {
     loadMeetingId();
     // #region agent log
-    dbgLog("DOMContentLoaded", "loadMeetingId OK", { meetingId: state.meetingId }, "H1");
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:DOMContentLoaded:loadMeetingId',message:'meetingId loaded',data:{meetingId:state.meetingId},timestamp:Date.now(),runId:'post-fix',hypothesisId:'INIT'})}).catch(()=>{});
     // #endregion
   } catch (error) {
     // #region agent log
-    dbgLog("DOMContentLoaded", "loadMeetingId FAILED", { error: error.message }, "H1");
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:DOMContentLoaded:loadMeetingId:ERROR',message:'loadMeetingId failed',data:{error:error.message},timestamp:Date.now(),runId:'post-fix',hypothesisId:'INIT'})}).catch(()=>{});
     // #endregion
     setGlobalError(error.message);
     return;
   }
 
-  const titleInput = document.getElementById("meeting-title");
-  // #region agent log
-  dbgLog("DOMContentLoaded", "elements check", {
-    hasTitleInput: !!titleInput,
-    hasDeleteBtn: !!document.getElementById("delete-meeting"),
-    hasExportBtn: !!document.getElementById("export-meeting"),
-    hasTranscriptOutput: !!document.getElementById("transcript-output"),
-    hasSummaryOutput: !!document.getElementById("summary-output"),
-    hasManualNotes: !!document.getElementById("manual-notes"),
-    hasMeetingGrid: !!document.getElementById("meeting-grid"),
-  }, "H1,H3");
-  // #endregion
-  
+  const titleInput = document.getElementById("meeting-title");  
   if (titleInput) {
     titleInput.addEventListener("input", scheduleTitleSave);
   }
@@ -1681,39 +1475,33 @@ document.addEventListener("DOMContentLoaded", async () => {
   initPanelMaximize();
   
   window.addEventListener("beforeunload", () => {
-    stopLiveTranscript();
+    stopPolling();
     unsubscribeFromMeetingEvents();
   });
 
   // Subscribe to SSE for real-time events (streaming summary, etc.)
   subscribeToMeetingEvents();
+
   // #region agent log
-  dbgLog("DOMContentLoaded", "subscribeToMeetingEvents OK", {}, "H1");
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:DOMContentLoaded:pre-init',message:'about to call initMeetingChat, refreshVersion, refreshMeeting',data:{meetingId:state.meetingId},timestamp:Date.now(),runId:'post-fix',hypothesisId:'INIT'})}).catch(()=>{});
   // #endregion
 
   // Initialize meeting chat UI
   initMeetingChat();
-  // #region agent log
-  dbgLog("DOMContentLoaded", "initMeetingChat OK", {}, "H1");
-  // #endregion
 
   // #region agent log
-  dbgLog("DOMContentLoaded", "about to call refreshVersion", {}, "H1");
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:DOMContentLoaded:post-initChat',message:'initMeetingChat done, calling refreshVersion',data:{hasChatInstance:!!state.meetingChat},timestamp:Date.now(),runId:'post-fix',hypothesisId:'INIT'})}).catch(()=>{});
   // #endregion
+
   await refreshVersion();
+
   // #region agent log
-  dbgLog("DOMContentLoaded", "refreshVersion OK", {}, "H1");
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:DOMContentLoaded:post-refreshVersion',message:'refreshVersion done, calling refreshMeeting',data:{versionBadge:document.getElementById("version-badge")?.textContent},timestamp:Date.now(),runId:'post-fix',hypothesisId:'INIT'})}).catch(()=>{});
   // #endregion
-  
-  // #region agent log
-  dbgLog("DOMContentLoaded", "about to call refreshMeeting", {}, "H1");
-  // #endregion
+
   await refreshMeeting();
+
   // #region agent log
-  dbgLog("DOMContentLoaded", "refreshMeeting OK", {}, "H1");
-  // #endregion
-  
-  // #region agent log
-  dbgLog("DOMContentLoaded", "END - all init complete", {}, "H1");
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:DOMContentLoaded:complete',message:'DOMContentLoaded fully complete',data:{meetingId:state.meetingId,hasMeeting:!!state.meeting,meetingStatus:state.meeting?.status},timestamp:Date.now(),runId:'post-fix',hypothesisId:'INIT'})}).catch(()=>{});
   // #endregion
 });
