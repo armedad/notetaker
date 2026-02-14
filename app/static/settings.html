@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Settings — Notetaker</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/theme.js"></script>
   </head>
   <body>
     <main class="container">
@@ -18,6 +19,18 @@
         <div class="status error" id="global-error"></div>
         <div class="status" id="global-busy"></div>
       </header>
+
+      <section class="panel">
+        <h2>Appearance</h2>
+        <div class="row-setting">
+          <label for="theme-select">Theme</label>
+          <select id="theme-select">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="system">Follow system</option>
+          </select>
+        </div>
+      </section>
 
       <section class="panel">
         <div class="panel-header">

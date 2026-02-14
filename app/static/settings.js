@@ -1071,10 +1071,67 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
+  // Theme selector
+  const themeSelect = document.getElementById("theme-select");
+  if (themeSelect) {
+    themeSelect.addEventListener("change", () => {
+      const theme = themeSelect.value;
+      // Apply immediately via theme.js
+      if (window.NotetakerTheme) {
+        window.NotetakerTheme.set(theme);
+      }
+      // Save to server
+      scheduleSave(() => saveAppearanceSettings());
+    });
+  }
+
   await refreshVersion();
   await refreshDevices();
   await loadAudioSettings();
   await loadTranscriptionSettings();
   await loadSummarizationSettings();
   await loadDiarizationSettings();
+  await loadAppearanceSettings();
 });
+
+async function loadAppearanceSettings() {
+  try {
+    const response = await fetch("/api/settings/appearance");
+    if (!response.ok) {
+      return;
+    }
+    const data = await response.json();
+    const themeSelect = document.getElementById("theme-select");
+    if (themeSelect && data.theme) {
+      themeSelect.value = data.theme;
+      // Sync with theme.js (in case localStorage differs from server)
+      if (window.NotetakerTheme) {
+        window.NotetakerTheme.syncFromServer(data.theme);
+      }
+    }
+  } catch (error) {
+    debugError("Failed to load appearance settings", error);
+  }
+}
+
+async function saveAppearanceSettings() {
+  const themeSelect = document.getElementById("theme-select");
+  if (!themeSelect) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/settings/appearance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        theme: themeSelect.value,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    debugLog("Appearance settings saved");
+  } catch (error) {
+    debugError("Failed to save appearance settings", error);
+  }
+}
