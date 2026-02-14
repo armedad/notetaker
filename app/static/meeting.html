@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Meeting — Notetaker</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/theme.js"></script>
   </head>
   <body class="meeting-layout">
     <header class="meeting-header">
@@ -125,7 +126,21 @@
       </div>
     </div>
 
+    <script>
+    // Diagnostic: catch ALL errors on this page
+    window.addEventListener('error', function(e) {
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.html:error_handler',message:'GLOBAL ERROR CAUGHT',data:{message:e.message||'',filename:e.filename||'',lineno:e.lineno||0,colno:e.colno||0,type:e.type||'',errorStr:e.error?String(e.error):''},timestamp:Date.now(),runId:'diag',hypothesisId:'DIAG'})}).catch(function(){});
+    });
+    // Diagnostic: confirm inline scripts work
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.html:inline_script',message:'INLINE SCRIPT OK - about to load chat.js and meeting.js',data:{},timestamp:Date.now(),runId:'diag',hypothesisId:'DIAG'})}).catch(function(){});
+    </script>
     <script src="/static/chat.js?v=1"></script>
-    <script src="/static/meeting.js?v=174"></script>
+    <script>
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.html:after_chat_js',message:'AFTER chat.js loaded',data:{},timestamp:Date.now(),runId:'diag',hypothesisId:'DIAG'})}).catch(function(){});
+    </script>
+    <script src="/static/meeting.js?v=181"></script>
+    <script>
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.html:after_meeting_js',message:'AFTER meeting.js loaded',data:{typeof_state:typeof state,typeof_refreshMeeting:typeof refreshMeeting},timestamp:Date.now(),runId:'diag',hypothesisId:'DIAG'})}).catch(function(){});
+    </script>
   </body>
 </html>

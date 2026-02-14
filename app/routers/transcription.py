@@ -403,6 +403,9 @@ def create_transcription_router(
         """
         segments: list[dict] = []
         language = None
+        # #region agent log
+        _dbg_ndjson(location="transcription.py:_run_transcription", message="THREAD_ENTER", data={"meeting_id": meeting_id, "model_size": model_size, "audio_source_type": type(audio_source).__name__}, run_id="start-debug", hypothesis_id="H4")
+        # #endregion
         
         try:
             metadata = audio_source.get_metadata()
@@ -414,6 +417,9 @@ def create_transcription_router(
             chunk_seconds = transcription_config.get("chunk_seconds", 30.0)
             
             pipeline = get_pipeline(model_size, live_device, live_compute)
+            # #region agent log
+            _dbg_ndjson(location="transcription.py:_run_transcription", message="pipeline_created", data={"meeting_id": meeting_id, "samplerate": samplerate, "channels": channels, "bytes_per_second": bytes_per_second, "chunk_seconds": chunk_seconds, "live_device": live_device, "live_compute": live_compute}, run_id="start-debug", hypothesis_id="H4")
+            # #endregion
             
             # Create per-session real-time diarization
             session_rt_diarization = RealtimeDiarizationService(realtime_diar_cfg)
@@ -584,6 +590,10 @@ def create_transcription_router(
                 
         except Exception as exc:
             logger.exception("Transcription error: meeting_id=%s error=%s", meeting_id, exc)
+            # #region agent log
+            import traceback as _tb_run
+            _dbg_ndjson(location="transcription.py:_run_transcription", message="THREAD_CRASH", data={"meeting_id": meeting_id, "exc_type": type(exc).__name__, "exc_str": str(exc)[:1000], "traceback": _tb_run.format_exc()[-2000:]}, run_id="start-debug", hypothesis_id="H4")
+            # #endregion
             # Publish error event for frontend notification
             try:
                 meeting_store.publish_event("transcription_error", meeting_id, {
@@ -604,6 +614,9 @@ def create_transcription_router(
 
     @router.post("/api/transcribe/simulate")
     def simulate_transcribe(payload: SimulateTranscribeRequest) -> dict:
+        # #region agent log
+        _dbg_ndjson(location="transcription.py:simulate_transcribe", message="ENTER", data={"audio_path": payload.audio_path, "meeting_id": payload.meeting_id, "speed_percent": payload.speed_percent}, run_id="start-debug", hypothesis_id="H3")
+        # #endregion
         original_audio_path = payload.audio_path
         if not os.path.isabs(original_audio_path):
             raise HTTPException(status_code=400, detail="audio_path must be absolute")
@@ -737,15 +750,24 @@ def create_transcription_router(
         - Uses the same event publishing as file transcription
         """
         meeting_id = payload.meeting_id
+        # #region agent log
+        _dbg_ndjson(location="transcription.py:start_live_transcription", message="ENTER", data={"meeting_id": meeting_id, "model_size": payload.model_size}, run_id="start-debug", hypothesis_id="H2")
+        # #endregion
         
         # Check if already running
         with transcription_jobs_lock:
             if meeting_id in transcription_jobs:
+                # #region agent log
+                _dbg_ndjson(location="transcription.py:start_live_transcription", message="ALREADY_RUNNING", data={"meeting_id": meeting_id}, run_id="start-debug", hypothesis_id="H2")
+                # #endregion
                 return {"status": "already_running", "meeting_id": meeting_id}
         
         # Verify recording is active for this meeting
         # If no active recording, return gracefully (file mode uses /api/transcribe/simulate instead)
         status = audio_service.current_status()
+        # #region agent log
+        _dbg_ndjson(location="transcription.py:start_live_transcription", message="recording_status_check", data={"meeting_id": meeting_id, "recording": status.get("recording"), "recording_id": status.get("recording_id"), "id_match": status.get("recording_id") == meeting_id, "capture_stopped": status.get("capture_stopped")}, run_id="start-debug", hypothesis_id="H2")
+        # #endregion
         if not status.get("recording") or status.get("recording_id") != meeting_id:
             return {"status": "not_applicable", "meeting_id": meeting_id, "reason": "no_active_recording"}
         

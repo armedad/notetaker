@@ -83,6 +83,10 @@ class TestingSettingsRequest(BaseModel):
     audio_name: str = ""
 
 
+class AppearanceSettingsRequest(BaseModel):
+    theme: str = "system"  # "light", "dark", or "system"
+
+
 def create_settings_router(config_path: str) -> APIRouter:
     router = APIRouter()
 
@@ -504,5 +508,30 @@ def create_settings_router(config_path: str) -> APIRouter:
         with open(config_path, "w", encoding="utf-8") as config_file:
             json.dump(data, config_file, indent=2)
         return {"status": "ok"}
+
+    @router.get("/api/settings/appearance")
+    def get_appearance_settings() -> dict:
+        if not os.path.exists(config_path):
+            return {"theme": "system"}
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            data = json.load(config_file)
+        return data.get("appearance", {"theme": "system"})
+
+    @router.post("/api/settings/appearance")
+    def update_appearance_settings(payload: AppearanceSettingsRequest) -> dict:
+        # Validate theme value
+        valid_themes = ["light", "dark", "system"]
+        theme = payload.theme if payload.theme in valid_themes else "system"
+        
+        data = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as config_file:
+                data = json.load(config_file)
+        appearance = data.get("appearance", {})
+        appearance["theme"] = theme
+        data["appearance"] = appearance
+        with open(config_path, "w", encoding="utf-8") as config_file:
+            json.dump(data, config_file, indent=2)
+        return {"status": "ok", "theme": theme}
 
     return router
