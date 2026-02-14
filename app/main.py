@@ -57,9 +57,12 @@ from app.routers.settings import create_settings_router
 from app.routers.summarization import create_summarization_router
 from app.routers.uploads import create_uploads_router
 from app.routers.testing import create_testing_router
+from app.routers.chat import create_chat_router
 from app.services.audio_capture import AudioCaptureService
 from app.services.meeting_store import MeetingStore
 from app.services.summarization import SummarizationService
+from app.services.search_service import SearchService
+from app.services.chat_service import ChatService
 from app.services.logging_setup import configure_logging
 from app.services.crash_logging import enable_crash_logging
 
@@ -222,6 +225,11 @@ def create_app() -> FastAPI:
         logger.info("Boot: meetings router mounted")
         app.include_router(create_summarization_router(meeting_store, summarization_service))
         logger.info("Boot: summarization router mounted")
+        # Chat service and router
+        search_service = SearchService(meeting_store)
+        chat_service = ChatService(meeting_store, summarization_service, search_service)
+        app.include_router(create_chat_router(chat_service))
+        logger.info("Boot: chat router mounted")
         app.include_router(create_settings_router(config_path))
         logger.info("Boot: settings router mounted")
         app.include_router(

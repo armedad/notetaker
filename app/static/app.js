@@ -21,10 +21,52 @@ const state = {
   meetingsEvents: null,
   recordingSource: "device",
   fileMeetingId: null,
+  overallChat: null,  // ChatUI instance for overall chat
 };
 
 function debugLog(message, data = {}) {
   console.debug(`[Home] ${message}`, data);
+}
+
+/**
+ * Initialize the overall chat UI component for querying all meetings.
+ */
+function initOverallChat() {
+  const container = document.getElementById("overall-chat-container");
+  if (!container || typeof ChatUI === "undefined") {
+    console.warn("Overall chat container or ChatUI not available");
+    return;
+  }
+  
+  state.overallChat = new ChatUI({
+    container: container,
+    endpoint: "/api/chat/overall",
+    buildPayload: (question) => ({
+      question: question,
+      max_meetings: 5,
+      include_transcripts: true,
+    }),
+    placeholder: "Ask a question about your meetings...",
+    title: "Search All Meetings",
+    fullscreen: true,  // Use fullscreen variant on home page
+  });
+}
+
+/**
+ * Initialize collapsible panels.
+ */
+function initCollapsiblePanels() {
+  const logsToggle = document.getElementById("logs-toggle");
+  const logsBody = document.getElementById("logs-body");
+  if (logsToggle && logsBody) {
+    logsToggle.addEventListener("click", () => {
+      logsBody.classList.toggle("collapsed");
+      const indicator = logsToggle.querySelector(".collapse-indicator");
+      if (indicator) {
+        indicator.textContent = logsBody.classList.contains("collapsed") ? "▸" : "▾";
+      }
+    });
+  }
 }
 
 function debugError(message, error) {
@@ -63,20 +105,14 @@ function setOutput(message) {
 
 function setStatus(message) {
   const status = document.getElementById("recording-status");
-  status.textContent = message;
+  if (status) {
+    status.textContent = message;
+  }
 }
 
 function setStatusError(message) {
   const statusError = document.getElementById("status-error");
   statusError.textContent = message;
-}
-
-function setRecordingSourceNote(message) {
-  const note = document.getElementById("recording-settings-note");
-  if (!note) {
-    return;
-  }
-  note.textContent = message || "";
 }
 
 function appendLogLine(message) {
@@ -150,12 +186,12 @@ function resetFileInputLabel() {
 }
 
 function bindFilePicker() {
-  const button = document.getElementById("file-picker-button");
+  const fileNameBox = document.getElementById("file-name-box");
   const input = document.getElementById("test-audio-upload");
-  if (!button || !input) {
+  if (!fileNameBox || !input) {
     return;
   }
-  button.addEventListener("click", () => {
+  fileNameBox.addEventListener("click", () => {
     input.click();
   });
 }
@@ -328,8 +364,12 @@ async function refreshHealth() {
   const versionBadge = document.getElementById("version-badge");
   try {
     const data = await fetchJson("/api/health");
-    statusEl.textContent = `Status: ${data.status} (${data.version})`;
-    versionBadge.textContent = data.version;
+    if (statusEl) {
+      statusEl.textContent = `Status: ${data.status} (${data.version})`;
+    }
+    if (versionBadge) {
+      versionBadge.textContent = data.version;
+    }
     
     // Track version changes and show alert if server was updated
     if (data.version) {
@@ -340,8 +380,12 @@ async function refreshHealth() {
       }
     }
   } catch (error) {
-    statusEl.textContent = `Health check failed: ${error.message}`;
-    versionBadge.textContent = "v?.?.?.?";
+    if (statusEl) {
+      statusEl.textContent = `Health check failed: ${error.message}`;
+    }
+    if (versionBadge) {
+      versionBadge.textContent = "v?.?.?.?";
+    }
     setGlobalError("Health check failed.");
   }
 }
@@ -418,23 +462,16 @@ async function refreshRecordingStatus() {
     }
     setRecordingToggleLabel(state.recording || state.testTranscribing);
     if (state.testTranscribing) {
-      setStatus(
-        state.fileMeetingId
-          ? `Transcribing file (meeting ${state.fileMeetingId})`
-          : "Transcribing file"
-      );
-      setRecordingSourceNote("Recording source: File");
+      setStatus("Recording from file");
+    } else if (data.recording) {
+      setStatus("Recording from mic");
     } else {
-      setStatus(
-        data.recording
-          ? `Recording ${data.recording_id} since ${data.started_at}`
-          : "Not recording"
-      );
+      setStatus("Not recording");
     }
     setStatusError("");
   } catch (error) {
     setStatus(`Status error: ${error.message}`);
-    setStatusError("Status refresh failed. See Console Errors below.");
+    setStatusError("Status refresh failed.");
     setGlobalError("Recording status failed.");
   }
   updateGoToMeetingButton();
@@ -453,8 +490,7 @@ async function loadTestAudioPath() {
 
 async function startFileRecording() {
   debugLog("startFileRecording", { audioPath: state.testAudioPath });
-  setStatus("Transcribing file...");
-  setRecordingSourceNote("Recording source: File");
+  setStatus("Recording from file");
   setOutput(`Transcribing file: ${state.testAudioName || state.testAudioPath}`);
   state.testTranscribing = true;
   setRecordingToggleLabel(true);
@@ -467,11 +503,7 @@ async function startFileRecording() {
       }),
     });
     state.fileMeetingId = response.meeting_id || null;
-    setStatus(
-      response.meeting_id
-        ? `Transcribing file (meeting ${response.meeting_id})`
-        : "Transcribing file"
-    );
+    setStatus("Recording from file");
     // Navigate to the newly created meeting
     if (response.meeting_id) {
       window.location.href = `/meeting?id=${response.meeting_id}`;
@@ -499,7 +531,7 @@ async function stopFileRecording() {
   }
   
   setGlobalBusy("Stopping file ingestion...");
-  setStatus("Stopped reading file. Finishing transcription of read audio...");
+  setStatus("Stopping...");
   
   try {
     // Use unified stop endpoint with meeting_id
@@ -516,7 +548,7 @@ async function stopFileRecording() {
     // The stop request returns immediately. File reading has stopped.
     // Transcription of already-read audio continues in background.
     setGlobalBusy("File reading stopped. Finishing transcription...");
-    setStatus("File reading stopped. Processing remaining audio...");
+    setStatus("Finishing...");
     
     // Poll for completion since transcription continues in background
     let attempts = 0;
@@ -551,8 +583,7 @@ async function stopFileRecording() {
     state.testTranscribing = false;
     setRecordingToggleLabel(state.recording);
     setOutput("File transcription complete.");
-    setStatus("File transcription complete.");
-    setRecordingSourceNote("Recording source: File");
+    setStatus("Not recording");
     await refreshMeetings();
   } catch (error) {
     setStatusError(`Stop file transcription failed: ${error.message}`);
@@ -570,11 +601,6 @@ async function loadAudioSource() {
   try {
     const data = await fetchJson("/api/settings/audio");
     state.recordingSource = data.source || "device";
-    setRecordingSourceNote(
-      state.recordingSource === "file"
-        ? "Recording source: File"
-        : "Recording source: Microphone"
-    );
     renderRecordingSources();
     const select = document.getElementById("recording-source");
     if (select) {
@@ -617,11 +643,11 @@ function renderRecordingSources() {
 }
 
 function updateFileSourceVisibility() {
-  const row = document.getElementById("file-source-row");
-  if (!row) {
+  const fileNameBox = document.getElementById("file-name-box");
+  if (!fileNameBox) {
     return;
   }
-  row.classList.toggle("hidden", state.recordingSource !== "file");
+  fileNameBox.style.display = state.recordingSource === "file" ? "flex" : "none";
 }
 
 async function saveAudioSource(source, deviceIndex) {
@@ -653,12 +679,7 @@ async function syncTestTranscriptionStatus() {
         state.recordingSource = "file";
         state.fileMeetingId = active.meeting_id || state.fileMeetingId;
         setRecordingToggleLabel(true);
-        setRecordingSourceNote("Recording source: File");
-        setStatus(
-          active.meeting_id
-            ? `Transcribing file (meeting ${active.meeting_id})`
-            : "Transcribing file"
-        );
+        setStatus("Recording from file");
         return;
       }
     }
@@ -688,19 +709,18 @@ async function saveTestAudioSelection(audioPath, audioName) {
 
 function updateTestAudioUi() {
   if (!state.testAudioPath) {
-    setTestAudioStatus("No test audio selected.");
+    setTestAudioStatus("No file");
     return;
   }
   const label = state.testAudioName || state.testAudioPath.split("/").pop() || "Selected";
-  setTestAudioStatus(`Selected: ${label}`);
+  setTestAudioStatus(label);
 }
 
 async function uploadTestAudioFile(file) {
   if (!file) {
     return;
   }
-  setStatus("Uploading file...");
-  setGlobalBusy("Uploading test audio...");
+  setGlobalBusy("Uploading file...");
   try {
     const formData = new FormData();
     formData.append("file", file);
@@ -716,13 +736,11 @@ async function uploadTestAudioFile(file) {
     state.testAudioPath = data.audio_path || "";
     state.testAudioName = data.audio_name || file.name || "";
     state.lastRecordingPath = state.testAudioPath;
-    setStatus("File selected.");
     updateTestAudioUi();
     resetFileInputLabel();
     await saveTestAudioSelection(state.testAudioPath, state.testAudioName);
   } catch (error) {
-    setStatus(`Upload failed: ${error.message}`);
-    setGlobalError("Test audio upload failed.");
+    setGlobalError(`Upload failed: ${error.message}`);
   } finally {
     setGlobalBusy("");
   }
@@ -738,6 +756,9 @@ function stopTestTranscription() {
 
 async function refreshLogs() {
   const logOutput = document.getElementById("log-output");
+  if (!logOutput) {
+    return;
+  }
   try {
     const response = await fetch("/api/logs/errors");
     if (!response.ok) {
@@ -804,22 +825,16 @@ function renderMeetings() {
     const item = document.createElement("div");
     item.className = "meeting-item";
     item.dataset.meetingId = meeting.id || "";
-      const label = document.createElement("div");
-      label.className = "meeting-item-text";
-      const title = document.createElement("div");
-      title.className = "meeting-title";
-      title.textContent = meeting.title || "Untitled meeting";
-      const meta = document.createElement("div");
-      meta.className = "meeting-meta";
-      const timestamp = meeting.created_at || "";
-      const inProgress = meeting.status === "in_progress";
-      meta.textContent = inProgress ? `${timestamp} · In progress` : timestamp;
-      label.appendChild(title);
-      label.appendChild(meta);
-    const button = document.createElement("button");
-    button.textContent = "Open";
-    item.appendChild(label);
-    item.appendChild(button);
+    const title = document.createElement("div");
+    title.className = "meeting-title";
+    title.textContent = meeting.title || "Untitled meeting";
+    const meta = document.createElement("div");
+    meta.className = "meeting-meta";
+    const timestamp = meeting.created_at || "";
+    const inProgress = meeting.status === "in_progress";
+    meta.textContent = inProgress ? `${timestamp} · In progress` : timestamp;
+    item.appendChild(title);
+    item.appendChild(meta);
     item.addEventListener("click", () => {
       window.location.href = `/meeting?id=${meeting.id}`;
     });
@@ -1045,9 +1060,6 @@ async function startRecording() {
       source === "device" && storedDeviceIndex !== null && storedDeviceIndex !== undefined
         ? `device:${storedDeviceIndex}`
         : source;
-    setRecordingSourceNote(
-      source === "file" ? "Recording source: File" : "Recording source: Microphone"
-    );
     if (source === "file") {
       if (!state.testAudioPath) {
         setStatusError("Select a file to start.");
@@ -1464,6 +1476,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   await refreshMeetings();
   startMeetingsEventStream();
   setInterval(refreshLogs, 5000);
+  
+  // Initialize collapsible panels
+  initCollapsiblePanels();
+  
+  // Initialize overall chat for querying all meetings
+  initOverallChat();
 });
 
 async function saveDiarizationSettings() {

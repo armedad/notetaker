@@ -6,102 +6,126 @@
     <title>Meeting — Notetaker</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body>
-    <main class="container wide">
-      <header>
-        <div class="title-row">
-          <a href="/" class="app-brand">Notetaker</a>
-          <span id="version-badge" class="version-badge">v0.0.0.0</span>
-          <div class="header-actions">
-            <button id="export-meeting" class="secondary">Export</button>
-            <button id="delete-meeting" class="secondary">Delete</button>
-            <button id="stop-transcription" class="secondary" style="display: none;">Stop</button>
-            <button id="resume-transcription" class="secondary" style="display: none;">Resume</button>
-            <span id="transcription-status-badge" class="status-badge"></span>
-          </div>
-        </div>
-        <div class="status error" id="global-error"></div>
-        <div class="status" id="global-busy"></div>
-      </header>
-
-      <section class="panel flat">
-        <!-- Finalization status banner (shown when processing after recording stops) -->
-        <div id="finalization-status" class="finalization-status" style="display: none;">
-          <div class="finalization-spinner"></div>
+  <body class="meeting-layout">
+    <header class="meeting-header">
+      <div class="title-row">
+        <a href="/" class="app-brand">Notetaker</a>
+        <span id="version-badge" class="version-badge">v0.0.0.0</span>
+        <input id="meeting-title" type="text" class="meeting-title-inline" placeholder="Untitled meeting" />
+        <div id="finalization-status" class="finalization-status-inline" style="display: none;">
+          <div class="finalization-spinner small"></div>
           <span id="finalization-status-text">Processing...</span>
-          <div id="finalization-progress-bar" class="finalization-progress-bar" style="display: none;">
-            <div id="finalization-progress-fill" class="finalization-progress-fill"></div>
-          </div>
         </div>
-        <input id="meeting-title" type="text" class="meeting-title-input" placeholder="Untitled meeting" />
-      </section>
+        <div class="status error inline" id="global-error"></div>
+        <div class="status inline" id="global-busy"></div>
+        <div class="header-actions">
+          <span id="transcription-status-badge" class="status-badge"></span>
+          <button id="stop-transcription" class="secondary" style="display: none;">Stop</button>
+          <button id="resume-transcription" class="secondary" style="display: none;">Resume</button>
+          <button id="export-meeting" class="secondary">Export</button>
+          <button id="delete-meeting" class="secondary">Delete</button>
+        </div>
+      </div>
+    </header>
 
-      <section class="panel flat">
-        <h2>Attendees</h2>
-        <div class="attendees-container">
-          <div class="attendees-list-column">
-            <div class="attendees-list" id="attendees-list">
-              <!-- Attendee items rendered by JS -->
-              <div class="attendees-empty">No attendees detected yet.</div>
+    <div class="meeting-body">
+      <!-- Left sidebar: Attendees list -->
+      <aside class="meeting-sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-title">Attendees</span>
+          <span class="auto-rename-status" id="auto-rename-status"></span>
+        </div>
+        <div class="attendees-list" id="attendees-list">
+          <div class="attendees-empty">No attendees detected yet.</div>
+        </div>
+      </aside>
+
+      <!-- Main content: 2x2 grid -->
+      <main class="meeting-main">
+        <div class="meeting-grid-2x2" id="meeting-grid">
+          <!-- Upper left: Transcript -->
+          <section class="grid-panel transcript-panel" data-panel="transcript">
+            <div class="grid-panel-header">
+              <h2>Transcript</h2>
+              <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
             </div>
-            <div class="auto-rename-status" id="auto-rename-status"></div>
-          </div>
-          <div class="attendees-detail-column" id="attendees-detail">
-            <div class="attendee-segments" id="attendee-segments">
-              <!-- Segments shown when attendee is selected -->
+            <div class="status" id="transcript-status">No transcript yet.</div>
+            <div class="output transcript" id="transcript-output"></div>
+          </section>
+
+          <!-- Upper right: Summary -->
+          <section class="grid-panel summary-panel" data-panel="summary">
+            <div class="grid-panel-header">
+              <h2>Summary</h2>
+              <div class="grid-panel-actions">
+                <button id="manual-summarize" class="secondary small">Summarize</button>
+                <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+              </div>
             </div>
-          </div>
-        </div>
-      </section>
+            <div class="status" id="summary-status">Summary will appear here.</div>
+            <div class="status" id="manual-summary-status"></div>
+            <div class="output" id="summary-output">No summary yet.</div>
+          </section>
 
-      <section class="panel flat">
-        <h2>Notes</h2>
-        <textarea id="manual-notes" rows="8" placeholder="Add your notes here..."></textarea>
-      </section>
+          <!-- Lower left: Chat -->
+          <section class="grid-panel chat-panel" data-panel="chat">
+            <div class="grid-panel-header">
+              <h2>Chat</h2>
+              <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+            </div>
+            <div id="meeting-chat-container" class="chat-container-grid"></div>
+          </section>
 
-      <section class="panel flat meeting-grid">
-        <div class="meeting-column">
-          <div class="panel-header">
-            <h2>Summary</h2>
-            <button id="manual-summarize" class="secondary small">Summarize</button>
-          </div>
-          <div class="status" id="summary-status">Summary will appear here.</div>
-          <div class="status" id="manual-summary-status"></div>
-          <div class="output" id="summary-output">No summary yet.</div>
+          <!-- Lower right: Notes -->
+          <section class="grid-panel notes-panel" data-panel="notes">
+            <div class="grid-panel-header">
+              <h2>Notes</h2>
+              <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+            </div>
+            <textarea id="manual-notes" placeholder="Add your notes here..."></textarea>
+          </section>
         </div>
+      </main>
 
-        <div class="meeting-column">
-          <h2>Transcript</h2>
-          <div class="status" id="transcript-status">No transcript yet.</div>
-          <div class="output transcript" id="transcript-output"></div>
+      <!-- Right sidebar: Debug panel (hidden by default) -->
+      <aside class="meeting-debug-sidebar" id="debug-sidebar" style="display: none;">
+        <div class="sidebar-header">
+          <span class="sidebar-title">Debug</span>
+          <button id="close-debug" class="icon-btn" title="Close">&#10005;</button>
         </div>
-      </section>
-
-      <section class="panel flat">
-        <div class="row">
-          <button id="toggle-summary-debug" class="secondary">Debug panel</button>
-        </div>
-        <div id="summary-debug-panel" class="summary-debug-panel" style="display: none;">
+        <div class="debug-panel-content">
           <div class="row">
             <label>
               <input id="show-raw-segments" type="checkbox" />
               Show raw (unconsolidated) segments
             </label>
           </div>
-          <div class="summary-debug-grid">
-            <div class="summary-debug-column">
-              <h3>Transcription (raw)</h3>
-              <textarea id="manual-transcription" rows="10" readonly></textarea>
-            </div>
-            <div class="summary-debug-column">
-              <h3>Summary (raw)</h3>
-              <textarea id="manual-summary" rows="10"></textarea>
-            </div>
+          <div class="debug-section">
+            <h3>Transcription (raw)</h3>
+            <textarea id="manual-transcription" rows="8" readonly></textarea>
+          </div>
+          <div class="debug-section">
+            <h3>Summary (raw)</h3>
+            <textarea id="manual-summary" rows="8"></textarea>
           </div>
         </div>
-      </section>
-    </main>
+      </aside>
+    </div>
 
-    <script src="/static/meeting.js?v=172"></script>
+    <!-- Debug toggle button (fixed position, lower right) -->
+    <button id="toggle-debug" class="debug-toggle-btn" title="Toggle debug panel">&#128736;</button>
+
+    <!-- Attendee detail popover (positioned next to attendee) -->
+    <div class="attendee-detail-popover" id="attendee-detail-popup" style="display: none;">
+      <div class="attendee-detail-header">
+        <span class="attendee-detail-name" id="attendee-detail-name">Speaker</span>
+      </div>
+      <div class="attendee-segments" id="attendee-segments">
+        <!-- Segments shown when attendee is selected -->
+      </div>
+    </div>
+
+    <script src="/static/chat.js?v=1"></script>
+    <script src="/static/meeting.js?v=174"></script>
   </body>
 </html>

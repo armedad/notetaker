@@ -425,12 +425,28 @@ class TranscriptionPipeline:
         segments_iter, info = self._provider.stream_segments(audio_path)
         language = getattr(info, "language", None)
         
+        # #region agent log
+        import json as _json
+        import time as _time
+        import soundfile as _sf
+        _DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+        try:
+            with _sf.SoundFile(audio_path) as f:
+                actual_audio_duration = f.frames / f.samplerate
+        except:
+            actual_audio_duration = -1
+        raw_segments = []
+        # #endregion
+        
         segments: list[dict] = []
         max_end = 0.0
         for segment in segments_iter:
             seg_end = float(segment.end)
             if seg_end > max_end:
                 max_end = seg_end
+            # #region agent log
+            raw_segments.append({"raw_start": float(segment.start), "raw_end": seg_end})
+            # #endregion
             segments.append({
                 "type": "segment",
                 "start": float(segment.start) + offset_seconds,
@@ -438,6 +454,32 @@ class TranscriptionPipeline:
                 "text": segment.text.strip(),
                 "speaker": None,
             })
+        
+        # #region agent log
+        first_raw_start = raw_segments[0]["raw_start"] if raw_segments else None
+        last_raw_end = raw_segments[-1]["raw_end"] if raw_segments else None
+        try:
+            with open(_DEBUG_LOG_PATH, "a") as f:
+                f.write(_json.dumps({
+                    "location": "transcription_pipeline.py:transcribe_chunk",
+                    "message": "whisper_raw_output",
+                    "data": {
+                        "audio_path": audio_path,
+                        "offset_seconds": offset_seconds,
+                        "actual_audio_duration": actual_audio_duration,
+                        "max_end_from_whisper": max_end,
+                        "num_raw_segments": len(raw_segments),
+                        "first_raw_start": first_raw_start,
+                        "last_raw_end": last_raw_end,
+                        "gap_at_start": first_raw_start if first_raw_start is not None else None,
+                        "gap_at_end": actual_audio_duration - max_end if actual_audio_duration > 0 else None,
+                    },
+                    "timestamp": _time.time() * 1000,
+                    "runId": "gaps-debug",
+                    "hypothesisId": "H3-H4"
+                }) + "\n")
+        except: pass
+        # #endregion
         
         return segments, language, max_end
 

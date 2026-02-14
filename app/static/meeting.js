@@ -8,7 +8,16 @@ const state = {
   pollIntervalId: null,
   showRawSegments: false,
   eventsSource: null,  // SSE connection for meeting events (handles both mic and file transcription)
+  meetingChat: null,   // ChatUI instance for meeting-specific chat
 };
+
+// #region agent log
+// Debug instrumentation - logs to debug server
+function dbgLog(location, message, data = {}, hypothesisId = '') {
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:location,message:message,data:data,timestamp:Date.now(),runId:'meeting-debug',hypothesisId:hypothesisId})}).catch(()=>{});
+  console.log(`[DBG:${location}]`, message, data);
+}
+// #endregion
 
 // Polling removed - using SSE for all real-time updates
 // Keep these stub functions for any legacy code paths
@@ -24,6 +33,58 @@ function stopPolling() {
   if (state.pollIntervalId) {
     clearInterval(state.pollIntervalId);
     state.pollIntervalId = null;
+  }
+}
+
+/**
+ * Initialize the meeting chat UI component.
+ */
+function initMeetingChat() {
+  // #region agent log
+  dbgLog("initMeetingChat", "START", { hasChatUI: typeof ChatUI !== "undefined" }, "H1");
+  // #endregion
+  const container = document.getElementById("meeting-chat-container");
+  // #region agent log
+  dbgLog("initMeetingChat", "container check", { hasContainer: !!container, containerId: container?.id }, "H1");
+  // #endregion
+  if (!container || typeof ChatUI === "undefined") {
+    console.warn("Chat container or ChatUI not available");
+    // #region agent log
+    dbgLog("initMeetingChat", "BAIL - no container or ChatUI", { hasContainer: !!container, hasChatUI: typeof ChatUI !== "undefined" }, "H1");
+    // #endregion
+    return;
+  }
+  
+  // Don't initialize until we have a meeting ID
+  if (!state.meetingId) {
+    console.debug("Waiting for meeting ID before initializing chat");
+    // #region agent log
+    dbgLog("initMeetingChat", "BAIL - no meetingId", {}, "H1");
+    // #endregion
+    return;
+  }
+  
+  // #region agent log
+  dbgLog("initMeetingChat", "about to create ChatUI", { meetingId: state.meetingId }, "H1");
+  // #endregion
+  try {
+    state.meetingChat = new ChatUI({
+      container: container,
+      endpoint: `/api/chat/meeting/${state.meetingId}`,
+      buildPayload: (question) => ({
+        question: question,
+        include_related: false, // Can be made configurable via checkbox
+      }),
+      placeholder: "Ask a question about this meeting...",
+      minimal: true, // Hide clear/collapse buttons, no title
+    });
+    // #region agent log
+    dbgLog("initMeetingChat", "ChatUI created OK", {}, "H1");
+    // #endregion
+  } catch (err) {
+    // #region agent log
+    dbgLog("initMeetingChat", "ChatUI ERROR", { error: err.message, stack: err.stack }, "H1");
+    // #endregion
   }
 }
 
@@ -358,7 +419,7 @@ function renderAttendeesList(attendees) {
     // Click on row (but not buttons) selects the attendee
     item.addEventListener("click", (e) => {
       if (e.target.closest(".icon-btn") || e.target.closest("input")) return;
-      selectAttendee(item.dataset.attendeeId);
+      selectAttendee(item.dataset.attendeeId, item);
     });
   });
   
@@ -423,7 +484,7 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-function selectAttendee(attendeeId) {
+function selectAttendee(attendeeId, clickedElement) {
   state.selectedAttendeeId = attendeeId;
   state.renameMode = false;
 
@@ -437,17 +498,33 @@ function selectAttendee(attendeeId) {
   const attendee = attendees.find((a) => a.id === attendeeId);
 
   if (!attendee) {
-    clearAttendeeDetail();
+    closeAttendeeDetailPopup();
     return;
   }
-
-  const segmentsEl = document.getElementById("attendee-segments");
 
   // Clear status
   setAutoRenameStatus("");
 
+  // Show the popup with attendee details, positioned near the clicked element
+  const element = clickedElement || document.querySelector(`.attendee-item[data-attendee-id="${attendeeId}"]`);
+  showAttendeeDetailPopup(attendee, element);
+}
+
+function showAttendeeDetailPopup(attendee, clickedElement) {
+  const popup = document.getElementById("attendee-detail-popup");
+  const nameEl = document.getElementById("attendee-detail-name");
+  const segmentsEl = document.getElementById("attendee-segments");
+  
+  if (!popup) return;
+  
+  // Set attendee name
+  const name = attendee.name || attendee.label || attendee.id || "Unknown";
+  if (nameEl) {
+    nameEl.textContent = name;
+  }
+  
   // Render segments
-  const segments = getSegmentsForAttendee(attendeeId);
+  const segments = getSegmentsForAttendee(attendee.id);
   if (segmentsEl) {
     if (segments.length === 0) {
       segmentsEl.innerHTML =
@@ -463,20 +540,92 @@ function selectAttendee(attendeeId) {
         `
         )
         .join("");
-      // Scroll to bottom
-      segmentsEl.scrollTop = segmentsEl.scrollHeight;
     }
+  }
+  
+  // Position popup next to the clicked attendee item
+  if (clickedElement) {
+    const rect = clickedElement.getBoundingClientRect();
+    const sidebar = document.querySelector(".meeting-sidebar");
+    const sidebarRect = sidebar ? sidebar.getBoundingClientRect() : { right: 200 };
+    
+    // Position to the right of the sidebar
+    popup.style.left = `${sidebarRect.right + 8}px`;
+    popup.style.top = `${Math.max(rect.top - 20, 60)}px`;
+    popup.style.transform = "none";
+  }
+  
+  popup.style.display = "flex";
+  
+  // Add click-outside listener to dismiss
+  setTimeout(() => {
+    document.addEventListener("click", handleClickOutsidePopup);
+  }, 0);
+}
+
+function handleClickOutsidePopup(e) {
+  const popup = document.getElementById("attendee-detail-popup");
+  const sidebar = document.querySelector(".meeting-sidebar");
+  
+  // If click is outside popup and not on an attendee item, close it
+  if (popup && !popup.contains(e.target) && (!sidebar || !sidebar.contains(e.target))) {
+    closeAttendeeDetailPopup();
   }
 }
 
+function closeAttendeeDetailPopup() {
+  const popup = document.getElementById("attendee-detail-popup");
+  if (popup) {
+    popup.style.display = "none";
+  }
+  document.removeEventListener("click", handleClickOutsidePopup);
+  state.selectedAttendeeId = null;
+  document.querySelectorAll(".attendee-item").forEach((item) => {
+    item.classList.remove("selected");
+  });
+}
+
+/**
+ * Initialize panel maximize/restore functionality.
+ */
+function initPanelMaximize() {
+  const grid = document.getElementById("meeting-grid");
+  if (!grid) return;
+  
+  const maximizeBtns = grid.querySelectorAll(".panel-maximize-btn");
+  maximizeBtns.forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const panel = btn.closest(".grid-panel");
+      if (!panel) return;
+      
+      const isMaximized = panel.classList.contains("maximized");
+      
+      if (isMaximized) {
+        // Restore
+        panel.classList.remove("maximized");
+        grid.classList.remove("has-maximized");
+        btn.title = "Maximize";
+      } else {
+        // Maximize - first restore any other maximized panel
+        grid.querySelectorAll(".grid-panel.maximized").forEach((p) => {
+          p.classList.remove("maximized");
+          const otherBtn = p.querySelector(".panel-maximize-btn");
+          if (otherBtn) otherBtn.title = "Maximize";
+        });
+        
+        panel.classList.add("maximized");
+        grid.classList.add("has-maximized");
+        btn.title = "Restore";
+      }
+    });
+  });
+}
+
 function clearAttendeeDetail() {
-  const segmentsEl = document.getElementById("attendee-segments");
+  closeAttendeeDetailPopup();
   hideRenameMode();
   setAutoRenameStatus("");
-
-  if (segmentsEl) {
-    segmentsEl.innerHTML = "";
-  }
 }
 
 function enterRenameMode() {
@@ -639,26 +788,82 @@ function buildTranscriptText(segments) {
 
 function setTranscriptOutput(segments) {
   const output = document.getElementById("transcript-output");
-  if (!segments || !segments.length) {
-    output.textContent = "No transcript yet.";
+  // #region agent log
+  dbgLog("setTranscriptOutput", "called", { 
+    hasOutputEl: !!output, 
+    segmentCount: segments?.length || 0,
+    outputElId: output?.id,
+    outputElTagName: output?.tagName,
+    outputElClientHeight: output?.clientHeight,
+    outputElOffsetHeight: output?.offsetHeight,
+    outputElDisplay: output ? getComputedStyle(output).display : null,
+    outputElVisibility: output ? getComputedStyle(output).visibility : null,
+  }, "H3,H4,H5");
+  // #endregion
+  if (!output) {
+    // #region agent log
+    dbgLog("setTranscriptOutput", "ERROR: transcript-output element not found!", {}, "H3");
+    // #endregion
     return;
   }
-  output.textContent = buildTranscriptText(segments);
+  if (!segments || !segments.length) {
+    output.textContent = "No transcript yet.";
+    // #region agent log
+    dbgLog("setTranscriptOutput", "set to 'No transcript yet.'", {}, "H4");
+    // #endregion
+    return;
+  }
+  const text = buildTranscriptText(segments);
+  // #region agent log
+  dbgLog("setTranscriptOutput", "setting textContent", { textLength: text.length, textPreview: text.substring(0,100) }, "H4");
+  // #endregion
+  output.textContent = text;
+  // #region agent log
+  dbgLog("setTranscriptOutput", "AFTER setting", { actualTextLength: output.textContent.length }, "H4");
+  // #endregion
 }
 
 function setTranscriptStatus(message) {
   const status = document.getElementById("transcript-status");
-  status.textContent = message;
+  // #region agent log
+  dbgLog("setTranscriptStatus", "called", { hasStatusEl: !!status, message }, "H3,H4");
+  // #endregion
+  if (status) {
+    status.textContent = message;
+  }
 }
 
 function setSummaryStatus(message) {
   const status = document.getElementById("summary-status");
-  status.textContent = message;
+  // #region agent log
+  dbgLog("setSummaryStatus", "called", { hasStatusEl: !!status, message }, "H3,H4");
+  // #endregion
+  if (status) {
+    status.textContent = message;
+  }
 }
 
 function setSummaryOutput(message) {
   const output = document.getElementById("summary-output");
+  // #region agent log
+  dbgLog("setSummaryOutput", "called", { 
+    hasOutputEl: !!output, 
+    messageLength: message?.length || 0,
+    outputElClientHeight: output?.clientHeight,
+    outputElOffsetHeight: output?.offsetHeight,
+    outputElDisplay: output ? getComputedStyle(output).display : null,
+  }, "H3,H4,H5");
+  // #endregion
+  if (!output) {
+    // #region agent log
+    dbgLog("setSummaryOutput", "ERROR: summary-output element not found!", {}, "H3");
+    // #endregion
+    return;
+  }
   output.textContent = message;
+  // #region agent log
+  dbgLog("setSummaryOutput", "AFTER setting", { actualTextLength: output.textContent.length }, "H4");
+  // #endregion
 }
 
 function setManualSummaryStatus(message) {
@@ -835,30 +1040,48 @@ function loadMeetingId() {
 }
 
 async function refreshMeeting() {
-  // Log immediately at start of function
-  fetch("/api/logs/client", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ level: "info", message: "[refreshMeeting] START", context: { meetingId: state.meetingId } }),
-  }).catch(() => {});
+  // #region agent log
+  dbgLog("refreshMeeting", "START", { meetingId: state.meetingId }, "H1,H2");
+  // #endregion
   
   if (!state.meetingId) {
+    // #region agent log
+    dbgLog("refreshMeeting", "ABORT - no meetingId", {}, "H1");
+    // #endregion
     return;
   }
   setGlobalBusy("Loading meeting...");
   try {
-    // Always fetch consolidated segments for main display
+    // #region agent log
+    dbgLog("refreshMeeting", "fetching meeting from API", {}, "H2");
+    // #endregion
     const meeting = await fetchJson(`/api/meetings/${state.meetingId}`);
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:refreshMeeting',message:'meeting fetched',data:{attendeesCount:(meeting.attendees||[]).length,attendeeIds:(meeting.attendees||[]).map(a=>a.id).slice(0,5),segmentsCount:(meeting.transcript?.segments||[]).length},timestamp:Date.now(),runId:'attendee-debug',hypothesisId:'H5'})}).catch(()=>{});
+    dbgLog("refreshMeeting", "API response received", {
+      hasTitle: !!meeting.title,
+      title: meeting.title,
+      hasTranscript: !!meeting.transcript,
+      segmentCount: meeting.transcript?.segments?.length || 0,
+      hasSummary: !!meeting.summary?.text,
+      summaryPreview: meeting.summary?.text?.substring(0,50),
+      hasNotes: !!meeting.manual_notes,
+      status: meeting.status,
+    }, "H2");
     // #endregion
+    
     state.meeting = meeting;
+    
     setMeetingTitle(meeting.title || "");
     setAttendeeEditor(meeting.attendees || []);
+    
     updateFinalizationStatusFromMeeting(meeting);
     const meetingStatus = meeting.status === "in_progress" ? "In progress" : "Completed";
+    
     if (meeting.transcript?.segments?.length) {
       state.lastTranscriptSegments = meeting.transcript.segments;
+      // #region agent log
+      dbgLog("refreshMeeting", "has transcript segments", { count: meeting.transcript.segments.length }, "H2");
+      // #endregion
       setTranscriptStatus(
         `${meetingStatus} • Transcript (${meeting.transcript.segments.length} segments)`
       );
@@ -866,23 +1089,45 @@ async function refreshMeeting() {
         setTranscriptOutput(meeting.transcript.segments);
       }
     } else {
+      // #region agent log
+      dbgLog("refreshMeeting", "no transcript segments", {}, "H2");
+      // #endregion
       setTranscriptStatus(`${meetingStatus} • No transcript yet.`);
       if (!state.liveStreaming) {
         setTranscriptOutput([]);
       }
     }
+    
     if (meeting.summary?.text) {
       const summaryUpdated = meeting.summary?.updated_at
         ? `Last updated ${meeting.summary.updated_at}`
         : "Summary ready";
+      // #region agent log
+      dbgLog("refreshMeeting", "has summary", { length: meeting.summary.text.length }, "H2");
+      // #endregion
       setSummaryStatus(`${meetingStatus} • ${summaryUpdated}`);
       setSummaryOutput(meeting.summary.text);
-      updateSummaryDebugPanel(meeting);
     } else {
+      // #region agent log
+      dbgLog("refreshMeeting", "no summary", {}, "H2");
+      // #endregion
       setSummaryStatus(`${meetingStatus} • No summary yet.`);
       setSummaryOutput("No summary yet.");
-      updateSummaryDebugPanel(meeting);
     }
+    
+    // Load manual notes
+    const notesEl = document.getElementById("manual-notes");
+    // #region agent log
+    dbgLog("refreshMeeting", "loading notes", { hasNotesEl: !!notesEl, hasNotes: !!meeting?.manual_notes }, "H3");
+    // #endregion
+    if (notesEl && notesEl.value !== (meeting?.manual_notes || "")) {
+      notesEl.value = meeting?.manual_notes || "";
+    }
+    
+    // Update debug panel if visible
+    updateSummaryDebugPanel(meeting);
+    // #region agent log
+    dbgLog("refreshMeeting", "content loading complete", {}, "H1,H2");
 
     // Try to start backend transcription for any in-progress meeting
     // The API handles all cases gracefully:
@@ -1008,7 +1253,8 @@ async function saveMeetingTitle() {
 // Attendee saving is now done via inline rename - see saveAttendeeName()
 
 async function updateSummaryDebugPanel(meeting) {
-  const panel = document.getElementById("summary-debug-panel");
+  // Check for either the new debug-sidebar or legacy summary-debug-panel
+  const panel = document.getElementById("debug-sidebar") || document.getElementById("summary-debug-panel");
   if (!panel || panel.style.display === "none") {
     return;
   }
@@ -1026,10 +1272,6 @@ async function updateSummaryDebugPanel(meeting) {
     setManualTranscriptionBuffer(buildTranscriptTextSafe(meeting));
   }
 
-  const notesEl = document.getElementById("manual-notes");
-  if (notesEl && notesEl.value !== (meeting?.manual_notes || "")) {
-    notesEl.value = meeting?.manual_notes || "";
-  }
   const summaryEl = document.getElementById("manual-summary");
   // Use manual_summary if present, otherwise fall back to the auto-generated summary
   const summaryText = meeting?.manual_summary || meeting?.summary?.text || "";
@@ -1313,14 +1555,36 @@ async function resumeTranscription() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // #region agent log
+  dbgLog("DOMContentLoaded", "START", {}, "H1");
+  // #endregion
+  
   try {
     loadMeetingId();
+    // #region agent log
+    dbgLog("DOMContentLoaded", "loadMeetingId OK", { meetingId: state.meetingId }, "H1");
+    // #endregion
   } catch (error) {
+    // #region agent log
+    dbgLog("DOMContentLoaded", "loadMeetingId FAILED", { error: error.message }, "H1");
+    // #endregion
     setGlobalError(error.message);
     return;
   }
 
   const titleInput = document.getElementById("meeting-title");
+  // #region agent log
+  dbgLog("DOMContentLoaded", "elements check", {
+    hasTitleInput: !!titleInput,
+    hasDeleteBtn: !!document.getElementById("delete-meeting"),
+    hasExportBtn: !!document.getElementById("export-meeting"),
+    hasTranscriptOutput: !!document.getElementById("transcript-output"),
+    hasSummaryOutput: !!document.getElementById("summary-output"),
+    hasManualNotes: !!document.getElementById("manual-notes"),
+    hasMeetingGrid: !!document.getElementById("meeting-grid"),
+  }, "H1,H3");
+  // #endregion
+  
   if (titleInput) {
     titleInput.addEventListener("input", scheduleTitleSave);
   }
@@ -1344,9 +1608,41 @@ document.addEventListener("DOMContentLoaded", async () => {
     resumeBtn.addEventListener("click", resumeTranscription);
   }
   
-  document
-    .getElementById("toggle-summary-debug")
-    .addEventListener("click", () => {
+  // Debug panel toggle (new floating button)
+  const toggleDebugBtn = document.getElementById("toggle-debug");
+  if (toggleDebugBtn) {
+    toggleDebugBtn.addEventListener("click", () => {
+      const panel = document.getElementById("debug-sidebar");
+      if (!panel) return;
+      const isHidden = panel.style.display === "none" || !panel.style.display;
+      panel.style.display = isHidden ? "flex" : "none";
+      if (isHidden) {
+        updateSummaryDebugPanel(state.meeting || null);
+      }
+    });
+  }
+  
+  // Close debug panel button
+  const closeDebugBtn = document.getElementById("close-debug");
+  if (closeDebugBtn) {
+    closeDebugBtn.addEventListener("click", () => {
+      const panel = document.getElementById("debug-sidebar");
+      if (panel) {
+        panel.style.display = "none";
+      }
+    });
+  }
+  
+  // Close attendee detail popup button
+  const closeAttendeeBtn = document.getElementById("close-attendee-detail");
+  if (closeAttendeeBtn) {
+    closeAttendeeBtn.addEventListener("click", closeAttendeeDetailPopup);
+  }
+  
+  // Legacy debug toggle (for backwards compatibility if old HTML is cached)
+  const legacyToggle = document.getElementById("toggle-summary-debug");
+  if (legacyToggle) {
+    legacyToggle.addEventListener("click", () => {
       const panel = document.getElementById("summary-debug-panel");
       if (!panel) return;
       const isHidden = panel.style.display === "none" || !panel.style.display;
@@ -1355,6 +1651,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         updateSummaryDebugPanel(state.meeting || null);
       }
     });
+  }
 
   const manualSummarizeBtn = document.getElementById("manual-summarize");
   if (manualSummarizeBtn) {
@@ -1380,6 +1677,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
   
+  // Panel maximize/restore buttons
+  initPanelMaximize();
+  
   window.addEventListener("beforeunload", () => {
     stopLiveTranscript();
     unsubscribeFromMeetingEvents();
@@ -1387,8 +1687,33 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Subscribe to SSE for real-time events (streaming summary, etc.)
   subscribeToMeetingEvents();
+  // #region agent log
+  dbgLog("DOMContentLoaded", "subscribeToMeetingEvents OK", {}, "H1");
+  // #endregion
 
+  // Initialize meeting chat UI
+  initMeetingChat();
+  // #region agent log
+  dbgLog("DOMContentLoaded", "initMeetingChat OK", {}, "H1");
+  // #endregion
+
+  // #region agent log
+  dbgLog("DOMContentLoaded", "about to call refreshVersion", {}, "H1");
+  // #endregion
   await refreshVersion();
+  // #region agent log
+  dbgLog("DOMContentLoaded", "refreshVersion OK", {}, "H1");
+  // #endregion
+  
+  // #region agent log
+  dbgLog("DOMContentLoaded", "about to call refreshMeeting", {}, "H1");
+  // #endregion
   await refreshMeeting();
-  // Polling is now started/stopped automatically by refreshMeeting based on meeting state
+  // #region agent log
+  dbgLog("DOMContentLoaded", "refreshMeeting OK", {}, "H1");
+  // #endregion
+  
+  // #region agent log
+  dbgLog("DOMContentLoaded", "END - all init complete", {}, "H1");
+  // #endregion
 });

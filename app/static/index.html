@@ -6,74 +6,47 @@
     <title>Notetaker</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body>
-    <main class="container">
-      <header>
-        <div class="title-row">
-          <h1>Notetaker</h1>
-          <span id="version-badge" class="version-badge">v0.0.0.0</span>
-          <div class="header-actions">
-            <button id="settings-button" class="secondary">Settings</button>
-            <div class="header-menu-wrapper">
-              <button id="profile-toggle" class="secondary">Profile ▾</button>
-              <div class="header-menu" id="profile-menu">
-                <button id="menu-auth" class="secondary" disabled>Login (soon)</button>
-              </div>
+  <body class="home-layout">
+    <header class="home-header compact">
+      <div class="title-row">
+        <h1>Notetaker</h1>
+        <span id="version-badge" class="version-badge">v0.0.0.0</span>
+        <span class="recording-status-text" id="recording-status">Not recording</span>
+        <span class="status error inline" id="global-error"></span>
+        <span class="status inline" id="global-busy"></span>
+        <div class="header-actions">
+          <select id="recording-source" class="header-select"></select>
+          <div class="file-name-box" id="file-name-box" style="display:none">
+            <span id="test-audio-status">No file</span>
+            <input id="test-audio-upload" type="file" class="file-input-hidden" accept="audio/*" />
+          </div>
+          <button id="go-to-meeting" class="secondary" style="display:none">Go to meeting</button>
+          <button id="recording-toggle">Start recording</button>
+          <button id="settings-button" class="secondary">Settings</button>
+          <div class="header-menu-wrapper">
+            <button id="profile-toggle" class="secondary">Profile ▾</button>
+            <div class="header-menu" id="profile-menu">
+              <button id="menu-auth" class="secondary" disabled>Login (soon)</button>
             </div>
           </div>
         </div>
-        <p class="subtitle">Local audio capture configuration</p>
-        <div class="status error" id="global-error"></div>
-        <div class="status" id="global-busy"></div>
-      </header>
+      </div>
+    </header>
 
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <div class="status" id="recording-status">Status: unknown</div>
-            <div class="status error" id="status-error"></div>
-            <div class="status" id="recording-settings-note"></div>
-          </div>
-          <div class="actions">
-            <button id="go-to-meeting" class="secondary" style="display:none">Go to meeting</button>
-            <button id="recording-toggle">Start recording</button>
-          </div>
-        </div>
-        <div class="row">
-          <label for="recording-source">Input source</label>
-          <select id="recording-source"></select>
-        </div>
-        <div class="row" id="file-source-row">
-          <label for="test-audio-upload">Audio file</label>
-          <button id="file-picker-button" type="button" class="secondary">
-            Choose file
-          </button>
-          <input id="test-audio-upload" type="file" class="file-input-hidden" />
-          <div class="status" id="test-audio-status">No file selected.</div>
-        </div>
-        <div class="output" id="recording-output"></div>
-      </section>
+    <main class="home-main">
+      <!-- Left sidebar: Meetings list -->
+      <aside class="home-sidebar">
+        <div class="status error compact" id="status-error"></div>
+        <div class="meeting-list sidebar-list" id="meeting-list"></div>
+      </aside>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Meetings</h2>
-        </div>
-        <div class="row">
-          <div class="meeting-list" id="meeting-list"></div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Health</h2>
-        <div class="status" id="health-status">Checking...</div>
-      </section>
-
-      <section class="panel">
-        <h2>Console Errors</h2>
-        <div class="output" id="log-output">No errors yet.</div>
+      <!-- Main content: Chat interface -->
+      <section class="home-chat">
+        <div id="overall-chat-container" class="chat-container-fullheight"></div>
       </section>
     </main>
 
-    <script src="/static/app.js?v=173"></script>
+    <script src="/static/chat.js?v=2"></script>
+    <script src="/static/app.js?v=175"></script>
   </body>
 </html>
