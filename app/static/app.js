@@ -29,6 +29,57 @@ function debugLog(message, data = {}) {
 }
 
 /**
+ * Attach a right-click "Submit and Log" debug context menu to a ChatUI
+ * instance's send button. This is notetaker-specific debug tooling that
+ * lives outside the reusable ChatUI component.
+ */
+function _attachDebugContextMenu(chatInstance) {
+  if (!chatInstance || !chatInstance.sendBtn) return;
+
+  chatInstance.sendBtn.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    // Remove any existing menu
+    const existing = document.querySelector('.test-chat-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.className = 'test-chat-context-menu';
+    menu.style.cssText = `
+      position: fixed; left: ${e.clientX}px; top: ${e.clientY}px;
+      background: var(--bg-color, #fff); border: 1px solid var(--border-color, #ddd);
+      border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      z-index: 10000; padding: 4px 0; min-width: 150px;
+    `;
+
+    const option = document.createElement('div');
+    option.textContent = 'Submit and Log';
+    option.style.cssText = 'padding: 8px 16px; cursor: pointer; font-size: 14px;';
+    option.addEventListener('mouseenter', () => { option.style.background = 'var(--hover-bg, #f0f0f0)'; });
+    option.addEventListener('mouseleave', () => { option.style.background = 'transparent'; });
+    option.addEventListener('click', () => {
+      menu.remove();
+      // Set a one-shot flag so the next sendMessage adds test_log_this
+      chatInstance.onSendMessage = (payload) => {
+        payload.test_log_this = true;
+        chatInstance.onSendMessage = null; // one-shot
+      };
+      chatInstance.sendMessage();
+    });
+
+    menu.appendChild(option);
+    document.body.appendChild(menu);
+
+    const closeMenu = (event) => {
+      if (!menu.contains(event.target)) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 10);
+  });
+}
+
+/**
  * Initialize the overall chat UI component for querying all meetings.
  */
 function initOverallChat() {
@@ -49,8 +100,13 @@ function initOverallChat() {
     }),
     placeholder: "Ask a question about your meetings...",
     title: "Search All Meetings",
-    fullscreen: true,  // Use fullscreen variant on home page
+    emptyText: "Ask a question about your meetings.",
+    fullscreen: true,
+    onSendMessage: null,  // debug hook attached below if needed
   });
+
+  // Debug: right-click send button → "Submit and Log"
+  _attachDebugContextMenu(state.overallChat);
 }
 
 /**
@@ -139,12 +195,14 @@ function setTranscriptStatus(message) {
   status.textContent = message;
 }
 
-function setTestAudioStatus(message) {
+function setTestAudioStatus(message, fullPath = null) {
   const status = document.getElementById("test-audio-status");
   if (!status) {
     return;
   }
   status.textContent = message;
+  // Set tooltip to show full filename on hover
+  status.title = fullPath || message;
 }
 
 function setRecordingToggleLabel(recording) {
@@ -663,7 +721,12 @@ function updateFileSourceVisibility() {
   if (!fileNameBox) {
     return;
   }
-  fileNameBox.style.display = state.recordingSource === "file" ? "flex" : "none";
+  // Use visibility class instead of display:none to prevent layout shift
+  if (state.recordingSource === "file") {
+    fileNameBox.classList.remove("hidden");
+  } else {
+    fileNameBox.classList.add("hidden");
+  }
 }
 
 async function saveAudioSource(source, deviceIndex) {
@@ -725,11 +788,11 @@ async function saveTestAudioSelection(audioPath, audioName) {
 
 function updateTestAudioUi() {
   if (!state.testAudioPath) {
-    setTestAudioStatus("No file");
+    setTestAudioStatus("No file", "");
     return;
   }
-  const label = state.testAudioName || state.testAudioPath.split("/").pop() || "Selected";
-  setTestAudioStatus(label);
+  const fullName = state.testAudioName || state.testAudioPath.split("/").pop() || "Selected";
+  setTestAudioStatus(fullName, fullName);
 }
 
 async function uploadTestAudioFile(file) {

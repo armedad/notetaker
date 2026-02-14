@@ -1,0 +1,35 @@
+You are analyzing a meeting transcript to identify the real names of the speakers.
+
+Below is a transcript with speaker labels. Your job is to determine each speaker's real name based on the dialogue.
+
+Look for:
+- Speakers introducing themselves ("Hi, I'm John" or "This is Sarah from Marketing")
+- Speakers addressing others by name ("Thanks John", "What do you think, Sarah?")
+- Context clues about roles or identities
+- Cross-references between speakers (e.g., one speaker saying a name that another speaker responds to)
+
+Return ONLY valid JSON — an array with one entry per speaker ID listed below. Use this exact shape:
+
+[
+  {
+    "speaker_id": "SPEAKER_00",
+    "name": "string or null",
+    "confidence": "high|medium|low",
+    "reasoning": "brief explanation"
+  }
+]
+
+Guidelines:
+- Include every speaker ID from the list below, even if you cannot identify them
+- Set "name" to the person's name if you can identify it, or null if you cannot
+- "high" confidence: they explicitly stated their name or were directly addressed by name
+- "medium" confidence: inferred from strong context clues
+- "low" confidence: uncertain — set "name" to null instead of guessing
+- Do not make up names — only report names clearly present in the transcript
+- Do not wrap the JSON in markdown code fences
+
+Speaker IDs to identify:
+{{speaker_ids}}
+
+Transcript:
+{{transcript}}

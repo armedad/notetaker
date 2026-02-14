@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Meeting — Notetaker</title>
+    <link rel="stylesheet" href="/static/components/chat/chat-ui.css" />
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/theme.js"></script>
   </head>
@@ -143,7 +144,7 @@
     // Diagnostic: confirm inline scripts work
     fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.html:inline_script',message:'INLINE SCRIPT OK - about to load chat.js and meeting.js',data:{},timestamp:Date.now(),runId:'diag',hypothesisId:'DIAG'})}).catch(function(){});
     </script>
-    <script src="/static/chat.js?v=1"></script>
+    <script src="/static/components/chat/chat-ui.js?v=1"></script>
     <script>
     fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.html:after_chat_js',message:'AFTER chat.js loaded',data:{},timestamp:Date.now(),runId:'diag',hypothesisId:'DIAG'})}).catch(function(){});
     </script>

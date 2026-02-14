@@ -352,3 +352,150 @@ class SummarizationService:
             "confidence": confidence,
             "reasoning": reasoning,
         }
+
+    def identify_all_speakers(
+        self,
+        segments: list,
+        speaker_ids: list,
+        provider_override: Optional[str] = None,
+    ) -> list:
+        """Identify names for multiple speakers in a single LLM call.
+
+        Builds a representative transcript excerpt with speaker labels and asks
+        the LLM to identify all speakers at once.  This is more token-efficient
+        and more accurate than per-speaker calls because the model can see
+        cross-speaker context (e.g., "Thanks, Sarah").
+
+        Args:
+            segments: All transcript segments (each has 'speaker', 'text', 'start').
+            speaker_ids: Speaker IDs to identify (manual names already filtered out).
+            provider_override: Optional LLM provider override.
+
+        Returns:
+            List of dicts, each with keys: speaker_id, name (str|None),
+            confidence ("high"|"medium"|"low"), reasoning (str).
+            Returns an empty list on failure.
+        """
+        if not segments or not speaker_ids:
+            return []
+
+        # Build a representative transcript with speaker labels.
+        # Include up to the first 10 and last 10 segments per speaker to
+        # keep token count manageable while capturing introductions (early)
+        # and later cross-references.
+        speaker_segments: dict = {}
+        for seg in segments:
+            spk = seg.get("speaker")
+            if spk and spk in speaker_ids:
+                speaker_segments.setdefault(spk, []).append(seg)
+
+        # Also include segments from OTHER speakers — they may address
+        # our target speakers by name.
+        other_segments = [
+            seg for seg in segments
+            if seg.get("speaker") and seg["speaker"] not in speaker_ids
+        ]
+
+        # Build the excerpt: interleave in chronological order
+        selected = []
+        for spk, segs in speaker_segments.items():
+            if len(segs) <= 20:
+                selected.extend(segs)
+            else:
+                selected.extend(segs[:10])
+                selected.extend(segs[-10:])
+
+        # Add a sample of other-speaker segments for cross-references
+        if other_segments:
+            if len(other_segments) <= 20:
+                selected.extend(other_segments)
+            else:
+                selected.extend(other_segments[:10])
+                selected.extend(other_segments[-10:])
+
+        # Sort chronologically
+        selected.sort(key=lambda s: s.get("start", 0))
+
+        transcript_lines = []
+        for seg in selected:
+            spk = seg.get("speaker", "UNKNOWN")
+            text = seg.get("text", "").strip()
+            start = seg.get("start", 0)
+            if text:
+                transcript_lines.append(f"[{start:.1f}s] [{spk}]: {text}")
+
+        transcript_text = "\n".join(transcript_lines)
+        if not transcript_text.strip():
+            return []
+
+        ids_text = "\n".join(f"- {sid}" for sid in speaker_ids)
+
+        # Load prompt template
+        prompt_path = os.path.join(self._prompts_dir, "identify_all_speakers_prompt.txt")
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                template = f.read()
+        except OSError as exc:
+            self._logger.warning("Missing batch speaker prompt file: %s", exc)
+            return []
+
+        prompt = template.replace("{{speaker_ids}}", ids_text)
+        prompt = prompt.replace("{{transcript}}", transcript_text)
+
+        # Single LLM call
+        try:
+            provider = self._get_provider(provider_override)
+            self._logger.info(
+                "Batch identifying %d speakers using provider=%s",
+                len(speaker_ids),
+                provider.__class__.__name__,
+            )
+            content = provider.prompt(prompt)
+        except Exception as exc:
+            self._logger.warning("LLM call failed for batch speaker identification: %s", exc)
+            return []
+
+        # Parse JSON array response
+        text = content.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(line for line in lines if not line.startswith("```")).strip()
+
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            self._logger.warning(
+                "Non-JSON response for batch speaker identification: %s",
+                text[:300],
+            )
+            return []
+
+        if not isinstance(parsed, list):
+            self._logger.warning("Expected JSON array for batch speaker identification, got %s", type(parsed).__name__)
+            return []
+
+        # Normalise and filter
+        results = []
+        for entry in parsed:
+            if not isinstance(entry, dict):
+                continue
+            sid = entry.get("speaker_id")
+            name = entry.get("name")
+            confidence = entry.get("confidence", "low")
+            reasoning = entry.get("reasoning", "")
+
+            if not sid or sid not in speaker_ids:
+                continue
+
+            # Treat low-confidence as unidentified
+            if name and confidence == "low":
+                name = None
+
+            results.append({
+                "speaker_id": str(sid),
+                "name": str(name).strip() if name else None,
+                "confidence": confidence,
+                "reasoning": reasoning,
+            })
+
+        return results
