@@ -735,6 +735,28 @@ class TranscriptionPipeline:
             
             # Step 1-3: Run batch diarization if enabled and audio available
             diarization_segments = []
+            # #region agent log
+            import json as _json
+            import time as _time
+            _DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+            try:
+                with open(_DEBUG_LOG_PATH, "a") as f:
+                    f.write(_json.dumps({
+                        "location": "transcription_pipeline.py:finalize",
+                        "message": "batch_diarization_check",
+                        "data": {
+                            "meeting_id": meeting_id,
+                            "has_audio_path": bool(audio_path),
+                            "audio_path": audio_path[:100] if audio_path else None,
+                            "diarization_enabled": self._diarization.is_enabled(),
+                            "will_run": bool(audio_path and self._diarization.is_enabled()),
+                        },
+                        "timestamp": _time.time() * 1000,
+                        "runId": "batch-diar-debug",
+                        "hypothesisId": "H3"
+                    }) + "\n")
+            except: pass
+            # #endregion
             if audio_path and self._diarization.is_enabled():
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Analyzing speakers...", 0.1
@@ -746,6 +768,23 @@ class TranscriptionPipeline:
                         meeting_id,
                         len(diarization_segments),
                     )
+                    # #region agent log
+                    try:
+                        with open(_DEBUG_LOG_PATH, "a") as f:
+                            f.write(_json.dumps({
+                                "location": "transcription_pipeline.py:finalize",
+                                "message": "batch_diarization_complete",
+                                "data": {
+                                    "meeting_id": meeting_id,
+                                    "segments_count": len(diarization_segments),
+                                    "unique_speakers": list(set(s.get("speaker") for s in diarization_segments if s.get("speaker"))),
+                                },
+                                "timestamp": _time.time() * 1000,
+                                "runId": "batch-diar-debug",
+                                "hypothesisId": "H3"
+                            }) + "\n")
+                    except: pass
+                    # #endregion
                     
                     # Apply speaker labels to transcript
                     if diarization_segments:
@@ -757,6 +796,24 @@ class TranscriptionPipeline:
                         "Diarization failed, continuing without: meeting_id=%s error=%s",
                         meeting_id, exc
                     )
+                    # #region agent log
+                    import traceback
+                    try:
+                        with open(_DEBUG_LOG_PATH, "a") as f:
+                            f.write(_json.dumps({
+                                "location": "transcription_pipeline.py:finalize",
+                                "message": "batch_diarization_error",
+                                "data": {
+                                    "meeting_id": meeting_id,
+                                    "error": str(exc)[:500],
+                                    "traceback": traceback.format_exc()[-1000:],
+                                },
+                                "timestamp": _time.time() * 1000,
+                                "runId": "batch-diar-debug",
+                                "hypothesisId": "H3"
+                            }) + "\n")
+                    except: pass
+                    # #endregion
             
             # Step 4-6: Identify speaker names using LLM
             if diarization_segments:
@@ -904,68 +961,84 @@ class TranscriptionPipeline:
         meeting_id: str,
         segments: list[dict],
     ) -> None:
-        """Use LLM to identify speaker names from transcript.
-        
-        For each unique speaker label (e.g., "SPEAKER_00"), extract their
-        dialogue and ask the LLM if it can identify who they are.
+        """Use a single LLM call to identify speaker names from transcript.
+
+        Collects all speakers that need identification (skipping manually-named
+        ones), then calls identify_all_speakers() for a single batch request.
         """
-        # Get unique speakers
+        # Get unique speakers from segments
         speakers = set()
         for seg in segments:
             speaker = seg.get("speaker")
             if speaker:
                 speakers.add(speaker)
-        
+
         if not speakers:
             return
-        
+
         # Get current meeting to check existing attendees
         meeting = self._meeting_store.get_meeting(meeting_id)
         if not meeting:
             return
-        
+
         attendees = meeting.get("attendees", [])
         attendee_map = {a.get("id"): a for a in attendees}
-        
-        # For each speaker, try to identify their name
+
+        # Filter to speakers that need identification (skip manual names)
+        ids_to_identify = []
         for speaker_id in speakers:
-            # Skip if already has a human-assigned name
             attendee = attendee_map.get(speaker_id)
             if attendee and attendee.get("name_source") == "manual":
-                continue
-            
-            # Get segments for this speaker
-            speaker_segments = [
-                seg for seg in segments
-                if seg.get("speaker") == speaker_id
-            ]
-            
-            if not speaker_segments:
-                continue
-            
-            # Try to identify the speaker
-            try:
-                result = self._summarization.identify_speaker_name(
-                    speaker_id, speaker_segments
+                self._logger.debug(
+                    "Skipping speaker %s — manually named as '%s'",
+                    speaker_id, attendee.get("name"),
                 )
-                
-                if result and result.get("name"):
-                    # Update or create attendee
-                    self._meeting_store.update_attendee_name(
-                        meeting_id,
-                        speaker_id,
-                        result["name"],
-                        source="llm",
-                        confidence=result.get("confidence", "low"),
-                    )
-                    self._logger.info(
-                        "Identified speaker: %s -> %s (confidence: %s)",
-                        speaker_id,
-                        result["name"],
-                        result.get("confidence", "unknown"),
-                    )
-            except Exception as exc:
-                self._logger.warning(
-                    "Failed to identify speaker %s: %s",
-                    speaker_id, exc
+                continue
+            ids_to_identify.append(speaker_id)
+
+        if not ids_to_identify:
+            self._logger.info("All speakers already have manual names, skipping identification")
+            return
+
+        # Single batch LLM call
+        try:
+            results = self._summarization.identify_all_speakers(
+                segments, ids_to_identify
+            )
+        except Exception as exc:
+            self._logger.warning(
+                "Batch speaker identification failed: meeting_id=%s error=%s",
+                meeting_id, exc,
+            )
+            return
+
+        # Apply results
+        identified_count = 0
+        for result in results:
+            name = result.get("name")
+            if not name:
+                self._logger.debug(
+                    "Could not identify speaker %s: %s",
+                    result.get("speaker_id"), result.get("reasoning", ""),
                 )
+                continue
+
+            self._meeting_store.update_attendee_name(
+                meeting_id,
+                result["speaker_id"],
+                name,
+                source="llm",
+                confidence=result.get("confidence", "low"),
+            )
+            identified_count += 1
+            self._logger.info(
+                "Identified speaker: %s -> %s (confidence: %s)",
+                result["speaker_id"],
+                name,
+                result.get("confidence", "unknown"),
+            )
+
+        self._logger.info(
+            "Batch speaker identification complete: %d/%d identified",
+            identified_count, len(ids_to_identify),
+        )

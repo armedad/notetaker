@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Notetaker</title>
+    <link rel="stylesheet" href="/static/components/chat/chat-ui.css" />
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/theme.js"></script>
   </head>
@@ -16,11 +17,11 @@
         <span class="status error inline" id="global-error"></span>
         <span class="status inline" id="global-busy"></span>
         <div class="header-actions">
-          <select id="recording-source" class="header-select"></select>
-          <div class="file-name-box" id="file-name-box" style="display:none">
+          <div class="file-name-box hidden" id="file-name-box">
             <span id="test-audio-status">No file</span>
             <input id="test-audio-upload" type="file" class="file-input-hidden" accept="audio/*" />
           </div>
+          <select id="recording-source" class="header-select"></select>
           <button id="go-to-meeting" class="secondary" style="display:none">Go to meeting</button>
           <button id="recording-toggle">Start recording</button>
           <button id="settings-button" class="secondary">Settings</button>
@@ -47,7 +48,7 @@
       </section>
     </main>
 
-    <script src="/static/chat.js?v=2"></script>
+    <script src="/static/components/chat/chat-ui.js?v=1"></script>
     <script src="/static/app.js?v=175"></script>
   </body>
 </html>
