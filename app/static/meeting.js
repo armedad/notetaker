@@ -48,15 +48,22 @@ function initMeetingChat() {
   }
   
   try {
+    // Get external search elements from the grid-panel-header
+    const searchContainer = document.getElementById("meeting-chat-search-bar")?.parentElement || null;
+    const searchToggle = document.getElementById("meeting-chat-search-toggle") || null;
+    
     state.meetingChat = new ChatUI({
       container: container,
       endpoint: `/api/chat/meeting/${state.meetingId}`,
+      historyEndpoint: `/api/chat/meeting/${state.meetingId}/history`,
       buildPayload: (question) => ({
         question: question,
         include_related: false, // Can be made configurable via checkbox
       }),
       placeholder: "Ask a question about this meeting...",
       minimal: true, // Hide clear/collapse buttons, no title
+      searchContainer: searchContainer,
+      searchToggle: searchToggle,
     });
   } catch (err) {
     console.error("ChatUI initialization failed:", err);

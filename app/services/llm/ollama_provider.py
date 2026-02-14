@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Generator
 
 import requests
@@ -64,7 +65,7 @@ class OllamaProvider(BaseLLMProvider):
         """Make a streaming call to the Ollama API, yielding tokens as they arrive."""
         # #region agent log
         import time as _time
-        _log_path = "/Users/chee/zapier ai project/.cursor/debug.log"
+        _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
         def _dbg(msg, data=None):
             import json as _json
             with open(_log_path, "a") as _f:

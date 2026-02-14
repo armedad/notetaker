@@ -55,7 +55,7 @@ def convert_to_wav(
         to ensure consistent format (PCM_16 subtype).
     """
     # #region agent log
-    _log_path = "/Users/chee/zapier ai project/.cursor/debug.log"
+    _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
     import json as _json_cvt
     def _dbg_cvt(msg, data=None):
         try:
@@ -429,7 +429,7 @@ class TranscriptionPipeline:
         import json as _json
         import time as _time
         import soundfile as _sf
-        _DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+        _DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
         try:
             with _sf.SoundFile(audio_path) as f:
                 actual_audio_duration = f.frames / f.samplerate
@@ -672,7 +672,7 @@ class TranscriptionPipeline:
             Summary result dict or None if failed
         """
         # #region agent log
-        _log_path = "/Users/chee/zapier ai project/.cursor/debug.log"
+        _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
         import json as _json_fin
         import time as _time_fin
         def _dbg_fin(msg, data=None):
@@ -793,7 +793,7 @@ class TranscriptionPipeline:
                     accumulated_summary = ""
                     token_count = 0
                     # #region agent log
-                    _log_path = "/Users/chee/zapier ai project/.cursor/debug.log"
+                    _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
                     import json as _json
                     import time as _time
                     def _dbg(msg, data=None):

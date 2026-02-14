@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 
-_DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+_DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
 
 
 def dbg(location: str, message: str, data: dict[str, Any], *, run_id: str, hypothesis_id: str) -> None:

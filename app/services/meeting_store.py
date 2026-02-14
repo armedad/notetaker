@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 # #region agent log
-_DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+_DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
 
 
 def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
@@ -1514,3 +1514,25 @@ class MeetingStore:
             meeting["title_generated_at"] = None
             updated = True
         return updated
+
+    # ---- Chat history persistence ----
+
+    def get_chat_history(self, meeting_id: str) -> list:
+        """Read chat_history from a meeting's JSON (default [])."""
+        meeting = self.get_meeting(meeting_id)
+        if not meeting:
+            return []
+        return meeting.get("chat_history", [])
+
+    def save_chat_history(self, meeting_id: str, messages: list) -> bool:
+        """Write chat_history into a meeting's JSON. Returns True on success."""
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return False
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return False
+            meeting["chat_history"] = messages
+            self._write_meeting_file(path, meeting)
+            return True
