@@ -38,7 +38,7 @@ from app.services.debug_logging import dbg
 from app.services.ndjson_debug import dbg as nd_dbg
 
 # #region agent log
-_DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+_DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
 
 
 def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
@@ -440,7 +440,7 @@ def create_transcription_router(
             import json as _json
             def _dbg_trans(msg, data):
                 try:
-                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as f:
+                    with open(os.path.join(os.getcwd(), "logs", "debug.log"), "a") as f:
                         f.write(_json.dumps({"location": "transcription.py:_run_transcription", "message": msg, "data": data, "timestamp": __import__("time").time() * 1000, "runId": "gaps-debug", "hypothesisId": "H1-H4"}) + "\n")
                 except: pass
             _dbg_trans("transcription_started", {"meeting_id": meeting_id, "samplerate": samplerate, "channels": channels, "bytes_per_second": bytes_per_second, "chunk_seconds": chunk_seconds, "buffer_threshold": bytes_per_second * chunk_seconds})
@@ -1345,7 +1345,7 @@ def create_transcription_router(
                 yield "data: {\"type\":\"done\"}\n\n"
             finally:
                 # #region agent log
-                _log_path = "/Users/chee/zapier ai project/.cursor/debug.log"
+                _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
                 import json as _json_dbg
                 import time as _time_dbg
                 def _dbg_finally(msg, data=None):

@@ -9,6 +9,7 @@ service to receive audio chunks and provides speaker labels in real-time.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Optional, TYPE_CHECKING, Union
@@ -222,7 +223,7 @@ class RealtimeDiarizationService:
                 # #region agent log - track annotation accumulation
                 import json as _json
                 import time as _time
-                _DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+                _DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
                 prev_count = len(self._annotations)
                 # #endregion
                 
@@ -320,7 +321,7 @@ class RealtimeDiarizationService:
             # #region agent log
             import json as _json
             import time as _time
-            _DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+            _DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
             found_speaker = None
             match_type = None
             matched_ann = None

@@ -144,7 +144,7 @@ def create_summarization_router(
         def generate():
             # #region agent log
             import time as _time
-            _log_path = "/Users/chee/zapier ai project/.cursor/debug.log"
+            _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
             def _dbg(msg, data=None):
                 with open(_log_path, "a") as _f:
                     _f.write(json.dumps({"location":"summarization.py:generate","message":msg,"data":data or {},"timestamp":int(_time.time()*1000),"hypothesisId":"H2"})+"\n")

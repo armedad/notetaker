@@ -216,3 +216,55 @@ When hitting stop, transcription continues for 60+ seconds before actually stopp
 - `app/routers/transcription.py` - Updated _run_simulated_transcription to use chunked method
 - `app/static/app.js` - Updated stopRecording() and stopFileRecording() for responsive UI
 - `app/static/meeting.js` - Updated stopTranscription() to stop timer immediately
+
+---
+
+## redesign the meetings page UI
+  - Type: UI redesign
+  - Status: done
+
+1) remove the extra vertical blank space at the top of the page
+2) move the title of the meeting to the header row
+3) make the page fill the horizontal width of the window
+4) move the attendees list to a left panel list with popover on select
+5) summary, transcript, notes and ai chat in a 2x2 grid; debug panel as right sidebar toggle
+
+---
+
+## meeting ai query
+  - Type: new feature
+  - Size: medium
+  - Status: done
+
+Provide a chat interface in the meeting page where the user can ask questions about a specific meeting. The LLM answers primarily about that meeting but has access to other meetings as background context.
+
+  Implementation notes:
+  - Chat UI added to meeting page below Notes section
+  - API: POST /api/chat/meeting/{meeting_id} (SSE streaming)
+  - Prompt template: app/prompts/meeting_chat_prompt.txt
+  - Supports optional include_related flag to search other meetings for context
+
+---
+
+## overall ai query
+  - Type: new feature
+  - Size: medium
+  - Status: done
+
+Provide a chat interface in the main home page where the user can ask questions about the aggregate of all meetings. Uses hybrid search to avoid sending all full transcripts.
+
+  Implementation notes:
+  - Chat UI added to home page after Meetings section
+  - API: POST /api/chat/overall (SSE streaming)
+  - Prompt template: app/prompts/overall_chat_prompt.txt
+  - Uses hybrid search: keyword search on titles/summaries, load full transcripts for top 5 matches
+  - SearchService (app/services/search_service.py) handles meeting search
+
+---
+
+## dark mode
+  - Type: new feature
+  - Size: small
+  - Status: done
+
+Dark mode with light/dark/system toggle in settings page. Persisted to config.json. Applied across all pages. Icons adapt to mode.

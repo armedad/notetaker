@@ -1092,6 +1092,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadSummarizationSettings();
   await loadDiarizationSettings();
   await loadAppearanceSettings();
+  
+  // Initialize debug section (test/debug infrastructure)
+  testInitDebugSection();
 });
 
 async function loadAppearanceSettings() {
@@ -1134,4 +1137,179 @@ async function saveAppearanceSettings() {
   } catch (error) {
     debugError("Failed to save appearance settings", error);
   }
+}
+
+// =============================================================================
+// Debug/Test Functions (test_ prefix indicates debug infrastructure)
+// =============================================================================
+
+async function testLoadRagMetrics() {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'settings.js:testLoadRagMetrics',message:'api_call_start',data:{},timestamp:Date.now(),runId:'frontend',hypothesisId:'H4'})}).catch(()=>{});
+  // #endregion
+  try {
+    const response = await fetch("/api/test/rag-metrics");
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'settings.js:testLoadRagMetrics',message:'api_response',data:{status:response.status,ok:response.ok},timestamp:Date.now(),runId:'frontend',hypothesisId:'H4'})}).catch(()=>{});
+    // #endregion
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'settings.js:testLoadRagMetrics',message:'api_data',data:{total_queries:data?.aggregate?.total_queries,recent_count:data?.recent?.length},timestamp:Date.now(),runId:'frontend',hypothesisId:'H4'})}).catch(()=>{});
+    // #endregion
+    
+    // Update aggregate stats
+    const agg = data.aggregate || {};
+    document.getElementById("test-rag-total-queries").textContent = agg.total_queries ?? 0;
+    document.getElementById("test-rag-avg-duration").textContent = (agg.avg_duration_ms ?? 0) + "ms";
+    document.getElementById("test-rag-avg-input").textContent = agg.avg_input_tokens ?? 0;
+    document.getElementById("test-rag-avg-output").textContent = agg.avg_output_tokens ?? 0;
+    document.getElementById("test-rag-avg-meetings").textContent = agg.avg_meetings_loaded ?? 0;
+    document.getElementById("test-rag-avg-search").textContent = agg.avg_search_calls ?? 0;
+    
+    // Update recent queries table
+    const tbody = document.getElementById("test-rag-recent-body");
+    const recent = data.recent || [];
+    
+    if (recent.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">No queries yet</td></tr>';
+    } else {
+      tbody.innerHTML = recent.map(q => {
+        const time = q.timestamp ? new Date(q.timestamp).toLocaleTimeString() : "-";
+        return `<tr>
+          <td>${time}</td>
+          <td>${q.query_type || "-"}</td>
+          <td>${q.duration_ms ?? 0}ms</td>
+          <td>${q.input_tokens ?? 0}</td>
+          <td>${q.output_tokens ?? 0}</td>
+          <td>${q.meetings_loaded ?? 0}</td>
+        </tr>`;
+      }).join("");
+    }
+  } catch (error) {
+    debugError("Failed to load RAG metrics", error);
+  }
+}
+
+async function testResetRagMetrics() {
+  try {
+    const response = await fetch("/api/test/rag-metrics/reset", { method: "POST" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await testLoadRagMetrics();
+  } catch (error) {
+    debugError("Failed to reset RAG metrics", error);
+  }
+}
+
+async function testLoadLlmLogs() {
+  try {
+    const response = await fetch("/api/test/llm-logs");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    
+    const container = document.getElementById("test-llm-log-list");
+    const logs = data.logs || [];
+    
+    if (logs.length === 0) {
+      container.innerHTML = '<div class="empty">No log files</div>';
+    } else {
+      container.innerHTML = logs.map(log => `
+        <div class="debug-log-item" data-filename="${log.filename}">
+          <span class="debug-log-name">${log.filename}</span>
+          <span class="debug-log-size">${(log.size / 1024).toFixed(1)}KB</span>
+        </div>
+      `).join("");
+      
+      // Add click handlers
+      container.querySelectorAll(".debug-log-item").forEach(item => {
+        item.addEventListener("click", () => testViewLog(item.dataset.filename));
+      });
+    }
+  } catch (error) {
+    debugError("Failed to load LLM logs", error);
+  }
+}
+
+async function testViewLog(filename) {
+  try {
+    const response = await fetch(`/api/test/llm-logs/${encodeURIComponent(filename)}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    
+    document.getElementById("test-llm-log-filename").textContent = filename;
+    document.getElementById("test-llm-log-content").textContent = data.content || "(empty)";
+    document.getElementById("test-llm-log-viewer").style.display = "block";
+  } catch (error) {
+    debugError("Failed to view log", error);
+  }
+}
+
+function testCloseLogViewer() {
+  document.getElementById("test-llm-log-viewer").style.display = "none";
+}
+
+async function testClearLlmLogs() {
+  if (!confirm("Delete all LLM log files?")) return;
+  
+  try {
+    const response = await fetch("/api/test/llm-logs", { method: "DELETE" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await testLoadLlmLogs();
+    testCloseLogViewer();
+  } catch (error) {
+    debugError("Failed to clear LLM logs", error);
+  }
+}
+
+async function testLoadLogAllStatus() {
+  try {
+    const response = await fetch("/api/test/llm-logging");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    
+    const checkbox = document.getElementById("test-log-all-enabled");
+    if (checkbox) checkbox.checked = data.enabled || false;
+  } catch (error) {
+    debugError("Failed to load log-all status", error);
+  }
+}
+
+async function testToggleLogAll(enabled) {
+  try {
+    const response = await fetch("/api/test/llm-logging", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch (error) {
+    debugError("Failed to toggle log-all", error);
+  }
+}
+
+function testInitDebugSection() {
+  // RAG metrics buttons
+  const refreshBtn = document.getElementById("test-refresh-rag-metrics");
+  const resetBtn = document.getElementById("test-reset-rag-metrics");
+  if (refreshBtn) refreshBtn.addEventListener("click", testLoadRagMetrics);
+  if (resetBtn) resetBtn.addEventListener("click", testResetRagMetrics);
+  
+  // LLM logging buttons
+  const refreshLogsBtn = document.getElementById("test-refresh-llm-logs");
+  const clearLogsBtn = document.getElementById("test-clear-llm-logs");
+  const closeLogBtn = document.getElementById("test-llm-log-close");
+  if (refreshLogsBtn) refreshLogsBtn.addEventListener("click", testLoadLlmLogs);
+  if (clearLogsBtn) clearLogsBtn.addEventListener("click", testClearLlmLogs);
+  if (closeLogBtn) closeLogBtn.addEventListener("click", testCloseLogViewer);
+  
+  // Log-all toggle
+  const logAllCheckbox = document.getElementById("test-log-all-enabled");
+  if (logAllCheckbox) {
+    logAllCheckbox.addEventListener("change", () => testToggleLogAll(logAllCheckbox.checked));
+  }
+  
+  // Initial load
+  testLoadRagMetrics();
+  testLoadLlmLogs();
+  testLoadLogAllStatus();
 }

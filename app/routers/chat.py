@@ -2,20 +2,27 @@
 
 import json
 import logging
+import os
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.chat_service import ChatService
 from app.services.llm.base import LLMProviderError
+from app.services.llm_instrumentation import (
+    test_set_log_this_request,
+    test_reset_log_this_request,
+)
+from app.services.meeting_store import MeetingStore
 
 
 class MeetingChatRequest(BaseModel):
     """Request body for meeting-specific chat."""
     question: str = Field(..., min_length=1, description="The question to ask about the meeting")
     include_related: bool = Field(False, description="Whether to include context from related meetings")
+    test_log_this: bool = Field(False, description="Debug: log full LLM input/output for this request")
 
 
 class OverallChatRequest(BaseModel):
@@ -23,13 +30,20 @@ class OverallChatRequest(BaseModel):
     question: str = Field(..., min_length=1, description="The question to ask about meetings")
     max_meetings: int = Field(5, ge=1, le=20, description="Maximum number of meetings to include")
     include_transcripts: bool = Field(True, description="Whether to include full transcripts")
+    test_log_this: bool = Field(False, description="Debug: log full LLM input/output for this request")
 
 
-def create_chat_router(chat_service: ChatService) -> APIRouter:
+class ChatHistoryPayload(BaseModel):
+    """Payload for saving chat history."""
+    messages: list = Field(default_factory=list)
+
+
+def create_chat_router(chat_service: ChatService, meeting_store: Optional[MeetingStore] = None) -> APIRouter:
     """Create the chat router with API endpoints.
     
     Args:
         chat_service: The chat service instance
+        meeting_store: The meeting store instance (for chat history)
         
     Returns:
         FastAPI router with chat endpoints
@@ -50,7 +64,14 @@ def create_chat_router(chat_service: ChatService) -> APIRouter:
             meeting_id, payload.question[:50], payload.include_related
         )
         
+        # Set test logging flag if requested
+        log_token = test_set_log_this_request(payload.test_log_this)
+        
         def generate():
+            # #region agent log
+            import time as _t0; _lp0="/Users/chee/zapier ai project/.cursor/debug.log"
+            with open(_lp0,"a") as _f0: _f0.write(json.dumps({"location":"chat.py:generate_meeting:START","message":"GENERATOR_START","data":{"pid":os.getpid(),"meeting_id":meeting_id},"timestamp":int(_t0.time()*1000),"runId":"debug1","hypothesisId":"H1"})+"\n")
+            # #endregion
             try:
                 for token in chat_service.chat_meeting(
                     meeting_id=meeting_id,
@@ -63,9 +84,17 @@ def create_chat_router(chat_service: ChatService) -> APIRouter:
                 yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             except Exception as exc:
                 logger.exception("Chat meeting error: %s", exc)
+                # #region agent log
+                import time as _t1; _lp1="/Users/chee/zapier ai project/.cursor/debug.log"
+                with open(_lp1,"a") as _f1: _f1.write(json.dumps({"location":"chat.py:generate_meeting","message":"CATCH_ALL_EXCEPTION","data":{"type":type(exc).__name__,"str":str(exc)[:300],"pid":os.getpid()},"timestamp":int(_t1.time()*1000),"runId":"debug1","hypothesisId":"H2"})+"\n")
+                # #endregion
                 yield f"data: {json.dumps({'error': 'Chat failed'})}\n\n"
             finally:
                 yield "data: [DONE]\n\n"
+                try:
+                    test_reset_log_this_request(log_token)
+                except Exception:
+                    pass
         
         return StreamingResponse(
             generate(),
@@ -91,7 +120,14 @@ def create_chat_router(chat_service: ChatService) -> APIRouter:
             payload.question[:50], payload.max_meetings, payload.include_transcripts
         )
         
+        # Set test logging flag if requested
+        log_token = test_set_log_this_request(payload.test_log_this)
+        
         def generate():
+            # #region agent log
+            import time as _t3; _lp3="/Users/chee/zapier ai project/.cursor/debug.log"
+            with open(_lp3,"a") as _f3: _f3.write(json.dumps({"location":"chat.py:generate_overall:START","message":"GENERATOR_START","data":{"pid":os.getpid()},"timestamp":int(_t3.time()*1000),"runId":"debug1","hypothesisId":"H1"})+"\n")
+            # #endregion
             try:
                 for token in chat_service.chat_overall(
                     question=payload.question,
@@ -104,9 +140,17 @@ def create_chat_router(chat_service: ChatService) -> APIRouter:
                 yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             except Exception as exc:
                 logger.exception("Chat overall error: %s", exc)
+                # #region agent log
+                import time as _t2; _lp2="/Users/chee/zapier ai project/.cursor/debug.log"
+                with open(_lp2,"a") as _f2: _f2.write(json.dumps({"location":"chat.py:generate_overall","message":"CATCH_ALL_EXCEPTION","data":{"type":type(exc).__name__,"str":str(exc)[:300],"pid":os.getpid()},"timestamp":int(_t2.time()*1000),"runId":"debug1","hypothesisId":"H2"})+"\n")
+                # #endregion
                 yield f"data: {json.dumps({'error': 'Chat failed'})}\n\n"
             finally:
                 yield "data: [DONE]\n\n"
+                try:
+                    test_reset_log_this_request(log_token)
+                except Exception:
+                    pass
         
         return StreamingResponse(
             generate(),
@@ -167,5 +211,37 @@ def create_chat_router(chat_service: ChatService) -> APIRouter:
         except Exception as exc:
             logger.exception("Chat overall sync error: %s", exc)
             raise HTTPException(status_code=500, detail="Chat failed") from exc
+
+    # ---- Chat history endpoints ----
+
+    @router.get("/api/chat/meeting/{meeting_id}/history")
+    def get_meeting_chat_history(meeting_id: str):
+        """Return chat history for a meeting."""
+        if not meeting_store:
+            raise HTTPException(status_code=500, detail="Meeting store not available")
+        messages = meeting_store.get_chat_history(meeting_id)
+        return {"messages": messages}
+
+    @router.put("/api/chat/meeting/{meeting_id}/history")
+    def save_meeting_chat_history(meeting_id: str, payload: ChatHistoryPayload):
+        """Save chat history for a meeting."""
+        if not meeting_store:
+            raise HTTPException(status_code=500, detail="Meeting store not available")
+        ok = meeting_store.save_chat_history(meeting_id, payload.messages)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Meeting not found: {meeting_id}")
+        return {"ok": True}
+
+    @router.get("/api/chat/homepage/history")
+    def get_homepage_chat_history():
+        """Return chat history for the homepage."""
+        messages = chat_service.get_homepage_chat_history()
+        return {"messages": messages}
+
+    @router.put("/api/chat/homepage/history")
+    def save_homepage_chat_history(payload: ChatHistoryPayload):
+        """Save chat history for the homepage."""
+        chat_service.save_homepage_chat_history(payload.messages)
+        return {"ok": True}
 
     return router
