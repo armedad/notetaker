@@ -435,10 +435,12 @@ def create_transcription_router(
             def _dbg_trans(msg, data):
                 try:
                     with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as f:
-                        f.write(_json.dumps({"location": "transcription.py:_run_transcription", "message": msg, "data": data, "timestamp": __import__("time").time() * 1000, "runId": "post-fix", "hypothesisId": "H2"}) + "\n")
+                        f.write(_json.dumps({"location": "transcription.py:_run_transcription", "message": msg, "data": data, "timestamp": __import__("time").time() * 1000, "runId": "gaps-debug", "hypothesisId": "H1-H4"}) + "\n")
                 except: pass
             _dbg_trans("transcription_started", {"meeting_id": meeting_id, "samplerate": samplerate, "channels": channels, "bytes_per_second": bytes_per_second, "chunk_seconds": chunk_seconds, "buffer_threshold": bytes_per_second * chunk_seconds})
             chunk_count = 0
+            process_count = 0
+            last_segment_end = 0.0
             # #endregion
             
             while not audio_source.is_complete():
@@ -466,7 +468,27 @@ def create_transcription_router(
                             temp_path, offset_seconds
                         )
                         # #region agent log
-                        _dbg_trans("chunk_transcribed", {"offset_seconds": offset_seconds, "chunk_duration": chunk_duration, "num_segments": len(chunk_segments), "segments_preview": [{"start": s.get("start"), "end": s.get("end"), "text": s.get("text", "")[:50]} for s in chunk_segments[:3]]})
+                        process_count += 1
+                        # Find first and last segment timestamps
+                        first_seg_start = chunk_segments[0].get("start") if chunk_segments else None
+                        last_seg_end_in_chunk = max((s.get("end", 0) for s in chunk_segments), default=0) if chunk_segments else 0
+                        gap_from_previous = first_seg_start - last_segment_end if (first_seg_start is not None and last_segment_end > 0) else 0
+                        actual_chunk_duration = len(audio_bytes) / bytes_per_second
+                        _dbg_trans("chunk_transcribed", {
+                            "process_count": process_count,
+                            "offset_seconds": offset_seconds,
+                            "chunk_duration_from_whisper": chunk_duration,
+                            "actual_chunk_duration": actual_chunk_duration,
+                            "num_segments": len(chunk_segments),
+                            "first_seg_start": first_seg_start,
+                            "last_seg_end": last_seg_end_in_chunk,
+                            "gap_from_previous": gap_from_previous,
+                            "last_segment_end_prev": last_segment_end,
+                            "segments_preview": [{"start": s.get("start"), "end": s.get("end"), "text": s.get("text", "")[:50]} for s in chunk_segments[:3]]
+                        })
+                        # Update for next iteration
+                        if chunk_segments:
+                            last_segment_end = last_seg_end_in_chunk
                         # #endregion
                         
                         if chunk_language and not language:
@@ -482,6 +504,14 @@ def create_transcription_router(
                             # Try to get speaker from real-time diarization
                             if rt_diarization_active and session_rt_diarization.is_active():
                                 speaker = session_rt_diarization.get_speaker_at(segment["start"])
+                                # #region agent log
+                                _dbg_trans("get_speaker_at_result", {
+                                    "segment_start": segment["start"],
+                                    "segment_end": segment["end"],
+                                    "speaker_returned": speaker,
+                                    "rt_active": session_rt_diarization.is_active(),
+                                })
+                                # #endregion
                                 if speaker:
                                     segment["speaker"] = speaker
                             
