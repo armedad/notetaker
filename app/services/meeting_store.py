@@ -1061,6 +1061,41 @@ class MeetingStore:
             transcript["segments"].append(segment)
             transcript["updated_at"] = datetime.utcnow().isoformat()
             meeting["transcript"] = transcript
+            
+            # Create/update attendee if segment has a speaker (real-time diarization)
+            speaker_label = segment.get("speaker")
+            if speaker_label:
+                existing_attendees = meeting.get("attendees", [])
+                attendee_exists = any(
+                    att.get("label") == speaker_label or att.get("id") == speaker_label
+                    for att in existing_attendees
+                )
+                if not attendee_exists:
+                    # Create new attendee for this speaker
+                    new_attendee = {
+                        "id": speaker_label,
+                        "label": speaker_label,
+                        "name": speaker_label.replace("speaker", "Speaker ").replace("_", " ").title(),
+                    }
+                    existing_attendees.append(new_attendee)
+                    meeting["attendees"] = existing_attendees
+                    # #region agent log
+                    _dbg_ndjson(
+                        location="meeting_store.py:append_live_segment:attendee_created",
+                        message="created attendee from real-time diarization",
+                        data={
+                            "meeting_id": meeting_id,
+                            "speaker_label": speaker_label,
+                            "attendee_id": new_attendee["id"],
+                            "total_attendees": len(existing_attendees),
+                        },
+                        run_id="rt-attendee-fix",
+                        hypothesis_id="H1",
+                    )
+                    # #endregion
+                    # Emit attendees_updated event for real-time UI update
+                    self.publish_event("attendees_updated", meeting_id, {"attendees": existing_attendees})
+            
             summary_state = meeting.get("summary_state") or self._default_summary_state()
             segment_text = segment.get("text", "").strip()
             if segment_text:

@@ -219,8 +219,36 @@ class RealtimeDiarizationService:
                     channels=self._channels,
                 )
                 
+                # #region agent log - track annotation accumulation
+                import json as _json
+                import time as _time
+                _DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+                prev_count = len(self._annotations)
+                # #endregion
+                
                 if annotations:
-                    self._annotations = annotations
+                    # FIX: Accumulate annotations instead of replacing them
+                    # This preserves speaker assignments from previous chunks
+                    self._annotations.extend(annotations)
+                    # #region agent log - log when annotations are updated
+                    try:
+                        with open(_DEBUG_LOG_PATH, "a") as f:
+                            f.write(_json.dumps({
+                                "location": "realtime_diarization.py:feed_audio",
+                                "message": "annotations_accumulated",
+                                "data": {
+                                    "prev_count": prev_count,
+                                    "added_count": len(annotations),
+                                    "total_count": len(self._annotations),
+                                    "total_audio_s": round(self._total_audio_duration, 2),
+                                    "new_ranges": [(round(a["start"], 2), round(a["end"], 2), a["speaker"]) for a in annotations],
+                                },
+                                "timestamp": _time.time() * 1000,
+                                "runId": "diarize-debug-fix",
+                                "hypothesisId": "H2-FIX"
+                            }) + "\n")
+                    except: pass
+                    # #endregion
 
                 # Log only first few feed calls to avoid spamming.
                 if self._dbg_feed_count < 3:
@@ -275,6 +303,10 @@ class RealtimeDiarizationService:
     def get_speaker_at(self, timestamp: float) -> Optional[str]:
         """Get the speaker label at a given timestamp.
         
+        Uses a tolerance-based approach since diarization windows may not
+        exactly align with transcription segment timestamps. First tries
+        exact match, then finds nearest annotation within tolerance.
+        
         Args:
             timestamp: Time in seconds from recording start
             
@@ -285,12 +317,61 @@ class RealtimeDiarizationService:
             if not self._is_active:
                 return None
             
-            # Search annotations for matching time range
+            # #region agent log
+            import json as _json
+            import time as _time
+            _DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+            found_speaker = None
+            match_type = None
+            matched_ann = None
+            # #endregion
+            
+            # First pass: exact match (timestamp falls within annotation range)
             for ann in self._annotations:
                 if ann["start"] <= timestamp < ann["end"]:
-                    return ann["speaker"]
+                    found_speaker = ann["speaker"]
+                    match_type = "exact"
+                    matched_ann = ann
+                    break
             
-            return None
+            # Second pass: find nearest annotation within tolerance (2 seconds)
+            # This handles cases where diarization windows are narrow/sparse
+            if found_speaker is None and self._annotations:
+                TOLERANCE = 2.0  # seconds
+                best_distance = float("inf")
+                for ann in self._annotations:
+                    # Distance to start or end of annotation
+                    dist_to_start = abs(timestamp - ann["start"])
+                    dist_to_end = abs(timestamp - ann["end"])
+                    dist = min(dist_to_start, dist_to_end)
+                    if dist < best_distance and dist <= TOLERANCE:
+                        best_distance = dist
+                        found_speaker = ann["speaker"]
+                        match_type = "nearest"
+                        matched_ann = ann
+            
+            # #region agent log
+            try:
+                with open(_DEBUG_LOG_PATH, "a") as f:
+                    f.write(_json.dumps({
+                        "location": "realtime_diarization.py:get_speaker_at",
+                        "message": "speaker_lookup_result",
+                        "data": {
+                            "timestamp": round(timestamp, 2),
+                            "found_speaker": found_speaker,
+                            "match_type": match_type,
+                            "matched_range": [round(matched_ann["start"], 2), round(matched_ann["end"], 2)] if matched_ann else None,
+                            "num_annotations": len(self._annotations),
+                            "total_audio_s": round(self._total_audio_duration, 2),
+                        },
+                        "timestamp": _time.time() * 1000,
+                        "runId": "diarize-debug-fix",
+                        "hypothesisId": "H1-FIX"
+                    }) + "\n")
+            except: pass
+            # #endregion
+            
+            return found_speaker
     
     def get_current_annotations(self) -> list[dict]:
         """Get all current speaker annotations.
