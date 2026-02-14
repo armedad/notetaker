@@ -1,7 +1,9 @@
 """Chat service for AI-powered meeting queries."""
 
+import json
 import logging
 import os
+import threading
 from typing import Generator, Optional
 
 from app.services.llm import LLMProviderError
@@ -29,7 +31,67 @@ class ChatService:
         self._search = search_service
         self._logger = logging.getLogger("notetaker.chat")
         self._prompts_dir = os.path.join(os.path.dirname(__file__), "..", "prompts")
+        # Homepage state lives alongside the meetings dir
+        data_dir = os.path.dirname(meeting_store._meetings_dir)
+        self._homepage_state_path = os.path.join(data_dir, "homepage_state.json")
+        self._homepage_lock = threading.Lock()
+
+    # ---- Homepage chat history persistence ----
+
+    def get_homepage_chat_history(self) -> list:
+        """Read chat_history from homepage_state.json (default [])."""
+        with self._homepage_lock:
+            try:
+                with open(self._homepage_state_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return data.get("chat_history", [])
+            except (OSError, json.JSONDecodeError):
+                return []
+
+    def save_homepage_chat_history(self, messages: list) -> None:
+        """Write chat_history into homepage_state.json."""
+        with self._homepage_lock:
+            # Read existing state to preserve other fields
+            state: dict = {}
+            try:
+                with open(self._homepage_state_path, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                pass
+            state["chat_history"] = messages
+            temp_path = f"{self._homepage_state_path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+            os.replace(temp_path, self._homepage_state_path)
     
+    @staticmethod
+    def _format_transcript_with_speakers(meeting: dict) -> str:
+        """Format transcript segments with speaker names resolved from attendees."""
+        transcript = meeting.get("transcript")
+        if not isinstance(transcript, dict):
+            return ""
+        segments = transcript.get("segments", [])
+        if not segments:
+            return ""
+        attendees = meeting.get("attendees") or []
+        attendee_lookup = {a.get("id"): a for a in attendees}
+        lines = []
+        for seg in segments:
+            speaker_id = seg.get("speaker_id") or seg.get("speaker")
+            speaker = attendee_lookup.get(speaker_id, {}).get("name") if speaker_id else None
+            prefix = f"[{speaker}] " if speaker else ""
+            lines.append(f"[{seg.get('start', 0):.1f}s] {prefix}{seg.get('text', '')}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_attendee_list(meeting: dict) -> str:
+        """Format attendees list as a comma-separated string."""
+        attendees = meeting.get("attendees") or []
+        if not attendees:
+            return ""
+        names = [a.get("name", a.get("label", "Unknown")) for a in attendees]
+        return ", ".join(names)
+
     def _load_prompt_template(self, filename: str) -> str:
         """Load a prompt template from the prompts directory."""
         prompt_path = os.path.join(self._prompts_dir, filename)
@@ -47,24 +109,15 @@ class ChatService:
         summary_data = meeting.get("summary")
         summary = summary_data.get("text", "") if isinstance(summary_data, dict) else ""
         
-        transcript_text = ""
-        transcript = meeting.get("transcript")
-        if isinstance(transcript, dict):
-            segments = transcript.get("segments", [])
-            if segments:
-                transcript_text = "\n".join(
-                    f"[{seg.get('start', 0):.1f}s] {seg.get('text', '')}"
-                    for seg in segments
-                )
+        transcript_text = self._format_transcript_with_speakers(meeting)
+        attendee_list = self._format_attendee_list(meeting)
         
-        return f"""Meeting: {title}
-Date: {created_at}
-
-Summary:
-{summary if summary else "(No summary available)"}
-
-Transcript:
-{transcript_text if transcript_text else "(No transcript available)"}"""
+        result = f"Meeting: {title}\nDate: {created_at}\n"
+        if attendee_list:
+            result += f"Attendees: {attendee_list}\n"
+        result += f"\nSummary:\n{summary if summary else '(No summary available)'}"
+        result += f"\n\nTranscript:\n{transcript_text if transcript_text else '(No transcript available)'}"
+        return result
     
     def _build_meeting_chat_prompt(
         self,
@@ -81,21 +134,18 @@ Transcript:
         summary_data = meeting.get("summary")
         summary = summary_data.get("text", "") if isinstance(summary_data, dict) else ""
         
-        transcript_text = ""
-        transcript = meeting.get("transcript")
-        if isinstance(transcript, dict):
-            segments = transcript.get("segments", [])
-            if segments:
-                transcript_text = "\n".join(
-                    f"[{seg.get('start', 0):.1f}s] {seg.get('text', '')}"
-                    for seg in segments
-                )
+        transcript_text = self._format_transcript_with_speakers(meeting)
+        attendee_list = self._format_attendee_list(meeting)
         
         # Replace template variables
         prompt = template.replace("{{meeting_title}}", title)
         prompt = prompt.replace("{{meeting_date}}", created_at)
         prompt = prompt.replace("{{summary}}", summary if summary else "(No summary available)")
-        prompt = prompt.replace("{{transcript}}", transcript_text if transcript_text else "(No transcript available)")
+        transcript_block = ""
+        if attendee_list:
+            transcript_block += f"Attendees: {attendee_list}\n\n"
+        transcript_block += transcript_text if transcript_text else "(No transcript available)"
+        prompt = prompt.replace("{{transcript}}", transcript_block)
         prompt = prompt.replace("{{question}}", question)
         
         # Handle optional related context
@@ -133,22 +183,14 @@ Transcript:
             summary_data = meeting.get("summary")
             summary = summary_data.get("text", "") if isinstance(summary_data, dict) else ""
             
-            meetings_text += f"""---
-Meeting: {title}
-Date: {created_at}
-Summary: {summary if summary else "(No summary)"}
-"""
+            attendee_list = self._format_attendee_list(meeting)
+            meetings_text += f"---\nMeeting: {title}\nDate: {created_at}\n"
+            if attendee_list:
+                meetings_text += f"Attendees: {attendee_list}\n"
+            meetings_text += f"Summary: {summary if summary else '(No summary)'}\n"
             
             if include_transcripts:
-                transcript_text = ""
-                transcript = meeting.get("transcript")
-                if isinstance(transcript, dict):
-                    segments = transcript.get("segments", [])
-                    if segments:
-                        transcript_text = "\n".join(
-                            f"[{seg.get('start', 0):.1f}s] {seg.get('text', '')}"
-                            for seg in segments
-                        )
+                transcript_text = self._format_transcript_with_speakers(meeting)
                 if transcript_text:
                     meetings_text += f"Transcript:\n{transcript_text}\n"
             
@@ -236,7 +278,7 @@ Summary: {summary if summary else "(No summary)"}
         # #region agent log
         import time as _time
         import json as _json
-        _log_path = "/Users/chee/zapier ai project/.cursor/debug.log"
+        _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
         def _dbg(msg, data):
             with open(_log_path, "a") as _f:
                 _f.write(_json.dumps({"location":"chat_service.py:chat_overall","message":msg,"data":data,"timestamp":int(_time.time()*1000),"runId":"chat-debug","hypothesisId":"H1-H4"})+"\n")

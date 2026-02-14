@@ -1247,12 +1247,23 @@ button.small {
   margin-right: 24px;
 }
 
+.chat-message-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
 .chat-message-role {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
-  margin-bottom: 4px;
   text-transform: uppercase;
+}
+
+.chat-message-time {
+  font-size: 10px;
+  color: var(--text-placeholder);
 }
 
 .chat-message-content {
@@ -1308,14 +1319,122 @@ button.small {
   cursor: not-allowed;
 }
 
-.chat-status {
-  margin-top: 8px;
-  font-size: 12px;
+/* Status bubble — shown inline in messages area while waiting */
+.chat-status-bubble {
+  opacity: 0.7;
+}
+
+.chat-status-text {
+  font-style: italic;
   color: var(--text-muted);
 }
 
-.chat-status:empty {
-  display: none;
+/* Chat search bar */
+.chat-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.chat-search-input {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.chat-search-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.chat-search-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 36px;
+  text-align: center;
+}
+
+.chat-search-prev,
+.chat-search-next {
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.chat-search-prev:hover,
+.chat-search-next:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.chat-search-toggle {
+  font-size: 14px;
+  padding: 6px 8px;
+  line-height: 1;
+}
+
+/* Inline search bar variant — fits in the grid-panel-header */
+.chat-search-bar-inline {
+  flex: 1;
+  margin: 0 12px;
+  padding: 0;
+  background: transparent;
+  border-bottom: none;
+  gap: 4px;
+}
+
+.chat-search-bar-inline .chat-search-input {
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+.chat-search-bar-inline .chat-search-count {
+  font-size: 11px;
+  min-width: 28px;
+}
+
+.chat-search-bar-inline .chat-search-prev,
+.chat-search-bar-inline .chat-search-next {
+  font-size: 11px;
+  padding: 1px 4px;
+}
+
+/* Top bar inside fullscreen chat — sits just under the page toolbar */
+.chat-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-secondary);
+  gap: 4px;
+}
+
+/* Search highlight marks */
+.chat-message-content mark {
+  background: var(--color-warning-bg);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.chat-message-content mark.current {
+  background: var(--color-warning);
+  color: #000;
 }
 
 /* Chat container in meeting page */
@@ -1626,8 +1745,7 @@ body.home-layout {
 }
 
 .chat-input-area .chat-input-row {
-  max-width: 800px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .chat-input-area .chat-input {
@@ -1645,10 +1763,6 @@ body.home-layout {
   font-size: 13px;
 }
 
-.chat-input-area .chat-status {
-  max-width: 800px;
-  margin: 8px auto 0;
-}
 
 /* ==========================================
    Meeting Page Layout - Redesigned
@@ -1968,10 +2082,8 @@ body.meeting-layout {
   flex-shrink: 0;
 }
 
-.grid-panel.chat-panel .chat-status {
+.grid-panel.chat-panel .chat-status-bubble {
   flex-shrink: 0;
-  margin-top: 4px;
-  min-height: 0;
 }
 
 /* Minimal chat variant */
@@ -2001,10 +2113,8 @@ body.meeting-layout {
   flex-shrink: 0;
 }
 
-.chat-body-minimal .chat-status {
+.chat-body-minimal .chat-status-bubble {
   flex-shrink: 0;
-  min-height: 0;
-  margin-top: 4px;
 }
 
 .chat-messages-minimal .chat-empty {
@@ -2164,4 +2274,166 @@ body.meeting-layout {
   .meeting-title-inline {
     max-width: 200px;
   }
+}
+
+/* =============================================================================
+   Debug/Test Section Styles (test_ prefix indicates debug infrastructure)
+   ============================================================================= */
+
+.debug-subsection {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-default);
+}
+
+.debug-subsection h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+  color: var(--text-primary);
+}
+
+.debug-subsection h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 16px 0 8px 0;
+  color: var(--text-secondary);
+}
+
+.debug-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.debug-stat {
+  background: var(--bg-secondary);
+  padding: 12px;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.debug-stat-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.debug-stat-value {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.debug-table-wrapper {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.debug-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.debug-table th,
+.debug-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.debug-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.debug-table td {
+  color: var(--text-primary);
+}
+
+.debug-table td.empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 16px;
+}
+
+.debug-log-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  margin: 8px 0;
+}
+
+.debug-log-list .empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.debug-log-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-default);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.debug-log-item:last-child {
+  border-bottom: none;
+}
+
+.debug-log-item:hover {
+  background: var(--bg-hover);
+}
+
+.debug-log-name {
+  color: var(--text-primary);
+  font-family: monospace;
+}
+
+.debug-log-size {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.debug-log-viewer {
+  margin-top: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.debug-log-viewer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-default);
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text-secondary);
+}
+
+.debug-log-viewer pre {
+  margin: 0;
+  padding: 12px;
+  font-size: 11px;
+  font-family: monospace;
+  line-height: 1.5;
+  max-height: 400px;
+  overflow: auto;
+  background: var(--bg-code);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
 }

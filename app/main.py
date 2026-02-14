@@ -18,7 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 print(f"[boot] app.main module import cwd={os.getcwd()} pid={os.getpid()}", file=sys.stderr)
 
 # #region agent log
-_DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+_DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
 
 
 def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
@@ -58,6 +58,7 @@ from app.routers.summarization import create_summarization_router
 from app.routers.uploads import create_uploads_router
 from app.routers.testing import create_testing_router
 from app.routers.chat import create_chat_router
+from app.routers.debug import create_test_debug_router
 from app.services.audio_capture import AudioCaptureService
 from app.services.meeting_store import MeetingStore
 from app.services.summarization import SummarizationService
@@ -65,6 +66,9 @@ from app.services.search_service import SearchService
 from app.services.chat_service import ChatService
 from app.services.logging_setup import configure_logging
 from app.services.crash_logging import enable_crash_logging
+from app.services.llm_logger import TestLLMLogger
+from app.services.rag_metrics import TestRAGMetrics
+from app.services.llm_instrumentation import test_install_instrumentation
 
 def create_app() -> FastAPI:
     # #region agent log
@@ -228,8 +232,40 @@ def create_app() -> FastAPI:
         # Chat service and router
         search_service = SearchService(meeting_store)
         chat_service = ChatService(meeting_store, summarization_service, search_service)
-        app.include_router(create_chat_router(chat_service))
+        app.include_router(create_chat_router(chat_service, meeting_store))
         logger.info("Boot: chat router mounted")
+        
+        # LLM observability instrumentation (test/debug infrastructure)
+        llm_logs_dir = os.path.join(cwd, "logs", "llm")
+        os.makedirs(llm_logs_dir, exist_ok=True)
+        test_llm_logger = TestLLMLogger(llm_logs_dir)
+        test_rag_metrics = TestRAGMetrics()
+        # #region agent log
+        _boot_log("app/main.py:create_app", "instrumentation_start", {"llm_logs_dir": llm_logs_dir}, "H1-H2")
+        # #endregion
+        try:
+            test_install_instrumentation(
+                meeting_store=meeting_store,
+                search_service=search_service,
+                summarization_service=summarization_service,
+                chat_service=chat_service,
+                llm_logger=test_llm_logger,
+                rag_metrics=test_rag_metrics,
+            )
+            # #region agent log
+            _boot_log("app/main.py:create_app", "instrumentation_ok", {}, "H2")
+            # #endregion
+        except Exception as inst_exc:
+            # #region agent log
+            _boot_log("app/main.py:create_app", "instrumentation_failed", {"error": str(inst_exc)[:300]}, "H2")
+            # #endregion
+            raise
+        debug_router = create_test_debug_router(test_llm_logger, test_rag_metrics)
+        app.include_router(debug_router)
+        # #region agent log
+        _boot_log("app/main.py:create_app", "debug_router_mounted", {"router_routes": [r.path for r in debug_router.routes]}, "H1")
+        # #endregion
+        logger.info("Boot: test debug router mounted (LLM observability)")
         app.include_router(create_settings_router(config_path))
         logger.info("Boot: settings router mounted")
         app.include_router(

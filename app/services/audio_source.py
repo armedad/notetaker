@@ -8,6 +8,7 @@ allowing the transcription pipeline to process audio identically regardless of o
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
+import os
 import threading
 import uuid
 
@@ -173,7 +174,7 @@ class FileAudioSource(AudioDataSource):
         import json
         def _dbg(msg, data):
             try:
-                with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as f:
+                with open(os.path.join(os.getcwd(), "logs", "debug.log"), "a") as f:
                     f.write(json.dumps({"location": "audio_source.py:_read_chunks", "message": msg, "data": data, "timestamp": __import__("time").time() * 1000, "runId": "post-fix", "hypothesisId": "H1"}) + "\n")
             except: pass
         # #endregion

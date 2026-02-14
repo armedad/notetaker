@@ -41,6 +41,7 @@ function initOverallChat() {
   state.overallChat = new ChatUI({
     container: container,
     endpoint: "/api/chat/overall",
+    historyEndpoint: "/api/chat/homepage/history",
     buildPayload: (question) => ({
       question: question,
       max_meetings: 5,

@@ -366,6 +366,85 @@
         <div class="actions">
           <a href="/test" class="button-link">Open Test Harness</a>
         </div>
+
+        <div class="debug-subsection">
+          <h3>RAG Metrics</h3>
+          <p class="hint">Monitor data access patterns and token usage for chat queries.</p>
+          <div class="actions">
+            <button id="test-refresh-rag-metrics" class="secondary">Refresh</button>
+            <button id="test-reset-rag-metrics" class="secondary">Reset</button>
+          </div>
+          <div class="debug-stats" id="test-rag-aggregate">
+            <div class="debug-stat">
+              <span class="debug-stat-label">Total Queries</span>
+              <span class="debug-stat-value" id="test-rag-total-queries">-</span>
+            </div>
+            <div class="debug-stat">
+              <span class="debug-stat-label">Avg Duration</span>
+              <span class="debug-stat-value" id="test-rag-avg-duration">-</span>
+            </div>
+            <div class="debug-stat">
+              <span class="debug-stat-label">Avg Input Tokens</span>
+              <span class="debug-stat-value" id="test-rag-avg-input">-</span>
+            </div>
+            <div class="debug-stat">
+              <span class="debug-stat-label">Avg Output Tokens</span>
+              <span class="debug-stat-value" id="test-rag-avg-output">-</span>
+            </div>
+            <div class="debug-stat">
+              <span class="debug-stat-label">Avg Meetings Loaded</span>
+              <span class="debug-stat-value" id="test-rag-avg-meetings">-</span>
+            </div>
+            <div class="debug-stat">
+              <span class="debug-stat-label">Avg Search Calls</span>
+              <span class="debug-stat-value" id="test-rag-avg-search">-</span>
+            </div>
+          </div>
+          <h4>Recent Queries</h4>
+          <div class="debug-table-wrapper">
+            <table class="debug-table" id="test-rag-recent-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Type</th>
+                  <th>Duration</th>
+                  <th>Input</th>
+                  <th>Output</th>
+                  <th>Meetings</th>
+                </tr>
+              </thead>
+              <tbody id="test-rag-recent-body">
+                <tr><td colspan="6" class="empty">No queries yet</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="debug-subsection">
+          <h3>LLM Logging</h3>
+          <p class="hint">Log full LLM inputs and outputs for debugging. Right-click the chat Send button to log individual requests.</p>
+          <div class="row">
+            <label for="test-log-all-enabled">
+              <input id="test-log-all-enabled" type="checkbox" />
+              Log all LLM calls (summarization, title, etc.)
+            </label>
+          </div>
+          <div class="actions">
+            <button id="test-refresh-llm-logs" class="secondary">Refresh Logs</button>
+            <button id="test-clear-llm-logs" class="secondary">Clear All Logs</button>
+          </div>
+          <h4>Log Files</h4>
+          <div class="debug-log-list" id="test-llm-log-list">
+            <div class="empty">No log files</div>
+          </div>
+          <div class="debug-log-viewer" id="test-llm-log-viewer" style="display: none;">
+            <div class="debug-log-viewer-header">
+              <span id="test-llm-log-filename"></span>
+              <button id="test-llm-log-close" class="secondary small">Close</button>
+            </div>
+            <pre id="test-llm-log-content"></pre>
+          </div>
+        </div>
       </section>
     </main>
 

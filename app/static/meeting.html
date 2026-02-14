@@ -72,7 +72,16 @@
           <section class="grid-panel chat-panel" data-panel="chat">
             <div class="grid-panel-header">
               <h2>Chat</h2>
-              <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+              <div id="meeting-chat-search-bar" class="chat-search-bar chat-search-bar-inline" style="display:none">
+                <input class="chat-search-input" placeholder="Search..." />
+                <span class="chat-search-count">0/0</span>
+                <button class="chat-search-prev" title="Previous">&#9650;</button>
+                <button class="chat-search-next" title="Next">&#9660;</button>
+              </div>
+              <div class="grid-panel-actions">
+                <button id="meeting-chat-search-toggle" class="icon-btn" title="Search chat">&#128269;</button>
+                <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+              </div>
             </div>
             <div id="meeting-chat-container" class="chat-container-grid"></div>
           </section>
