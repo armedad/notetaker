@@ -148,7 +148,7 @@ def create_meetings_router(
         meeting_id: str, attendee_id: str, payload: UpdateSpeakerNameRequest
     ) -> dict:
         meeting = meeting_store.update_attendee_name(
-            meeting_id, attendee_id, payload.name
+            meeting_id, attendee_id, payload.name, source="manual"
         )
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")

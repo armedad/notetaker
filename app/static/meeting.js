@@ -32,6 +32,54 @@ function stopPolling() {
 }
 
 /**
+ * Attach debug right-click "Submit and Log" to a ChatUI send button.
+ * Notetaker-specific debug tooling, not part of the reusable component.
+ */
+function _attachMeetingDebugContextMenu(chatInstance) {
+  if (!chatInstance || !chatInstance.sendBtn) return;
+
+  chatInstance.sendBtn.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const existing = document.querySelector('.test-chat-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.className = 'test-chat-context-menu';
+    menu.style.cssText = `
+      position: fixed; left: ${e.clientX}px; top: ${e.clientY}px;
+      background: var(--bg-color, #fff); border: 1px solid var(--border-color, #ddd);
+      border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      z-index: 10000; padding: 4px 0; min-width: 150px;
+    `;
+
+    const option = document.createElement('div');
+    option.textContent = 'Submit and Log';
+    option.style.cssText = 'padding: 8px 16px; cursor: pointer; font-size: 14px;';
+    option.addEventListener('mouseenter', () => { option.style.background = 'var(--hover-bg, #f0f0f0)'; });
+    option.addEventListener('mouseleave', () => { option.style.background = 'transparent'; });
+    option.addEventListener('click', () => {
+      menu.remove();
+      chatInstance.onSendMessage = (payload) => {
+        payload.test_log_this = true;
+        chatInstance.onSendMessage = null;
+      };
+      chatInstance.sendMessage();
+    });
+
+    menu.appendChild(option);
+    document.body.appendChild(menu);
+
+    const closeMenu = (event) => {
+      if (!menu.contains(event.target)) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 10);
+  });
+}
+
+/**
  * Initialize the meeting chat UI component.
  */
 function initMeetingChat() {
@@ -58,13 +106,17 @@ function initMeetingChat() {
       historyEndpoint: `/api/chat/meeting/${state.meetingId}/history`,
       buildPayload: (question) => ({
         question: question,
-        include_related: false, // Can be made configurable via checkbox
+        include_related: false,
       }),
       placeholder: "Ask a question about this meeting...",
-      minimal: true, // Hide clear/collapse buttons, no title
+      emptyText: "Ask a question about this meeting.",
+      minimal: true,
       searchContainer: searchContainer,
       searchToggle: searchToggle,
     });
+
+    // Debug: right-click send button → "Submit and Log"
+    _attachMeetingDebugContextMenu(state.meetingChat);
   } catch (err) {
     console.error("ChatUI initialization failed:", err);
     // #region agent log
@@ -388,6 +440,23 @@ function renderAttendeesList(attendees) {
     });
   });
   
+  // #region agent log
+  listEl.querySelectorAll(".attendee-item").forEach((item) => {
+    item.addEventListener("mouseenter", () => {
+      const actions = item.querySelector(".attendee-item-actions");
+      const actionsStyle = actions ? window.getComputedStyle(actions) : null;
+      const itemRect = item.getBoundingClientRect();
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:hover',message:'mouseenter attendee-item',data:{attendeeId:item.dataset.attendeeId,itemW:itemRect.width,itemH:itemRect.height,actionsDisplay:actionsStyle?actionsStyle.display:'N/A',actionsOpacity:actionsStyle?actionsStyle.opacity:'N/A',actionsW:actions?actions.getBoundingClientRect().width:0,actionsH:actions?actions.getBoundingClientRect().height:0,actionsVisible:actionsStyle?actionsStyle.visibility:'N/A'},timestamp:Date.now(),runId:'hover-debug',hypothesisId:'H1-H2'})}).catch(()=>{});
+    });
+    item.addEventListener("mouseleave", () => {
+      const actions = item.querySelector(".attendee-item-actions");
+      const actionsStyle = actions ? window.getComputedStyle(actions) : null;
+      const itemRect = item.getBoundingClientRect();
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:hover',message:'mouseleave attendee-item',data:{attendeeId:item.dataset.attendeeId,itemW:itemRect.width,itemH:itemRect.height,actionsDisplay:actionsStyle?actionsStyle.display:'N/A',actionsOpacity:actionsStyle?actionsStyle.opacity:'N/A',actionsW:actions?actions.getBoundingClientRect().width:0,actionsH:actions?actions.getBoundingClientRect().height:0},timestamp:Date.now(),runId:'hover-debug',hypothesisId:'H1-H2'})}).catch(()=>{});
+    });
+  });
+  // #endregion
+
   // Add handlers for inline rename button
   listEl.querySelectorAll(".rename-inline").forEach((btn) => {
     btn.addEventListener("click", (e) => {

@@ -1,0 +1,420 @@
+/* ==========================================================================
+   ChatUI Component Styles
+   ==========================================================================
+   
+   This stylesheet provides all visual styling for the ChatUI component.
+   It references CSS custom properties (variables) that must be defined by
+   the consuming application. See README.md for the full list.
+   ========================================================================== */
+
+/* --- Panel container --- */
+
+.chat-panel {
+  background: var(--bg-panel);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+/* --- Standard variant header --- */
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.chat-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.chat-header-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.chat-toggle,
+.chat-clear {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* --- Body & messages --- */
+
+.chat-body {
+  padding: 12px 16px 16px;
+}
+
+.chat-messages {
+  max-height: 300px;
+  min-height: 120px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+}
+
+.chat-empty {
+  color: var(--text-placeholder);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px 16px;
+}
+
+/* --- Message bubbles --- */
+
+.chat-message {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+
+.chat-message:last-child {
+  margin-bottom: 0;
+}
+
+.chat-message-user {
+  background: var(--bg-user-message);
+  margin-left: 24px;
+}
+
+.chat-message-assistant {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  margin-right: 24px;
+}
+
+.chat-message-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.chat-message-role {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.chat-message-time {
+  font-size: 10px;
+  color: var(--text-placeholder);
+}
+
+.chat-message-content {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- Input row --- */
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.chat-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.chat-input:disabled {
+  background: var(--bg-input-disabled);
+  cursor: not-allowed;
+}
+
+.chat-send {
+  padding: 10px 16px;
+  background: var(--accent-primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-send:hover:not(:disabled) {
+  background: var(--accent-primary-hover);
+}
+
+.chat-send:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* --- Status bubble (shown inline in messages area while waiting) --- */
+
+.chat-status-bubble {
+  opacity: 0.7;
+}
+
+.chat-status-text {
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* --- Search bar --- */
+
+.chat-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.chat-search-input {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.chat-search-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.chat-search-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 36px;
+  text-align: center;
+}
+
+.chat-search-prev,
+.chat-search-next {
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.chat-search-prev:hover,
+.chat-search-next:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.chat-search-toggle {
+  font-size: 14px;
+  padding: 6px 8px;
+  line-height: 1;
+}
+
+/* Inline search bar variant — compact, for embedding in external headers */
+.chat-search-bar-inline {
+  flex: 1;
+  margin: 0 12px;
+  padding: 0;
+  background: transparent;
+  border-bottom: none;
+  gap: 4px;
+}
+
+.chat-search-bar-inline .chat-search-input {
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+.chat-search-bar-inline .chat-search-count {
+  font-size: 11px;
+  min-width: 28px;
+}
+
+.chat-search-bar-inline .chat-search-prev,
+.chat-search-bar-inline .chat-search-next {
+  font-size: 11px;
+  padding: 1px 4px;
+}
+
+/* --- Top bar (fullscreen variant, sits under the page toolbar) --- */
+
+.chat-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-secondary);
+  gap: 4px;
+}
+
+/* --- Search highlight marks --- */
+
+.chat-message-content mark {
+  background: var(--color-warning-bg);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.chat-message-content mark.current {
+  background: var(--color-warning);
+  color: #000;
+}
+
+/* --- Legacy container (compat) --- */
+
+.chat-container {
+  margin-top: 16px;
+}
+
+/* ==========================================================================
+   Fullscreen variant
+   ========================================================================== */
+
+.chat-panel-fullscreen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.chat-body-fullscreen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-messages-fullscreen {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
+  margin: 0;
+  padding: 24px;
+  border-radius: 0;
+  overflow-y: auto;
+}
+
+.chat-messages-fullscreen .chat-empty {
+  padding: 60px 24px;
+  font-size: 15px;
+}
+
+.chat-messages-fullscreen .chat-message {
+  max-width: 800px;
+  margin-left: auto;
+  margin-right: auto;
+  margin-bottom: 16px;
+}
+
+.chat-messages-fullscreen .chat-message-user {
+  margin-left: auto;
+  margin-right: 0;
+  max-width: 600px;
+}
+
+.chat-messages-fullscreen .chat-message-assistant {
+  margin-left: 0;
+  margin-right: auto;
+  max-width: 700px;
+}
+
+.chat-messages-fullscreen .chat-message-content {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.chat-input-area {
+  flex-shrink: 0;
+  padding: 16px 24px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-default);
+}
+
+.chat-input-area .chat-input-row {
+  width: 100%;
+}
+
+.chat-input-area .chat-input {
+  padding: 12px 16px;
+  font-size: 15px;
+}
+
+.chat-input-area .chat-send {
+  padding: 12px 20px;
+  font-size: 14px;
+}
+
+.chat-input-area .chat-clear {
+  padding: 12px 16px;
+  font-size: 13px;
+}
+
+/* ==========================================================================
+   Minimal variant
+   ========================================================================== */
+
+.chat-panel-minimal {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.chat-body-minimal {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.chat-messages-minimal {
+  flex: 1;
+  overflow-y: auto;
+  margin-bottom: 12px;
+  min-height: 0;
+}
+
+.chat-body-minimal .chat-input-row {
+  flex-shrink: 0;
+}
+
+.chat-body-minimal .chat-status-bubble {
+  flex-shrink: 0;
+}
+
+.chat-messages-minimal .chat-empty {
+  color: var(--text-placeholder);
+  font-size: 13px;
+  padding: 20px 0;
+  text-align: center;
+}
