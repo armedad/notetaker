@@ -234,6 +234,9 @@ function handleMeetingEvent(event) {
     
     case "attendees_updated":
       // Attendees list changed
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:SSE:attendees_updated',message:'attendees_updated event received',data:{hasAttendees:!!(event.data?.attendees),count:event.data?.attendees?.length||0,ids:(event.data?.attendees||[]).map(a=>a.id),names:(event.data?.attendees||[]).map(a=>a.name)},timestamp:Date.now(),runId:'rt-attendee-debug',hypothesisId:'H_SSE'})}).catch(()=>{});
+      // #endregion
       if (event.data?.attendees) {
         if (state.meeting) {
           state.meeting.attendees = event.data.attendees;
@@ -808,10 +811,8 @@ function buildTranscriptText(segments) {
     .map((segment) => {
       const start = segment.start.toFixed(2);
       const end = segment.end.toFixed(2);
-      const speakerId = segment.speaker_id || segment.speaker;
-      const speakerName = speakerId
-        ? attendeeMap.get(speakerId)?.name || speakerId
-        : "Person 1";
+      const speakerId = segment.speaker_id || segment.speaker || "unknown";
+      const speakerName = attendeeMap.get(speakerId)?.name || speakerId;
       return `[${start}-${end}] [${speakerName}] ${segment.text}`;
     })
     .join("\n");
