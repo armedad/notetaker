@@ -502,8 +502,9 @@ def create_transcription_router(
                             meeting_store.append_live_meta(meeting_id, language)
                         
                         # Feed audio to real-time diarization
+                        new_rt_annotations = []
                         if rt_diarization_active and session_rt_diarization.is_active():
-                            session_rt_diarization.feed_audio(audio_bytes)
+                            new_rt_annotations = session_rt_diarization.feed_audio(audio_bytes)
                         
                         # Process each segment
                         for segment in chunk_segments:
@@ -524,6 +525,11 @@ def create_transcription_router(
                             segments.append(segment)
                             # This saves segment AND publishes event to all subscribers
                             meeting_store.append_live_segment(meeting_id, segment, language or chunk_language)
+                        
+                        # Reconcile: if new diarization annotations cover previously-
+                        # stored segments with a different speaker, update them.
+                        if new_rt_annotations:
+                            meeting_store.reconcile_speakers(meeting_id, new_rt_annotations)
                         
                         offset_seconds += len(buffer) / bytes_per_second
                         
@@ -548,8 +554,9 @@ def create_transcription_router(
                     temp_path, _ = _write_temp_wav(audio_bytes, samplerate, channels)
                     chunk_segments, chunk_language, _ = pipeline.transcribe_chunk(temp_path, offset_seconds)
                     
+                    new_rt_annotations_final = []
                     if rt_diarization_active and session_rt_diarization.is_active():
-                        session_rt_diarization.feed_audio(audio_bytes)
+                        new_rt_annotations_final = session_rt_diarization.feed_audio(audio_bytes)
                     
                     for segment in chunk_segments:
                         if rt_diarization_active and session_rt_diarization.is_active():
@@ -558,6 +565,10 @@ def create_transcription_router(
                                 segment["speaker"] = speaker
                         segments.append(segment)
                         meeting_store.append_live_segment(meeting_id, segment, language or chunk_language)
+                    
+                    # Reconcile retroactive speaker assignments
+                    if new_rt_annotations_final:
+                        meeting_store.reconcile_speakers(meeting_id, new_rt_annotations_final)
                 except Exception as exc:
                     logger.warning("Transcription final chunk error: meeting_id=%s error=%s", meeting_id, exc)
                 finally:

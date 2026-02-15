@@ -200,7 +200,9 @@ class RealtimeDiarizationService:
             audio_bytes: Raw audio bytes (int16 format)
             
         Returns:
-            Current speaker annotations after processing this chunk
+            New speaker annotations produced by this chunk (empty if no
+            new processing happened). The full accumulated list is kept
+            internally for get_speaker_at lookups.
         """
         with self._lock:
             if not self._is_active or self._provider is None:
@@ -213,8 +215,8 @@ class RealtimeDiarizationService:
                 chunk_duration = samples / self._sample_rate
                 self._total_audio_duration += chunk_duration
                 
-                # Process through diart
-                annotations = self._provider.feed_chunk(
+                # Process through diart — returns only NEW annotations
+                new_annotations = self._provider.feed_chunk(
                     audio_bytes,
                     sample_rate=self._sample_rate,
                     channels=self._channels,
@@ -227,10 +229,9 @@ class RealtimeDiarizationService:
                 prev_count = len(self._annotations)
                 # #endregion
                 
-                if annotations:
-                    # FIX: Accumulate annotations instead of replacing them
-                    # This preserves speaker assignments from previous chunks
-                    self._annotations.extend(annotations)
+                if new_annotations:
+                    # Accumulate into internal list for get_speaker_at lookups
+                    self._annotations.extend(new_annotations)
                     # #region agent log - log when annotations are updated
                     try:
                         with open(_DEBUG_LOG_PATH, "a") as f:
@@ -239,10 +240,10 @@ class RealtimeDiarizationService:
                                 "message": "annotations_accumulated",
                                 "data": {
                                     "prev_count": prev_count,
-                                    "added_count": len(annotations),
+                                    "added_count": len(new_annotations),
                                     "total_count": len(self._annotations),
                                     "total_audio_s": round(self._total_audio_duration, 2),
-                                    "new_ranges": [(round(a["start"], 2), round(a["end"], 2), a["speaker"]) for a in annotations],
+                                    "new_ranges": [(round(a["start"], 2), round(a["end"], 2), a["speaker"]) for a in new_annotations],
                                 },
                                 "timestamp": _time.time() * 1000,
                                 "runId": "diarize-debug-fix",
@@ -262,6 +263,7 @@ class RealtimeDiarizationService:
                             "chunk_duration_s": round(chunk_duration, 3),
                             "total_audio_s": round(self._total_audio_duration, 3),
                             "annotations": len(self._annotations),
+                            "new_annotations": len(new_annotations),
                         },
                         run_id="pre-fix",
                         hypothesis_id="H3",
@@ -275,12 +277,13 @@ class RealtimeDiarizationService:
                             "chunk_duration_s": round(chunk_duration, 3),
                             "total_audio_s": round(self._total_audio_duration, 3),
                             "annotations": len(self._annotations),
+                            "new_annotations": len(new_annotations),
                         },
                         run_id="pre-fix",
                         hypothesis_id="H3",
                     )
                 
-                return self._annotations
+                return new_annotations
                 
             except Exception as exc:
                 self._logger.warning("Failed to process audio chunk: %s", exc)

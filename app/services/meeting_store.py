@@ -894,6 +894,103 @@ class MeetingStore:
                 self.publish_event("attendees_updated", meeting_id, {"attendees": attendees})
             return meeting
 
+    def reconcile_speakers(
+        self, meeting_id: str, annotations: list
+    ) -> int:
+        """Reconcile stored transcript segments against new diarization annotations.
+        
+        For each annotation, finds stored segments whose start time falls within
+        the annotation's time range. If the stored segment has a different speaker
+        (especially "unknown"), updates it to the annotation's speaker.
+        
+        Args:
+            meeting_id: The meeting ID
+            annotations: List of dicts with {start, end, speaker} from diarization
+            
+        Returns:
+            Number of segments that were updated
+        """
+        if not annotations:
+            return 0
+        
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return 0
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return 0
+            
+            transcript = meeting.get("transcript", {})
+            if not isinstance(transcript, dict):
+                return 0
+            segments = transcript.get("segments", [])
+            if not segments:
+                return 0
+            
+            updated_count = 0
+            for ann in annotations:
+                ann_start = ann.get("start")
+                ann_end = ann.get("end")
+                ann_speaker = ann.get("speaker")
+                if ann_start is None or ann_end is None or not ann_speaker:
+                    continue
+                
+                for seg in segments:
+                    seg_start = seg.get("start")
+                    if seg_start is None:
+                        continue
+                    # Check if segment's start falls within annotation range
+                    if ann_start <= seg_start < ann_end:
+                        current_speaker = seg.get("speaker")
+                        if current_speaker != ann_speaker:
+                            seg["speaker"] = ann_speaker
+                            # Also update speaker_id if present
+                            if "speaker_id" in seg:
+                                seg["speaker_id"] = ann_speaker
+                            updated_count += 1
+            
+            if updated_count == 0:
+                return 0
+            
+            # Ensure attendees exist for any new speaker labels
+            existing_attendees = meeting.get("attendees", [])
+            existing_ids = {att.get("id") for att in existing_attendees}
+            existing_labels = {att.get("label") for att in existing_attendees}
+            
+            for ann in annotations:
+                speaker = ann.get("speaker")
+                if speaker and speaker not in existing_ids and speaker not in existing_labels:
+                    new_attendee = {
+                        "id": speaker,
+                        "label": speaker,
+                        "name": speaker.replace("speaker", "Speaker ").replace("_", " ").title(),
+                    }
+                    existing_attendees.append(new_attendee)
+            
+            meeting["attendees"] = existing_attendees
+            meeting["transcript"]["segments"] = segments
+            self._write_meeting_file(path, meeting)
+            
+            # Publish events so frontend updates
+            self.publish_event("transcript_updated", meeting_id, {"segments": segments})
+            self.publish_event("attendees_updated", meeting_id, {"attendees": existing_attendees})
+            
+            _dbg_ndjson(
+                location="meeting_store.py:reconcile_speakers",
+                message="speakers_reconciled",
+                data={
+                    "meeting_id": meeting_id,
+                    "annotations_checked": len(annotations),
+                    "segments_updated": updated_count,
+                    "total_attendees": len(existing_attendees),
+                },
+                run_id="reconcile",
+                hypothesis_id="RECONCILE",
+            )
+            
+            return updated_count
+
     def update_attendee_name(
         self,
         meeting_id: str,
@@ -1062,14 +1159,49 @@ class MeetingStore:
             transcript["updated_at"] = datetime.utcnow().isoformat()
             meeting["transcript"] = transcript
             
-            # Create/update attendee if segment has a speaker (real-time diarization)
+            # Create/update attendee for every segment (real-time diarization)
             speaker_label = segment.get("speaker")
+            # #region agent log
+            _dbg_ndjson(
+                location="meeting_store.py:append_live_segment:speaker_check",
+                message="segment speaker label",
+                data={
+                    "meeting_id": meeting_id,
+                    "speaker_label": speaker_label,
+                    "has_speaker": bool(speaker_label),
+                    "segment_start": segment.get("start"),
+                    "text_preview": (segment.get("text") or "")[:40],
+                },
+                run_id="rt-attendee-debug",
+                hypothesis_id="H_NOSPEAKER",
+            )
+            # #endregion
+            if not speaker_label:
+                # Segment has no speaker label — assign to an "Unknown" attendee
+                speaker_label = "unknown"
+                segment["speaker"] = speaker_label
             if speaker_label:
                 existing_attendees = meeting.get("attendees", [])
                 attendee_exists = any(
                     att.get("label") == speaker_label or att.get("id") == speaker_label
                     for att in existing_attendees
                 )
+                # #region agent log
+                _dbg_ndjson(
+                    location="meeting_store.py:append_live_segment:attendee_check",
+                    message="attendee existence check",
+                    data={
+                        "meeting_id": meeting_id,
+                        "speaker_label": speaker_label,
+                        "attendee_exists": attendee_exists,
+                        "existing_ids": [a.get("id") for a in existing_attendees],
+                        "existing_labels": [a.get("label") for a in existing_attendees],
+                        "segment_start": segment.get("start"),
+                    },
+                    run_id="rt-attendee-debug",
+                    hypothesis_id="H_CREATION",
+                )
+                # #endregion
                 if not attendee_exists:
                     # Create new attendee for this speaker
                     new_attendee = {

@@ -330,6 +330,7 @@ class DiartProvider:
                 # Process through pipeline
                 # Note: Diart's pipeline returns pyannote Annotation objects
                 # We need to convert them to our dict format
+                new_annotations = []
                 if self._pipeline is not None:
                     # For now, accumulate audio and process periodically
                     self._audio_buffer.add_chunk(waveform)
@@ -339,6 +340,7 @@ class DiartProvider:
                         annotation = self._process_buffer()
                         if annotation:
                             self._current_annotations = annotation
+                            new_annotations = annotation
                 if self._dbg_feed_count < 3:
                     self._dbg_feed_count += 1
                     nd_dbg(
@@ -350,12 +352,13 @@ class DiartProvider:
                             "channels_in": channels,
                             "buffer_duration_s": round(getattr(self._audio_buffer, "duration", 0.0) or 0.0, 3),
                             "annotations": len(self._current_annotations),
+                            "new_annotations": len(new_annotations),
                         },
                         run_id="pre-fix",
                         hypothesis_id="H3",
                     )
                 
-                return self._current_annotations
+                return new_annotations
                 
             except Exception as exc:
                 nd_dbg(

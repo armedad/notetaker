@@ -30,7 +30,15 @@ class PyannoteProvider(DiarizationProvider):
                     self._config.model,
                     use_auth_token=self._config.hf_token,
                 )
-                self._pipeline.to(self._config.device)
+                # #region agent log
+                import torch as _torch, json as _json, time as _time
+                _dev = _torch.device(self._config.device)
+                try:
+                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                        _f.write(_json.dumps({"location":"pyannote_provider.py:33","message":"pipeline.to device","data":{"config_device":self._config.device,"torch_device":str(_dev)},"timestamp":_time.time()*1000,"runId":"diar-fix","hypothesisId":"H2"})+"\n")
+                except: pass
+                # #endregion
+                self._pipeline.to(_dev)
             except Exception as exc:
                 error_str = str(exc).lower()
                 if "403" in error_str or "forbidden" in error_str or "gated" in error_str:
