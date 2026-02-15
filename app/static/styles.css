@@ -483,6 +483,10 @@ button:disabled {
   background: var(--bg-hover);
 }
 
+.meeting-item.selected {
+  background: var(--bg-selected);
+}
+
 .meeting-item:last-child {
   border-bottom: none;
 }
@@ -496,6 +500,46 @@ button:disabled {
 .meeting-meta {
   font-size: 11px;
   color: var(--text-placeholder);
+}
+
+/* Selection toolbar at bottom of sidebar */
+.selection-toolbar {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-default);
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.selection-toolbar[hidden] {
+  display: none;
+}
+
+.selection-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.toolbar-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.toolbar-delete-btn:hover {
+  background: var(--bg-hover);
+  color: var(--error);
 }
 
 /* Sidebar list variant - smaller and more compact */
@@ -1597,10 +1641,11 @@ body.meeting-layout {
 .grid-panel {
   display: flex;
   flex-direction: column;
-  background: var(--bg-secondary);
+  background: var(--bg-panel);
   border-radius: 8px;
   border: 1px solid var(--border-default);
   overflow: hidden;
+  min-height: 0;
 }
 
 .grid-panel-header {

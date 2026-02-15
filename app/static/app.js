@@ -5,6 +5,7 @@ const state = {
   liveController: null,
   meetings: [],
   selectedMeetingId: null,
+  selectedMeetingIds: new Set(),  // Multi-select state for meeting list
   lastTranscriptSegments: null,
   testAudioPath: "",
   testAudioName: "",
@@ -23,6 +24,53 @@ const state = {
   fileMeetingId: null,
   overallChat: null,  // ChatUI instance for overall chat
 };
+
+// --- Multi-select helper functions ---
+function toggleMeetingSelection(meetingId) {
+  if (state.selectedMeetingIds.has(meetingId)) {
+    state.selectedMeetingIds.delete(meetingId);
+  } else {
+    state.selectedMeetingIds.add(meetingId);
+  }
+  updateMeetingSelectionUI();
+}
+
+function clearMeetingSelection() {
+  state.selectedMeetingIds.clear();
+  updateMeetingSelectionUI();
+}
+
+function getSelectedMeetingIds() {
+  return Array.from(state.selectedMeetingIds);
+}
+
+function updateMeetingSelectionUI() {
+  // Update selected class on meeting items
+  const items = document.querySelectorAll(".meeting-item");
+  items.forEach((item) => {
+    const meetingId = item.dataset.meetingId;
+    if (state.selectedMeetingIds.has(meetingId)) {
+      item.classList.add("selected");
+    } else {
+      item.classList.remove("selected");
+    }
+  });
+  
+  // Show/hide selection toolbar
+  const toolbar = document.getElementById("selection-toolbar");
+  if (toolbar) {
+    const count = state.selectedMeetingIds.size;
+    if (count > 0) {
+      toolbar.hidden = false;
+      const countEl = toolbar.querySelector(".selection-count");
+      if (countEl) {
+        countEl.textContent = `${count} selected`;
+      }
+    } else {
+      toolbar.hidden = true;
+    }
+  }
+}
 
 function debugLog(message, data = {}) {
   console.debug(`[Home] ${message}`, data);
@@ -903,6 +951,9 @@ function renderMeetings() {
     .forEach((meeting) => {
     const item = document.createElement("div");
     item.className = "meeting-item";
+    if (state.selectedMeetingIds.has(meeting.id)) {
+      item.classList.add("selected");
+    }
     item.dataset.meetingId = meeting.id || "";
     const title = document.createElement("div");
     title.className = "meeting-title";
@@ -914,8 +965,21 @@ function renderMeetings() {
     meta.textContent = inProgress ? `${timestamp} · In progress` : timestamp;
     item.appendChild(title);
     item.appendChild(meta);
-    item.addEventListener("click", () => {
-      window.location.href = `/meeting?id=${meeting.id}`;
+    
+    // Click handler: left side toggles selection, right side navigates
+    item.addEventListener("click", (e) => {
+      const rect = item.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const selectZoneWidth = 24; // pixels from left edge for selection
+      
+      if (clickX <= selectZoneWidth) {
+        // Clicked in left selection zone
+        e.preventDefault();
+        toggleMeetingSelection(meeting.id);
+      } else {
+        // Clicked on content - navigate
+        window.location.href = `/meeting?id=${meeting.id}`;
+      }
     });
     list.appendChild(item);
   });
@@ -1122,6 +1186,40 @@ async function deleteMeeting() {
   } catch (error) {
     setMeetingDetail(`Failed to delete meeting: ${error.message}`);
     setGlobalError("Delete failed.");
+  } finally {
+    setGlobalBusy("");
+  }
+}
+
+async function deleteSelectedMeetings() {
+  const ids = getSelectedMeetingIds();
+  if (ids.length === 0) {
+    return;
+  }
+  
+  const confirmMsg = ids.length === 1 
+    ? "Delete this meeting?" 
+    : `Delete ${ids.length} meetings?`;
+  if (!confirm(confirmMsg)) {
+    return;
+  }
+  
+  setGlobalBusy(`Deleting ${ids.length} meeting(s)...`);
+  try {
+    let deleted = 0;
+    for (const id of ids) {
+      try {
+        await fetchJson(`/api/meetings/${id}`, { method: "DELETE" });
+        deleted++;
+        setGlobalBusy(`Deleting... (${deleted}/${ids.length})`);
+      } catch (error) {
+        debugError(`Failed to delete meeting ${id}`, error);
+      }
+    }
+    clearMeetingSelection();
+    await refreshMeetings();
+  } catch (error) {
+    setGlobalError(`Delete failed: ${error.message}`);
   } finally {
     setGlobalBusy("");
   }
@@ -1556,6 +1654,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         profileMenu.classList.remove("open");
       }
     });
+  }
+  
+  // Multi-select delete button
+  const deleteSelectedBtn = document.getElementById("delete-selected-btn");
+  if (deleteSelectedBtn) {
+    deleteSelectedBtn.addEventListener("click", deleteSelectedMeetings);
   }
 
   await refreshHealth();
