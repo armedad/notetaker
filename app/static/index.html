@@ -13,6 +13,12 @@
       <div class="title-row">
         <h1>Notetaker</h1>
         <span id="version-badge" class="version-badge">v0.0.0.0</span>
+        <button id="search-toggle" class="icon-btn" title="Search meetings (Ctrl+F)">&#128269;</button>
+        <div id="search-bar" class="home-search-bar" style="display:none">
+          <input id="search-input" type="text" placeholder="Search meetings..." />
+          <span id="search-count" class="search-count"></span>
+          <button id="search-close" class="icon-btn search-close-btn" title="Close search">&#10005;</button>
+        </div>
         <span class="recording-status-text" id="recording-status">Not recording</span>
         <span class="status error inline" id="global-error"></span>
         <span class="status inline" id="global-busy"></span>

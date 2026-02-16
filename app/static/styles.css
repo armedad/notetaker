@@ -2348,3 +2348,138 @@ body.meeting-layout {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ===== Home Page Search ===== */
+.home-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 4px;
+}
+
+.home-search-bar input {
+  width: 200px;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.home-search-bar input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-glow, rgba(64, 128, 255, 0.2));
+}
+
+.home-search-bar .search-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.home-search-bar .search-close-btn {
+  font-size: 14px;
+  padding: 4px 6px;
+}
+
+#search-toggle.active {
+  background: var(--accent-primary);
+  color: white;
+}
+
+/* Search results in meeting list */
+.search-result-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-default);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.search-result-item:hover {
+  background: var(--bg-hover);
+}
+
+.search-result-item:last-child {
+  border-bottom: none;
+}
+
+.search-result-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  display: inline;
+}
+
+.search-field-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+}
+
+.search-field-badge.badge-title {
+  background: var(--accent-primary);
+  color: white;
+}
+
+.search-field-badge.badge-summary {
+  background: #6c5ce7;
+  color: white;
+}
+
+.search-field-badge.badge-transcript {
+  background: #00b894;
+  color: white;
+}
+
+.search-field-badge.badge-attendee {
+  background: #fdcb6e;
+  color: #333;
+}
+
+.search-field-badge.badge-user_note,
+.search-field-badge.badge-manual_notes {
+  background: #e17055;
+  color: white;
+}
+
+.search-field-badge.badge-chat {
+  background: #0984e3;
+  color: white;
+}
+
+.search-snippet {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.search-snippet mark {
+  background: var(--accent-highlight, #fff59d);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.search-result-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.search-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
