@@ -1,11 +1,17 @@
 import json
+import logging
 import os
+import threading
 
 import requests
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from typing import Optional
+
+from app.services.llm.ollama_provider import ensure_ollama_running
+
+_logger = logging.getLogger("notetaker.settings")
 
 
 class SummarizationSettingsRequest(BaseModel):
@@ -439,6 +445,21 @@ def create_settings_router(config_path: str) -> APIRouter:
         data["models"] = payload.model_dump()
         with open(config_path, "w", encoding="utf-8") as config_file:
             json.dump(data, config_file, indent=2)
+        
+        # If the newly selected model is Ollama, launch it in the background
+        selected = payload.selected_model or ""
+        if selected.startswith("ollama:"):
+            providers = data.get("providers", {})
+            ollama_cfg = providers.get("ollama", {})
+            ollama_url = ollama_cfg.get("base_url") or "http://127.0.0.1:11434"
+            threading.Thread(
+                target=ensure_ollama_running,
+                args=(ollama_url,),
+                daemon=True,
+                name="ollama-launcher-settings",
+            ).start()
+            _logger.info("Model changed to Ollama — auto-launch initiated")
+        
         return {"status": "ok"}
 
     @router.get("/api/settings/providers")

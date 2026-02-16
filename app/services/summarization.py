@@ -138,8 +138,45 @@ class SummarizationService:
         
         raise LLMProviderError(f"Unknown provider: {provider_name}")
 
+    def _format_user_notes_section(self, user_notes: list) -> str:
+        """Format user notes into a section for the summarization prompt.
+        
+        Args:
+            user_notes: List of note dicts with keys: text, timestamp, is_post_meeting
+            
+        Returns:
+            Formatted string section to include in the prompt
+        """
+        if not user_notes:
+            return ""
+        
+        lines = [
+            "",
+            "User Notes:",
+            "(Note: The user took these notes during or after the meeting. The timestamps indicate when the user started writing each note, which is usually a short but variable time after the topic that sparked the note was discussed. Please integrate relevant insights from these notes into your summary, especially if they highlight important points, concerns, or action items that may not be obvious from the transcript alone. If appropriate, include a brief 'User Notes Highlights' section.)",
+            ""
+        ]
+        
+        for note in user_notes:
+            timestamp = note.get("timestamp")
+            is_post = note.get("is_post_meeting", False)
+            text = note.get("text", "").strip()
+            
+            if is_post:
+                prefix = "[Added after meeting]"
+            elif timestamp is not None:
+                mins = int(timestamp // 60)
+                secs = int(timestamp % 60)
+                prefix = f"[{mins}:{secs:02d}]"
+            else:
+                prefix = "[No timestamp]"
+            
+            lines.append(f"- {prefix} {text}")
+        
+        return "\n".join(lines)
+
     def summarize(
-        self, transcript: str, provider_override: Optional[str] = None
+        self, transcript: str, provider_override: Optional[str] = None, user_notes: Optional[list] = None
     ) -> dict:
         if not transcript.strip():
             raise LLMProviderError("Transcript is empty")
@@ -153,7 +190,11 @@ class SummarizationService:
         except OSError as exc:
             raise LLMProviderError(f"Missing summary prompt file: {prompt_path}") from exc
 
+        # Format user notes section if notes are provided
+        user_notes_section = self._format_user_notes_section(user_notes) if user_notes else ""
+        
         prompt = template.replace("{{transcript}}", transcript)
+        prompt = prompt.replace("{{user_notes_section}}", user_notes_section)
         # Use raw prompt and parse JSON here so both manual + final share the same prompt file.
         content = provider.prompt(prompt)
         # Providers based on BaseLLMProvider may wrap JSON in markdown fences; strip if present.
@@ -227,7 +268,7 @@ class SummarizationService:
         return provider.prompt(prompt)
 
     def summarize_stream(
-        self, transcript: str, provider_override: Optional[str] = None
+        self, transcript: str, provider_override: Optional[str] = None, user_notes: Optional[list] = None
     ) -> Generator[str, None, None]:
         """Stream summary tokens as they are generated.
         
@@ -236,6 +277,7 @@ class SummarizationService:
         Args:
             transcript: The transcript to summarize
             provider_override: Optional override for the LLM provider
+            user_notes: Optional list of user notes to include in the summary
             
         Yields:
             Token strings as they arrive from the LLM
@@ -253,7 +295,11 @@ class SummarizationService:
         except OSError as exc:
             raise LLMProviderError(f"Missing summary prompt file: {prompt_path}") from exc
 
+        # Format user notes section if notes are provided
+        user_notes_section = self._format_user_notes_section(user_notes) if user_notes else ""
+        
         prompt = template.replace("{{transcript}}", transcript)
+        prompt = prompt.replace("{{user_notes_section}}", user_notes_section)
         yield from provider.prompt_stream(prompt)
 
     def identify_speaker_name(

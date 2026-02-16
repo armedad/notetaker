@@ -62,6 +62,7 @@ from app.routers.debug import create_test_debug_router
 from app.services.audio_capture import AudioCaptureService
 from app.services.meeting_store import MeetingStore
 from app.services.summarization import SummarizationService
+from app.services.llm.ollama_provider import ensure_ollama_running
 from app.services.search_service import SearchService
 from app.services.chat_service import ChatService
 from app.services.logging_setup import configure_logging
@@ -196,6 +197,22 @@ def create_app() -> FastAPI:
             "H4",
         )
         # #endregion
+        # If selected model is Ollama, launch it in the background
+        try:
+            provider_name, _ = summarization_service._get_selected_model()
+            if provider_name == "ollama":
+                provider_cfg = summarization_service._get_provider_config("ollama")
+                ollama_url = provider_cfg.get("base_url") or "http://127.0.0.1:11434"
+                import threading
+                threading.Thread(
+                    target=ensure_ollama_running,
+                    args=(ollama_url,),
+                    daemon=True,
+                    name="ollama-launcher",
+                ).start()
+                logger.info("Boot: Ollama auto-launch initiated in background")
+        except Exception:
+            pass  # No model selected yet or config incomplete — skip
     except Exception as exc:
         # #region agent log
         _boot_log(

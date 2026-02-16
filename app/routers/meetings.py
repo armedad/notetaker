@@ -39,6 +39,21 @@ class ManualBuffersUpdateRequest(BaseModel):
     manual_summary: str = ""
 
 
+class CreateUserNoteRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    timestamp: Optional[float] = None  # Seconds from recording start
+    is_post_meeting: bool = False
+
+
+class UpdateUserNoteRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+
+
+class SaveUserNoteDraftRequest(BaseModel):
+    text: str = ""
+    timestamp: Optional[float] = None
+
+
 def create_meetings_router(
     meeting_store: MeetingStore, summarization_service, config_path: str = None
 ) -> APIRouter:
@@ -291,5 +306,73 @@ If you cannot determine the name, respond with:
             "fixed_count": fixed_count,
             "fixed_ids": fixed_ids,
         }
+
+    # ---- User Notes API ----
+
+    @router.get("/api/meetings/{meeting_id}/notes")
+    def get_user_notes(meeting_id: str) -> dict:
+        """Get all user notes and current draft for a meeting."""
+        meeting = meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        return meeting_store.get_user_notes(meeting_id)
+
+    @router.post("/api/meetings/{meeting_id}/notes")
+    def create_user_note(meeting_id: str, payload: CreateUserNoteRequest) -> dict:
+        """Create a new user note."""
+        meeting = meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        
+        # Determine if this is a post-meeting note
+        is_post_meeting = payload.is_post_meeting
+        if not is_post_meeting and meeting.get("status") == "completed":
+            is_post_meeting = True
+        
+        note = meeting_store.create_user_note(
+            meeting_id,
+            payload.text,
+            payload.timestamp,
+            is_post_meeting=is_post_meeting,
+        )
+        if not note:
+            raise HTTPException(status_code=500, detail="Failed to create note")
+        return note
+
+    @router.patch("/api/meetings/{meeting_id}/notes/{note_id}")
+    def update_user_note(
+        meeting_id: str, note_id: str, payload: UpdateUserNoteRequest
+    ) -> dict:
+        """Update an existing user note's text (preserves original timestamp)."""
+        note = meeting_store.update_user_note(meeting_id, note_id, payload.text)
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+        return note
+
+    @router.delete("/api/meetings/{meeting_id}/notes/{note_id}")
+    def delete_user_note(meeting_id: str, note_id: str) -> dict:
+        """Delete a user note."""
+        deleted = meeting_store.delete_user_note(meeting_id, note_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Note not found")
+        return {"status": "ok"}
+
+    @router.put("/api/meetings/{meeting_id}/notes/draft")
+    def save_user_notes_draft(
+        meeting_id: str, payload: SaveUserNoteDraftRequest
+    ) -> dict:
+        """Save the current draft note (auto-save)."""
+        meeting = meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        
+        success = meeting_store.save_user_notes_draft(
+            meeting_id,
+            payload.text,
+            payload.timestamp,
+        )
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save draft")
+        return {"status": "ok"}
 
     return router

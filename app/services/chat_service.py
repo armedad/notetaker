@@ -4,9 +4,11 @@ import json
 import logging
 import os
 import threading
+from datetime import datetime
 from typing import Generator, Optional
 
 from app.services.llm import LLMProviderError
+from app.services.llm_instrumentation import _test_log_this_request
 from app.services.meeting_store import MeetingStore
 from app.services.search_service import SearchService
 from app.services.summarization import SummarizationService
@@ -35,6 +37,39 @@ class ChatService:
         data_dir = os.path.dirname(meeting_store._meetings_dir)
         self._homepage_state_path = os.path.join(data_dir, "homepage_state.json")
         self._homepage_lock = threading.Lock()
+        self._logs_dir = os.path.join(os.getcwd(), "logs")
+
+    def _maybe_log_prompt(self, question: str, prompt: str, provider_name: str, extra: Optional[dict] = None) -> Optional[str]:
+        """If test_log_this is set, write the full prompt to logs/submit_[datetime].log.
+        
+        Returns the log file path if written, else None.
+        """
+        try:
+            if not _test_log_this_request.get():
+                return None
+        except Exception:
+            return None
+        
+        os.makedirs(self._logs_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_path = os.path.join(self._logs_dir, f"submit_{ts}.log")
+        
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(f"=== Submit and Log: {ts} ===\n")
+            f.write(f"Provider: {provider_name}\n")
+            f.write(f"Question: {question}\n")
+            if extra:
+                for k, v in extra.items():
+                    f.write(f"{k}: {v}\n")
+            f.write(f"\n{'=' * 60}\n")
+            f.write(f"FULL PROMPT ({len(prompt)} chars):\n")
+            f.write(f"{'=' * 60}\n\n")
+            f.write(prompt)
+            f.write(f"\n\n{'=' * 60}\n")
+            f.write("END OF PROMPT\n")
+        
+        self._logger.info("Submit and Log: wrote %s (%d chars)", log_path, len(prompt))
+        return log_path
 
     # ---- Homepage chat history persistence ----
 
@@ -92,6 +127,44 @@ class ChatService:
         names = [a.get("name", a.get("label", "Unknown")) for a in attendees]
         return ", ".join(names)
 
+    @staticmethod
+    def _format_user_notes_section(user_notes: list) -> str:
+        """Format user notes into a section for chat prompts.
+        
+        Args:
+            user_notes: List of note dicts with keys: text, timestamp, is_post_meeting
+            
+        Returns:
+            Formatted string section to include in the prompt
+        """
+        if not user_notes:
+            return ""
+        
+        lines = [
+            "",
+            "User Notes:",
+            "(Note: The user took these notes during or after the meeting. The timestamps indicate when the user started writing each note, which is usually a short but variable time after the topic that sparked the note was discussed.)",
+            ""
+        ]
+        
+        for note in user_notes:
+            timestamp = note.get("timestamp")
+            is_post = note.get("is_post_meeting", False)
+            text = note.get("text", "").strip()
+            
+            if is_post:
+                prefix = "[Added after meeting]"
+            elif timestamp is not None:
+                mins = int(timestamp // 60)
+                secs = int(timestamp % 60)
+                prefix = f"[{mins}:{secs:02d}]"
+            else:
+                prefix = "[No timestamp]"
+            
+            lines.append(f"- {prefix} {text}")
+        
+        return "\n".join(lines)
+
     def _load_prompt_template(self, filename: str) -> str:
         """Load a prompt template from the prompts directory."""
         prompt_path = os.path.join(self._prompts_dir, filename)
@@ -136,6 +209,8 @@ class ChatService:
         
         transcript_text = self._format_transcript_with_speakers(meeting)
         attendee_list = self._format_attendee_list(meeting)
+        user_notes = meeting.get("user_notes", [])
+        user_notes_section = self._format_user_notes_section(user_notes)
         
         # Replace template variables
         prompt = template.replace("{{meeting_title}}", title)
@@ -146,6 +221,7 @@ class ChatService:
             transcript_block += f"Attendees: {attendee_list}\n\n"
         transcript_block += transcript_text if transcript_text else "(No transcript available)"
         prompt = prompt.replace("{{transcript}}", transcript_block)
+        prompt = prompt.replace("{{user_notes_section}}", user_notes_section)
         prompt = prompt.replace("{{question}}", question)
         
         # Handle optional related context
@@ -193,6 +269,12 @@ class ChatService:
                 transcript_text = self._format_transcript_with_speakers(meeting)
                 if transcript_text:
                     meetings_text += f"Transcript:\n{transcript_text}\n"
+            
+            # Include user notes if present
+            user_notes = meeting.get("user_notes", [])
+            if user_notes:
+                user_notes_section = self._format_user_notes_section(user_notes)
+                meetings_text += f"{user_notes_section}\n"
             
             meetings_text += "---\n"
         
@@ -256,6 +338,13 @@ class ChatService:
         # Stream response from LLM
         provider = self._summarization._get_provider()
         self._logger.info("Chat using provider=%s", provider.__class__.__name__)
+        
+        self._maybe_log_prompt(question, prompt, provider.__class__.__name__, {
+            "Mode": "meeting",
+            "Meeting ID": meeting_id,
+            "Meeting title": meeting.get("title", "(untitled)"),
+            "Include related": str(include_related),
+        })
         
         yield from provider.prompt_stream(prompt)
     
@@ -336,6 +425,13 @@ class ChatService:
         # #region agent log
         _dbg("calling_provider", {"provider": provider.__class__.__name__})
         # #endregion
+        
+        self._maybe_log_prompt(question, prompt, provider.__class__.__name__, {
+            "Mode": "overall",
+            "Max meetings": str(max_meetings),
+            "Include transcripts": str(include_transcripts),
+            "Meetings found": str(len(meetings)),
+        })
         
         yield from provider.prompt_stream(prompt)
     
