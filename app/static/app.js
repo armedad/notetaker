@@ -23,6 +23,10 @@ const state = {
   recordingSource: "device",
   fileMeetingId: null,
   overallChat: null,  // ChatUI instance for overall chat
+  // Search state
+  searchQuery: "",
+  searchResults: [],
+  showSearchResults: false,
 };
 
 // --- Multi-select helper functions ---
@@ -74,6 +78,192 @@ function updateMeetingSelectionUI() {
 
 function debugLog(message, data = {}) {
   console.debug(`[Home] ${message}`, data);
+}
+
+// --- Search functions ---
+function toggleSearch() {
+  const searchBar = document.getElementById("search-bar");
+  const searchToggle = document.getElementById("search-toggle");
+  const searchInput = document.getElementById("search-input");
+  
+  if (!searchBar) return;
+  
+  if (searchBar.style.display === "none") {
+    // Open search
+    searchBar.style.display = "flex";
+    searchToggle.classList.add("active");
+    searchInput?.focus();
+  } else {
+    // Close search
+    closeSearch();
+  }
+}
+
+function closeSearch() {
+  const searchBar = document.getElementById("search-bar");
+  const searchToggle = document.getElementById("search-toggle");
+  const searchInput = document.getElementById("search-input");
+  const searchCount = document.getElementById("search-count");
+  
+  if (searchBar) searchBar.style.display = "none";
+  if (searchToggle) searchToggle.classList.remove("active");
+  if (searchInput) searchInput.value = "";
+  if (searchCount) searchCount.textContent = "";
+  
+  state.searchQuery = "";
+  state.searchResults = [];
+  state.showSearchResults = false;
+  
+  // Restore meetings list
+  renderMeetings();
+}
+
+async function performSearch(query) {
+  if (!query || query.length < 2) {
+    state.searchResults = [];
+    state.showSearchResults = false;
+    renderMeetings();
+    return;
+  }
+  
+  state.searchQuery = query;
+  const searchCount = document.getElementById("search-count");
+  if (searchCount) searchCount.textContent = "Searching...";
+  
+  try {
+    const results = await fetchJson(`/api/search?q=${encodeURIComponent(query)}&limit=50`);
+    state.searchResults = results;
+    state.showSearchResults = true;
+    
+    if (searchCount) {
+      searchCount.textContent = `${results.length} match${results.length !== 1 ? "es" : ""}`;
+    }
+    
+    renderSearchResults();
+  } catch (error) {
+    debugLog("Search failed", { error: error.message });
+    if (searchCount) searchCount.textContent = "Error";
+    state.searchResults = [];
+    state.showSearchResults = false;
+    renderMeetings();
+  }
+}
+
+function renderSearchResults() {
+  const list = document.getElementById("meeting-list");
+  if (!list) return;
+  
+  list.innerHTML = "";
+  
+  if (state.searchResults.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "search-empty";
+    empty.textContent = `No results for "${state.searchQuery}"`;
+    list.appendChild(empty);
+    return;
+  }
+  
+  state.searchResults.forEach((result) => {
+    const item = document.createElement("div");
+    item.className = "search-result-item";
+    item.dataset.meetingId = result.meeting_id;
+    
+    // Meeting title
+    const title = document.createElement("div");
+    title.className = "search-result-title";
+    title.textContent = result.meeting_title || "Untitled meeting";
+    
+    // Field type badge
+    const badge = document.createElement("span");
+    badge.className = `search-field-badge badge-${result.field_type}`;
+    badge.textContent = formatFieldType(result.field_type);
+    
+    // Snippet with highlighted match
+    const snippet = document.createElement("div");
+    snippet.className = "search-snippet";
+    snippet.innerHTML = highlightMatch(result.snippet, state.searchQuery);
+    
+    // Date
+    const meta = document.createElement("div");
+    meta.className = "search-result-meta";
+    meta.textContent = result.created_at || "";
+    
+    item.appendChild(title);
+    item.appendChild(badge);
+    item.appendChild(snippet);
+    item.appendChild(meta);
+    
+    // Click to navigate to meeting
+    item.addEventListener("click", () => {
+      window.location.href = `/meeting?id=${result.meeting_id}`;
+    });
+    
+    list.appendChild(item);
+  });
+}
+
+function formatFieldType(fieldType) {
+  const labels = {
+    title: "Title",
+    summary: "Summary",
+    transcript: "Transcript",
+    attendee: "Attendee",
+    user_note: "Note",
+    manual_notes: "Notes",
+    chat: "Chat",
+  };
+  return labels[fieldType] || fieldType;
+}
+
+function highlightMatch(text, query) {
+  if (!text || !query) return text || "";
+  
+  // Escape HTML first
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  
+  // Escape regex special chars in query
+  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  
+  // Case-insensitive replace with <mark>
+  const regex = new RegExp(`(${escapedQuery})`, "gi");
+  return escaped.replace(regex, "<mark>$1</mark>");
+}
+
+function initSearch() {
+  const searchToggle = document.getElementById("search-toggle");
+  const searchClose = document.getElementById("search-close");
+  const searchInput = document.getElementById("search-input");
+  
+  if (searchToggle) {
+    searchToggle.addEventListener("click", toggleSearch);
+  }
+  
+  if (searchClose) {
+    searchClose.addEventListener("click", closeSearch);
+  }
+  
+  if (searchInput) {
+    // Search on Enter
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        performSearch(searchInput.value.trim());
+      } else if (e.key === "Escape") {
+        closeSearch();
+      }
+    });
+  }
+  
+  // Ctrl+F / Cmd+F to open search
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+      e.preventDefault();
+      toggleSearch();
+    }
+  });
 }
 
 /**
@@ -1680,6 +1870,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   
   // Initialize overall chat for querying all meetings
   initOverallChat();
+  
+  // Initialize search
+  initSearch();
 });
 
 async function saveDiarizationSettings() {

@@ -59,6 +59,7 @@ from app.routers.uploads import create_uploads_router
 from app.routers.testing import create_testing_router
 from app.routers.chat import create_chat_router
 from app.routers.debug import create_test_debug_router
+from app.routers.search import create_search_router
 from app.services.audio_capture import AudioCaptureService
 from app.services.meeting_store import MeetingStore
 from app.services.summarization import SummarizationService
@@ -251,6 +252,10 @@ def create_app() -> FastAPI:
         chat_service = ChatService(meeting_store, summarization_service, search_service)
         app.include_router(create_chat_router(chat_service, meeting_store))
         logger.info("Boot: chat router mounted")
+        
+        # Search router
+        app.include_router(create_search_router(search_service))
+        logger.info("Boot: search router mounted")
         
         # LLM observability instrumentation (test/debug infrastructure)
         llm_logs_dir = os.path.join(cwd, "logs", "llm")
