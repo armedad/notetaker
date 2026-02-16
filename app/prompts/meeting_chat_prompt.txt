@@ -8,6 +8,7 @@ Summary:
 
 Full Transcript:
 {{transcript}}
+{{user_notes_section}}
 
 {{#if related_context}}
 Related context from other meetings that may be helpful:

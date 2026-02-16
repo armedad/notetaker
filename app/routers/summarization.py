@@ -42,9 +42,11 @@ def create_summarization_router(
             for segment in segments
             if isinstance(segment, dict)
         )
+        # Get user notes for inclusion in summary
+        user_notes = meeting.get("user_notes", [])
         try:
             result = summarization_service.summarize(
-                transcript_text, provider_override=payload.provider
+                transcript_text, provider_override=payload.provider, user_notes=user_notes
             )
         except LLMProviderError as exc:
             logger.warning("Summarization failed: %s", exc)
@@ -141,6 +143,9 @@ def create_summarization_router(
         if not transcript_text.strip():
             raise HTTPException(status_code=400, detail="Transcript text is empty")
         
+        # Get user notes for inclusion in summary
+        user_notes = meeting.get("user_notes", [])
+        
         def generate():
             # #region agent log
             import time as _time
@@ -154,7 +159,7 @@ def create_summarization_router(
             accumulated_text = ""
             try:
                 for token in summarization_service.summarize_stream(
-                    transcript_text, provider_override=payload.provider
+                    transcript_text, provider_override=payload.provider, user_notes=user_notes
                 ):
                     accumulated_text += token
                     # #region agent log

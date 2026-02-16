@@ -64,14 +64,12 @@ def create_chat_router(chat_service: ChatService, meeting_store: Optional[Meetin
             meeting_id, payload.question[:50], payload.include_related
         )
         
-        # Set test logging flag if requested
-        log_token = test_set_log_this_request(payload.test_log_this)
+        # Capture the flag value; ContextVar must be set inside the generator
+        # because StreamingResponse iterates in a different async context.
+        _test_log_flag = payload.test_log_this
         
         def generate():
-            # #region agent log
-            import time as _t0; _lp0="/Users/chee/zapier ai project/.cursor/debug.log"
-            with open(_lp0,"a") as _f0: _f0.write(json.dumps({"location":"chat.py:generate_meeting:START","message":"GENERATOR_START","data":{"pid":os.getpid(),"meeting_id":meeting_id},"timestamp":int(_t0.time()*1000),"runId":"debug1","hypothesisId":"H1"})+"\n")
-            # #endregion
+            log_token = test_set_log_this_request(_test_log_flag)
             try:
                 for token in chat_service.chat_meeting(
                     meeting_id=meeting_id,
@@ -84,10 +82,6 @@ def create_chat_router(chat_service: ChatService, meeting_store: Optional[Meetin
                 yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             except Exception as exc:
                 logger.exception("Chat meeting error: %s", exc)
-                # #region agent log
-                import time as _t1; _lp1="/Users/chee/zapier ai project/.cursor/debug.log"
-                with open(_lp1,"a") as _f1: _f1.write(json.dumps({"location":"chat.py:generate_meeting","message":"CATCH_ALL_EXCEPTION","data":{"type":type(exc).__name__,"str":str(exc)[:300],"pid":os.getpid()},"timestamp":int(_t1.time()*1000),"runId":"debug1","hypothesisId":"H2"})+"\n")
-                # #endregion
                 yield f"data: {json.dumps({'error': 'Chat failed'})}\n\n"
             finally:
                 yield "data: [DONE]\n\n"
@@ -120,14 +114,12 @@ def create_chat_router(chat_service: ChatService, meeting_store: Optional[Meetin
             payload.question[:50], payload.max_meetings, payload.include_transcripts
         )
         
-        # Set test logging flag if requested
-        log_token = test_set_log_this_request(payload.test_log_this)
+        # Capture the flag value; ContextVar must be set inside the generator
+        # because StreamingResponse iterates in a different async context.
+        _test_log_flag = payload.test_log_this
         
         def generate():
-            # #region agent log
-            import time as _t3; _lp3="/Users/chee/zapier ai project/.cursor/debug.log"
-            with open(_lp3,"a") as _f3: _f3.write(json.dumps({"location":"chat.py:generate_overall:START","message":"GENERATOR_START","data":{"pid":os.getpid()},"timestamp":int(_t3.time()*1000),"runId":"debug1","hypothesisId":"H1"})+"\n")
-            # #endregion
+            log_token = test_set_log_this_request(_test_log_flag)
             try:
                 for token in chat_service.chat_overall(
                     question=payload.question,
@@ -140,10 +132,6 @@ def create_chat_router(chat_service: ChatService, meeting_store: Optional[Meetin
                 yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             except Exception as exc:
                 logger.exception("Chat overall error: %s", exc)
-                # #region agent log
-                import time as _t2; _lp2="/Users/chee/zapier ai project/.cursor/debug.log"
-                with open(_lp2,"a") as _f2: _f2.write(json.dumps({"location":"chat.py:generate_overall","message":"CATCH_ALL_EXCEPTION","data":{"type":type(exc).__name__,"str":str(exc)[:300],"pid":os.getpid()},"timestamp":int(_t2.time()*1000),"runId":"debug1","hypothesisId":"H2"})+"\n")
-                # #endregion
                 yield f"data: {json.dumps({'error': 'Chat failed'})}\n\n"
             finally:
                 yield "data: [DONE]\n\n"

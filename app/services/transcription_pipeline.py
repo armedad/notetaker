@@ -514,6 +514,10 @@ class TranscriptionPipeline:
         # Update status to completed
         self._meeting_store.update_status(meeting_id, "completed")
         
+        # Get user notes for inclusion in summary
+        meeting = self._meeting_store.get_meeting(meeting_id)
+        user_notes = meeting.get("user_notes", []) if meeting else []
+        
         # Generate summary from transcript text
         summary_text = "\n".join(
             segment.get("text", "")
@@ -557,7 +561,7 @@ class TranscriptionPipeline:
             except Exception:
                 pass
             # #endregion
-            result = self._summarization.summarize(summary_text)
+            result = self._summarization.summarize(summary_text, user_notes=user_notes)
             # #region agent log
             try:
                 dbg(
@@ -834,6 +838,10 @@ class TranscriptionPipeline:
                 meeting_id, "Generating summary...", 0.6
             )
             
+            # Get user notes for inclusion in summary
+            meeting = self._meeting_store.get_meeting(meeting_id)
+            user_notes = meeting.get("user_notes", []) if meeting else []
+            
             summary_text = "\n".join(
                 segment.get("text", "")
                 for segment in segments
@@ -858,7 +866,7 @@ class TranscriptionPipeline:
                             _f.write(_json.dumps({"location":"transcription_pipeline.py:finalize","message":msg,"data":data or {},"timestamp":int(_time.time()*1000),"hypothesisId":"STREAM"})+"\n")
                     _dbg("summary_stream_start", {"meeting_id": meeting_id})
                     # #endregion
-                    for token in self._summarization.summarize_stream(summary_text):
+                    for token in self._summarization.summarize_stream(summary_text, user_notes=user_notes):
                         accumulated_summary += token
                         token_count += 1
                         # #region agent log

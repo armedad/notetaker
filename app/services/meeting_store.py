@@ -162,6 +162,12 @@ class MeetingStore:
                 if "manual_summary" not in meeting:
                     meeting["manual_summary"] = ""
                     updated = True
+                if "user_notes" not in meeting:
+                    meeting["user_notes"] = []
+                    updated = True
+                if "user_notes_draft" not in meeting:
+                    meeting["user_notes_draft"] = None
+                    updated = True
                 updated = self._ensure_title_fields(meeting) or updated
                 if "schema_version" not in meeting:
                     meeting["schema_version"] = 1
@@ -340,6 +346,12 @@ class MeetingStore:
             if "manual_summary" not in meeting:
                 meeting["manual_summary"] = ""
                 updated = True
+            if "user_notes" not in meeting:
+                meeting["user_notes"] = []
+                updated = True
+            if "user_notes_draft" not in meeting:
+                meeting["user_notes_draft"] = None
+                updated = True
             updated = self._ensure_title_fields(meeting) or updated
             if "schema_version" not in meeting:
                 meeting["schema_version"] = 1
@@ -364,6 +376,12 @@ class MeetingStore:
                         updated = True
                     if "manual_summary" not in meeting:
                         meeting["manual_summary"] = ""
+                        updated = True
+                    if "user_notes" not in meeting:
+                        meeting["user_notes"] = []
+                        updated = True
+                    if "user_notes_draft" not in meeting:
+                        meeting["user_notes_draft"] = None
                         updated = True
                     updated = self._ensure_title_fields(meeting) or updated
                     if "schema_version" not in meeting:
@@ -394,6 +412,10 @@ class MeetingStore:
                     existing["manual_notes"] = ""
                 if "manual_summary" not in existing:
                     existing["manual_summary"] = ""
+                if "user_notes" not in existing:
+                    existing["user_notes"] = []
+                if "user_notes_draft" not in existing:
+                    existing["user_notes_draft"] = None
                 if status == "completed":
                     existing["ended_at"] = datetime.utcnow().isoformat()
                 if status == "in_progress":
@@ -441,6 +463,8 @@ class MeetingStore:
                 "summary_state": self._default_summary_state(),
                 "manual_notes": "",
                 "manual_summary": "",
+                "user_notes": [],
+                "user_notes_draft": None,
             }
             if status == "completed":
                 meeting["ended_at"] = datetime.utcnow().isoformat()
@@ -505,6 +529,8 @@ class MeetingStore:
                 "summary_state": self._default_summary_state(),
                 "manual_notes": "",
                 "manual_summary": "",
+                "user_notes": [],
+                "user_notes_draft": None,
             }
             path = self._meeting_path_for_new(created_at, meeting_id)
             self._write_meeting_file(path, meeting)
@@ -544,6 +570,8 @@ class MeetingStore:
                     "summary_state": self._default_summary_state(),
                     "manual_notes": "",
                     "manual_summary": "",
+                    "user_notes": [],
+                    "user_notes_draft": None,
                 }
                 meeting_path = self._meeting_path_for_new(created_at, meeting_id)
 
@@ -562,6 +590,10 @@ class MeetingStore:
                 meeting["manual_notes"] = ""
             if "manual_summary" not in meeting:
                 meeting["manual_summary"] = ""
+            if "user_notes" not in meeting:
+                meeting["user_notes"] = []
+            if "user_notes_draft" not in meeting:
+                meeting["user_notes_draft"] = None
             self._ensure_title_fields(meeting)
             if meeting.get("status") != "in_progress":
                 meeting["status"] = "completed"
@@ -1666,5 +1698,167 @@ class MeetingStore:
             if not meeting:
                 return False
             meeting["chat_history"] = messages
+            self._write_meeting_file(path, meeting)
+            return True
+
+    # ---- User notes persistence ----
+
+    def get_user_notes(self, meeting_id: str) -> dict:
+        """Get user notes and draft for a meeting.
+        
+        Returns:
+            {"notes": [...], "draft": {...} or None}
+        """
+        meeting = self.get_meeting(meeting_id)
+        if not meeting:
+            return {"notes": [], "draft": None}
+        return {
+            "notes": meeting.get("user_notes", []),
+            "draft": meeting.get("user_notes_draft"),
+        }
+
+    def create_user_note(
+        self,
+        meeting_id: str,
+        text: str,
+        timestamp: Optional[float],
+        is_post_meeting: bool = False,
+    ) -> Optional[dict]:
+        """Create a new user note.
+        
+        Args:
+            meeting_id: The meeting ID
+            text: Note content
+            timestamp: Seconds from recording start (when typing started)
+            is_post_meeting: True if added after meeting completed
+            
+        Returns:
+            The created note dict, or None if meeting not found
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            
+            note_id = str(uuid.uuid4())
+            now = datetime.utcnow().isoformat()
+            note = {
+                "id": note_id,
+                "text": text,
+                "timestamp": timestamp,
+                "created_at": now,
+                "updated_at": now,
+                "is_post_meeting": is_post_meeting,
+            }
+            
+            user_notes = meeting.get("user_notes", [])
+            user_notes.append(note)
+            meeting["user_notes"] = user_notes
+            # Clear draft after successful note creation
+            meeting["user_notes_draft"] = None
+            
+            self._write_meeting_file(path, meeting)
+            self.publish_event("user_note_created", meeting_id, {"note": note})
+            return note
+
+    def update_user_note(
+        self,
+        meeting_id: str,
+        note_id: str,
+        text: str,
+    ) -> Optional[dict]:
+        """Update an existing user note's text (preserves original timestamp).
+        
+        Returns:
+            The updated note dict, or None if not found
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            
+            user_notes = meeting.get("user_notes", [])
+            updated_note = None
+            for note in user_notes:
+                if note.get("id") == note_id:
+                    note["text"] = text
+                    note["updated_at"] = datetime.utcnow().isoformat()
+                    updated_note = note
+                    break
+            
+            if not updated_note:
+                return None
+            
+            meeting["user_notes"] = user_notes
+            self._write_meeting_file(path, meeting)
+            self.publish_event("user_note_updated", meeting_id, {"note": updated_note})
+            return updated_note
+
+    def delete_user_note(self, meeting_id: str, note_id: str) -> bool:
+        """Delete a user note.
+        
+        Returns:
+            True if deleted, False if not found
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return False
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return False
+            
+            user_notes = meeting.get("user_notes", [])
+            original_len = len(user_notes)
+            user_notes = [n for n in user_notes if n.get("id") != note_id]
+            
+            if len(user_notes) == original_len:
+                return False  # Note not found
+            
+            meeting["user_notes"] = user_notes
+            self._write_meeting_file(path, meeting)
+            self.publish_event("user_note_deleted", meeting_id, {"note_id": note_id})
+            return True
+
+    def save_user_notes_draft(
+        self,
+        meeting_id: str,
+        text: str,
+        timestamp: Optional[float],
+    ) -> bool:
+        """Save the current draft note (auto-save).
+        
+        Args:
+            meeting_id: The meeting ID
+            text: Current draft text (can be empty string to clear text but keep timestamp)
+            timestamp: When typing started (None to clear completely)
+            
+        Returns:
+            True on success, False if meeting not found
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return False
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return False
+            
+            # If both text and timestamp are empty/None, clear the draft
+            if not text and timestamp is None:
+                meeting["user_notes_draft"] = None
+            else:
+                meeting["user_notes_draft"] = {
+                    "text": text or "",
+                    "timestamp": timestamp,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            
             self._write_meeting_file(path, meeting)
             return True
