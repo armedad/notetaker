@@ -49,7 +49,16 @@
           <section class="grid-panel transcript-panel" data-panel="transcript">
             <div class="grid-panel-header">
               <h2>Transcript</h2>
-              <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+              <div id="transcript-search-bar" class="chat-search-bar chat-search-bar-inline" style="display:none">
+                <input class="chat-search-input" placeholder="Search..." />
+                <span class="chat-search-count">0/0</span>
+                <button class="chat-search-prev" title="Previous">&#9650;</button>
+                <button class="chat-search-next" title="Next">&#9660;</button>
+              </div>
+              <div class="grid-panel-actions">
+                <button id="transcript-search-toggle" class="icon-btn" title="Search transcript">&#128269;</button>
+                <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+              </div>
             </div>
             <div class="status" id="transcript-status">No transcript yet.</div>
             <div class="output transcript" id="transcript-output"></div>
@@ -59,7 +68,14 @@
           <section class="grid-panel summary-panel" data-panel="summary">
             <div class="grid-panel-header">
               <h2>Summary</h2>
+              <div id="summary-search-bar" class="chat-search-bar chat-search-bar-inline" style="display:none">
+                <input class="chat-search-input" placeholder="Search..." />
+                <span class="chat-search-count">0/0</span>
+                <button class="chat-search-prev" title="Previous">&#9650;</button>
+                <button class="chat-search-next" title="Next">&#9660;</button>
+              </div>
               <div class="grid-panel-actions">
+                <button id="summary-search-toggle" class="icon-btn" title="Search summary">&#128269;</button>
                 <button id="manual-summarize" class="secondary small">Summarize</button>
                 <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
               </div>
@@ -91,9 +107,36 @@
           <section class="grid-panel notes-panel" data-panel="notes">
             <div class="grid-panel-header">
               <h2>Notes</h2>
-              <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+              <div id="notes-search-bar" class="chat-search-bar chat-search-bar-inline" style="display:none">
+                <input class="chat-search-input" placeholder="Search..." />
+                <span class="chat-search-count">0/0</span>
+                <button class="chat-search-prev" title="Previous">&#9650;</button>
+                <button class="chat-search-next" title="Next">&#9660;</button>
+              </div>
+              <div class="grid-panel-actions">
+                <button id="notes-search-toggle" class="icon-btn" title="Search notes">&#128269;</button>
+                <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+              </div>
             </div>
-            <textarea id="manual-notes" placeholder="Add your notes here..."></textarea>
+            <div class="notes-panel-content">
+              <!-- Log of submitted notes -->
+              <div class="notes-log" id="notes-log">
+                <div class="notes-empty" id="notes-empty">No notes yet. Start typing below.</div>
+              </div>
+              <!-- Input area -->
+              <div class="notes-input-area">
+                <div class="notes-timestamp-badge" id="notes-timestamp-badge" style="display: none;">
+                  <span id="notes-timestamp-text">Note at 0:00</span>
+                </div>
+                <div class="notes-input-row">
+                  <textarea id="notes-input" placeholder="Type a note..." rows="2"></textarea>
+                  <div class="notes-input-buttons">
+                    <button id="notes-submit-btn" class="primary small" title="Submit note" disabled>Submit</button>
+                    <button id="notes-clear-btn" class="secondary small icon-btn" title="Clear">&#x2715;</button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </section>
         </div>
       </main>
@@ -111,13 +154,28 @@
               Show raw (unconsolidated) segments
             </label>
           </div>
-          <div class="debug-section">
-            <h3>Transcription (raw)</h3>
+          <div class="debug-section" id="debug-section-transcript">
+            <div class="debug-section-header">
+              <h3>Transcription (raw)</h3>
+              <button class="debug-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+            </div>
             <textarea id="manual-transcription" rows="8" readonly></textarea>
           </div>
-          <div class="debug-section">
-            <h3>Summary (raw)</h3>
+          <div class="debug-section" id="debug-section-summary">
+            <div class="debug-section-header">
+              <h3>Summary (raw)</h3>
+              <button class="debug-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+            </div>
             <textarea id="manual-summary" rows="8"></textarea>
+          </div>
+          <div class="debug-section" id="debug-section-prompt">
+            <div class="debug-section-header">
+              <h3>Full LLM Prompt</h3>
+              <button class="debug-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
+            </div>
+            <div class="debug-prompt-path" id="debug-prompt-path"></div>
+            <textarea id="debug-prompt-log" rows="8" readonly
+              placeholder="Use right-click 'Submit and Log' on the chat send button to capture a prompt."></textarea>
           </div>
         </div>
       </aside>

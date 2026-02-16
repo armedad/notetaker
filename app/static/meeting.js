@@ -12,7 +12,280 @@ const state = {
   showRawSegments: false,
   eventsSource: null,  // SSE connection for meeting events (handles both mic and file transcription)
   meetingChat: null,   // ChatUI instance for meeting-specific chat
+  // User notes state
+  userNotes: [],           // Array of submitted notes
+  userNotesDraft: null,    // Current draft {text, timestamp}
+  noteTimestamp: null,     // When current note typing started (seconds from recording start)
+  noteDraftSaveTimer: null, // Debounce timer for draft auto-save
+  transcriptStartTime: null, // Client-side timestamp when we first saw this as an active meeting
+  // Panel search state
+  panelSearch: {},         // Per-panel search state: { panelId: { matches: [], index: -1 } }
 };
+
+// =============================================================================
+// Panel Search Utility
+// =============================================================================
+
+/**
+ * Initialize search for a panel by wiring up event listeners.
+ * @param {string} panelId - ID prefix for the panel (e.g., 'transcript', 'summary', 'notes')
+ * @param {string} contentSelector - CSS selector for the content element to search within
+ */
+function initPanelSearch(panelId, contentSelector) {
+  const searchBar = document.getElementById(`${panelId}-search-bar`);
+  const searchToggle = document.getElementById(`${panelId}-search-toggle`);
+  const contentEl = document.querySelector(contentSelector);
+  
+  if (!searchBar || !searchToggle || !contentEl) {
+    console.warn(`Panel search init failed for ${panelId}: missing elements`);
+    return;
+  }
+  
+  const input = searchBar.querySelector('.chat-search-input');
+  const countEl = searchBar.querySelector('.chat-search-count');
+  const prevBtn = searchBar.querySelector('.chat-search-prev');
+  const nextBtn = searchBar.querySelector('.chat-search-next');
+  
+  if (!input || !countEl || !prevBtn || !nextBtn) {
+    console.warn(`Panel search init failed for ${panelId}: missing search bar elements`);
+    return;
+  }
+  
+  // Initialize state for this panel
+  state.panelSearch[panelId] = { matches: [], index: -1 };
+  
+  // Toggle button
+  searchToggle.addEventListener('click', () => {
+    if (searchBar.style.display !== 'none') {
+      closePanelSearch(panelId);
+    } else {
+      openPanelSearch(panelId);
+    }
+  });
+  
+  // Input events
+  input.addEventListener('input', () => {
+    performPanelSearch(panelId, input.value, contentEl);
+  });
+  
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      navigatePanelSearch(panelId, e.shiftKey ? -1 : 1);
+    } else if (e.key === 'Escape') {
+      closePanelSearch(panelId);
+    }
+  });
+  
+  // Nav buttons
+  prevBtn.addEventListener('click', () => navigatePanelSearch(panelId, -1));
+  nextBtn.addEventListener('click', () => navigatePanelSearch(panelId, 1));
+}
+
+/**
+ * Open the search bar for a panel and focus the input.
+ * @param {string} panelId
+ */
+function openPanelSearch(panelId) {
+  const searchBar = document.getElementById(`${panelId}-search-bar`);
+  const input = searchBar?.querySelector('.chat-search-input');
+  if (!searchBar || !input) return;
+  
+  searchBar.style.display = 'flex';
+  input.focus();
+  
+  // Re-run search if there's existing text
+  if (input.value) {
+    const contentSelector = getPanelContentSelector(panelId);
+    const contentEl = document.querySelector(contentSelector);
+    if (contentEl) {
+      performPanelSearch(panelId, input.value, contentEl);
+    }
+  }
+}
+
+/**
+ * Close the search bar for a panel and clear highlights.
+ * @param {string} panelId
+ */
+function closePanelSearch(panelId) {
+  const searchBar = document.getElementById(`${panelId}-search-bar`);
+  const input = searchBar?.querySelector('.chat-search-input');
+  const countEl = searchBar?.querySelector('.chat-search-count');
+  
+  if (!searchBar) return;
+  
+  searchBar.style.display = 'none';
+  if (input) input.value = '';
+  if (countEl) countEl.textContent = '0/0';
+  
+  // Clear highlights
+  const contentSelector = getPanelContentSelector(panelId);
+  const contentEl = document.querySelector(contentSelector);
+  if (contentEl) {
+    clearPanelSearchHighlights(contentEl);
+  }
+  
+  // Reset state
+  if (state.panelSearch[panelId]) {
+    state.panelSearch[panelId].matches = [];
+    state.panelSearch[panelId].index = -1;
+  }
+}
+
+/**
+ * Get the content selector for a panel.
+ * @param {string} panelId
+ * @returns {string}
+ */
+function getPanelContentSelector(panelId) {
+  switch (panelId) {
+    case 'transcript': return '#transcript-output';
+    case 'summary': return '#summary-output';
+    case 'notes': return '#notes-log';
+    default: return null;
+  }
+}
+
+/**
+ * Perform a case-insensitive search and highlight matches.
+ * @param {string} panelId
+ * @param {string} query
+ * @param {HTMLElement} contentEl
+ */
+function performPanelSearch(panelId, query, contentEl) {
+  const searchBar = document.getElementById(`${panelId}-search-bar`);
+  const countEl = searchBar?.querySelector('.chat-search-count');
+  
+  // Clear previous highlights
+  clearPanelSearchHighlights(contentEl);
+  
+  // Reset state
+  const searchState = state.panelSearch[panelId] || { matches: [], index: -1 };
+  searchState.matches = [];
+  searchState.index = -1;
+  state.panelSearch[panelId] = searchState;
+  
+  if (!query) {
+    if (countEl) countEl.textContent = '0/0';
+    return;
+  }
+  
+  const lowerQuery = query.toLowerCase();
+  
+  // Walk text nodes and highlight matches
+  const walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT, null, false);
+  const nodesToProcess = [];
+  
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const text = node.textContent;
+    if (text.toLowerCase().includes(lowerQuery)) {
+      nodesToProcess.push(node);
+    }
+  }
+  
+  for (const node of nodesToProcess) {
+    const text = node.textContent;
+    const parent = node.parentNode;
+    const frag = document.createDocumentFragment();
+    let lastEnd = 0;
+    let idx = 0;
+    const lowerText = text.toLowerCase();
+    
+    while ((idx = lowerText.indexOf(lowerQuery, lastEnd)) !== -1) {
+      // Text before match
+      if (idx > lastEnd) {
+        frag.appendChild(document.createTextNode(text.slice(lastEnd, idx)));
+      }
+      // Highlighted match
+      const mark = document.createElement('mark');
+      mark.textContent = text.slice(idx, idx + query.length);
+      frag.appendChild(mark);
+      searchState.matches.push(mark);
+      lastEnd = idx + query.length;
+    }
+    
+    // Remaining text
+    if (lastEnd < text.length) {
+      frag.appendChild(document.createTextNode(text.slice(lastEnd)));
+    }
+    
+    parent.replaceChild(frag, node);
+  }
+  
+  // Highlight first match
+  if (searchState.matches.length > 0) {
+    searchState.index = 0;
+    highlightCurrentPanelMatch(panelId);
+  }
+  
+  updatePanelSearchCount(panelId);
+}
+
+/**
+ * Navigate to the next or previous match.
+ * @param {string} panelId
+ * @param {number} direction - +1 for next, -1 for previous
+ */
+function navigatePanelSearch(panelId, direction) {
+  const searchState = state.panelSearch[panelId];
+  if (!searchState || searchState.matches.length === 0) return;
+  
+  // Remove current highlight
+  const prev = searchState.matches[searchState.index];
+  if (prev) prev.classList.remove('current');
+  
+  // Calculate new index
+  searchState.index = (searchState.index + direction + searchState.matches.length) % searchState.matches.length;
+  
+  highlightCurrentPanelMatch(panelId);
+  updatePanelSearchCount(panelId);
+}
+
+/**
+ * Highlight the current match and scroll into view.
+ * @param {string} panelId
+ */
+function highlightCurrentPanelMatch(panelId) {
+  const searchState = state.panelSearch[panelId];
+  if (!searchState) return;
+  
+  const el = searchState.matches[searchState.index];
+  if (!el) return;
+  
+  el.classList.add('current');
+  el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+/**
+ * Update the search count display.
+ * @param {string} panelId
+ */
+function updatePanelSearchCount(panelId) {
+  const searchBar = document.getElementById(`${panelId}-search-bar`);
+  const countEl = searchBar?.querySelector('.chat-search-count');
+  const searchState = state.panelSearch[panelId];
+  
+  if (!countEl || !searchState) return;
+  
+  const total = searchState.matches.length;
+  const current = total > 0 ? searchState.index + 1 : 0;
+  countEl.textContent = `${current}/${total}`;
+}
+
+/**
+ * Clear all search highlights from a content element.
+ * @param {HTMLElement} contentEl
+ */
+function clearPanelSearchHighlights(contentEl) {
+  const marks = contentEl.querySelectorAll('mark');
+  marks.forEach((mark) => {
+    const parent = mark.parentNode;
+    parent.replaceChild(document.createTextNode(mark.textContent), mark);
+    parent.normalize();
+  });
+}
 
 // Polling removed - using SSE for all real-time updates
 // Keep these stub functions for any legacy code paths
@@ -47,23 +320,24 @@ function _attachMeetingDebugContextMenu(chatInstance) {
     menu.className = 'test-chat-context-menu';
     menu.style.cssText = `
       position: fixed; left: ${e.clientX}px; top: ${e.clientY}px;
-      background: var(--bg-color, #fff); border: 1px solid var(--border-color, #ddd);
-      border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      background: #1a1a2e; color: #e0e0e0; border: 1px solid #444;
+      border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
       z-index: 10000; padding: 4px 0; min-width: 150px;
     `;
 
     const option = document.createElement('div');
     option.textContent = 'Submit and Log';
-    option.style.cssText = 'padding: 8px 16px; cursor: pointer; font-size: 14px;';
-    option.addEventListener('mouseenter', () => { option.style.background = 'var(--hover-bg, #f0f0f0)'; });
+    option.style.cssText = 'padding: 8px 16px; cursor: pointer; font-size: 14px; color: #e0e0e0;';
+    option.addEventListener('mouseenter', () => { option.style.background = '#2a2a4a'; });
     option.addEventListener('mouseleave', () => { option.style.background = 'transparent'; });
-    option.addEventListener('click', () => {
+    option.addEventListener('click', async () => {
       menu.remove();
       chatInstance.onSendMessage = (payload) => {
         payload.test_log_this = true;
         chatInstance.onSendMessage = null;
       };
-      chatInstance.sendMessage();
+      await chatInstance.sendMessage();
+      _fetchLatestSubmitLog();
     });
 
     menu.appendChild(option);
@@ -76,6 +350,80 @@ function _attachMeetingDebugContextMenu(chatInstance) {
       }
     };
     setTimeout(() => document.addEventListener('click', closeMenu), 10);
+  });
+}
+
+/**
+ * Fetch the most recent submit-and-log file and populate the debug panel.
+ */
+async function _fetchLatestSubmitLog() {
+  try {
+    const res = await fetch('/api/test/latest-submit-log');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    const pathEl = document.getElementById('debug-prompt-path');
+    if (pathEl) {
+      pathEl.innerHTML = '';
+      const link = document.createElement('a');
+      link.href = 'file://' + data.path;
+      link.textContent = data.path;
+      link.title = 'Open log file';
+      pathEl.appendChild(link);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'icon-btn debug-copy-path-btn';
+      copyBtn.title = 'Copy path to clipboard';
+      copyBtn.innerHTML = '&#128203;';
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(data.path).then(() => {
+          copyBtn.innerHTML = '&#10003;';
+          setTimeout(() => { copyBtn.innerHTML = '&#128203;'; }, 1500);
+        });
+      });
+      pathEl.appendChild(copyBtn);
+      pathEl.classList.add('has-path');
+    }
+
+    const logEl = document.getElementById('debug-prompt-log');
+    if (logEl) logEl.value = data.content || '';
+
+    // Open the debug panel if it is closed so the user sees the result
+    const sidebar = document.getElementById('debug-sidebar');
+    if (sidebar && sidebar.style.display === 'none') {
+      sidebar.style.display = '';
+    }
+  } catch (e) {
+    console.warn('Failed to fetch latest submit log', e);
+  }
+}
+
+/**
+ * Wire up maximize buttons on each debug-section.
+ * Clicking toggles the section to a full-page overlay and back.
+ */
+function initDebugMaximize() {
+  document.querySelectorAll('.debug-maximize-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const section = btn.closest('.debug-section');
+      if (!section) return;
+
+      const isMaximized = section.classList.contains('debug-maximized');
+      if (isMaximized) {
+        section.classList.remove('debug-maximized');
+        btn.title = 'Maximize';
+      } else {
+        // Restore any other maximized debug section first
+        document.querySelectorAll('.debug-section.debug-maximized').forEach((s) => {
+          s.classList.remove('debug-maximized');
+          const b = s.querySelector('.debug-maximize-btn');
+          if (b) b.title = 'Maximize';
+        });
+        section.classList.add('debug-maximized');
+        btn.title = 'Restore';
+      }
+    });
   });
 }
 
@@ -1015,6 +1363,12 @@ async function refreshMeeting() {
     // #endregion
     state.meeting = meeting;
     
+    // Set transcriptStartTime for active meetings (only on first load, not every refresh)
+    const isActiveMeeting = meeting.status === "in_progress" || meeting.status === "processing";
+    if (isActiveMeeting && !state.transcriptStartTime) {
+      state.transcriptStartTime = Date.now();
+    }
+    
     setMeetingTitle(meeting.title || "");
     setAttendeeEditor(meeting.attendees || []);
     
@@ -1199,6 +1553,458 @@ function exportMeeting() {
     return;
   }
   window.open(`/api/meetings/${state.meetingId}/export`, "_blank");
+}
+
+// ---- User Notes Functions ----
+
+/**
+ * Get current elapsed time in seconds from transcription start.
+ * Uses client-side transcriptStartTime (captured when meeting page loads for active meeting).
+ * For completed meetings, returns null (post-meeting note).
+ */
+function getCurrentRecordingTime() {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:getCurrentRecordingTime',message:'getCurrentRecordingTime called',data:{hasMeeting:!!state.meeting,meetingStatus:state.meeting?.status,transcriptStartTime:state.transcriptStartTime},timestamp:Date.now(),runId:'ts-fix',hypothesisId:'H_TIME'})}).catch(()=>{});
+  // #endregion
+  if (!state.meeting) return null;
+  
+  // If meeting is completed, notes are post-meeting
+  if (state.meeting.status === "completed") {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:getCurrentRecordingTime:completed',message:'Meeting completed - returning null',data:{status:state.meeting.status},timestamp:Date.now(),runId:'ts-fix',hypothesisId:'H_COMPLETED'})}).catch(()=>{});
+    // #endregion
+    return null;
+  }
+  
+  // Use client-side start time (no timezone issues)
+  if (!state.transcriptStartTime) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:getCurrentRecordingTime:noStartTime',message:'No transcriptStartTime - returning null',data:{},timestamp:Date.now(),runId:'ts-fix',hypothesisId:'H_NOSTART'})}).catch(()=>{});
+    // #endregion
+    return null;
+  }
+  
+  const now = Date.now();
+  const elapsedSeconds = (now - state.transcriptStartTime) / 1000;
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:getCurrentRecordingTime:calculated',message:'Calculated elapsed time',data:{transcriptStartTime:state.transcriptStartTime,now,elapsedSeconds},timestamp:Date.now(),runId:'ts-fix',hypothesisId:'H_CALC'})}).catch(()=>{});
+  // #endregion
+  return elapsedSeconds;
+}
+
+/**
+ * Format timestamp for display (e.g., "1:23" or "12:34")
+ */
+function formatNoteTimestamp(seconds) {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:formatNoteTimestamp',message:'Formatting timestamp',data:{seconds,isNull:seconds===null,isUndefined:seconds===undefined,type:typeof seconds},timestamp:Date.now(),runId:'ts-debug',hypothesisId:'H_FORMAT'})}).catch(()=>{});
+  // #endregion
+  if (seconds === null || seconds === undefined) {
+    return "Added after meeting";
+  }
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+/**
+ * Update the timestamp badge display above the notes input.
+ */
+function updateNotesTimestampDisplay() {
+  const badge = document.getElementById("notes-timestamp-badge");
+  const text = document.getElementById("notes-timestamp-text");
+  if (!badge || !text) return;
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:updateNotesTimestampDisplay',message:'Updating timestamp display',data:{noteTimestamp:state.noteTimestamp,isNull:state.noteTimestamp===null},timestamp:Date.now(),runId:'ts-debug',hypothesisId:'H_DISPLAY'})}).catch(()=>{});
+  // #endregion
+  
+  if (state.noteTimestamp !== null) {
+    text.textContent = `Note at ${formatNoteTimestamp(state.noteTimestamp)}`;
+    badge.style.display = "block";
+  } else {
+    badge.style.display = "none";
+  }
+}
+
+/**
+ * Update submit button enabled state based on input content.
+ */
+function updateNotesSubmitButton() {
+  const input = document.getElementById("notes-input");
+  const submitBtn = document.getElementById("notes-submit-btn");
+  if (!input || !submitBtn) return;
+  
+  submitBtn.disabled = !input.value.trim();
+}
+
+/**
+ * Called when user starts typing in the notes input.
+ * Captures timestamp on first keypress.
+ */
+function handleNotesInput(e) {
+  const input = e.target;
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleNotesInput:entry',message:'handleNotesInput called',data:{inputLength:input.value.length,currentNoteTimestamp:state.noteTimestamp,willCaptureTimestamp:state.noteTimestamp===null&&input.value.length>0},timestamp:Date.now(),runId:'ts-debug',hypothesisId:'H_INPUT'})}).catch(()=>{});
+  // #endregion
+  
+  // Capture timestamp on first input if we don't have one
+  if (state.noteTimestamp === null && input.value.length > 0) {
+    const recordingTime = getCurrentRecordingTime();
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleNotesInput:captureTimestamp',message:'Capturing timestamp',data:{recordingTimeReturned:recordingTime,isNull:recordingTime===null},timestamp:Date.now(),runId:'ts-debug',hypothesisId:'H_INPUT'})}).catch(()=>{});
+    // #endregion
+    state.noteTimestamp = recordingTime;
+    updateNotesTimestampDisplay();
+  }
+  
+  updateNotesSubmitButton();
+  scheduleNoteDraftSave();
+}
+
+/**
+ * Schedule a debounced draft save (every 2 seconds while typing).
+ */
+function scheduleNoteDraftSave() {
+  if (state.noteDraftSaveTimer) {
+    clearTimeout(state.noteDraftSaveTimer);
+  }
+  state.noteDraftSaveTimer = setTimeout(() => {
+    saveNoteDraft();
+  }, 2000);
+}
+
+/**
+ * Save the current draft to the server.
+ */
+async function saveNoteDraft() {
+  if (!state.meetingId) return;
+  
+  const input = document.getElementById("notes-input");
+  const text = input?.value || "";
+  
+  try {
+    await fetchJson(`/api/meetings/${state.meetingId}/notes/draft`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: text,
+        timestamp: state.noteTimestamp,
+      }),
+    });
+  } catch (error) {
+    console.warn("Failed to save note draft:", error);
+  }
+}
+
+/**
+ * Submit the current note.
+ */
+async function submitNote() {
+  if (!state.meetingId) return;
+  
+  const input = document.getElementById("notes-input");
+  const text = input?.value?.trim();
+  if (!text) return;
+  
+  const timestamp = state.noteTimestamp;
+  const isPostMeeting = state.meeting?.status === "completed";
+  
+  try {
+    const note = await fetchJson(`/api/meetings/${state.meetingId}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: text,
+        timestamp: timestamp,
+        is_post_meeting: isPostMeeting,
+      }),
+    });
+    
+    // Add to local state and render
+    state.userNotes.push(note);
+    renderNoteCard(note);
+    updateNotesEmptyState();
+    
+    // Clear input and timestamp for next note
+    clearNoteInput();
+    
+  } catch (error) {
+    setGlobalError(`Failed to save note: ${error.message}`);
+  }
+}
+
+/**
+ * Clear the notes input and timestamp (user clicked Clear button).
+ */
+function clearNoteInput() {
+  const input = document.getElementById("notes-input");
+  if (input) {
+    input.value = "";
+  }
+  state.noteTimestamp = null;
+  updateNotesTimestampDisplay();
+  updateNotesSubmitButton();
+  
+  // Clear draft on server
+  if (state.noteDraftSaveTimer) {
+    clearTimeout(state.noteDraftSaveTimer);
+  }
+  saveNoteDraft();
+}
+
+/**
+ * Render a single note card in the notes log.
+ */
+function renderNoteCard(note) {
+  const log = document.getElementById("notes-log");
+  if (!log) return;
+  
+  const card = document.createElement("div");
+  card.className = "note-card";
+  if (note.is_post_meeting) {
+    card.classList.add("post-meeting");
+  }
+  card.dataset.noteId = note.id;
+  
+  const header = document.createElement("div");
+  header.className = "note-card-header";
+  
+  const timestamp = document.createElement("span");
+  timestamp.className = "note-timestamp";
+  timestamp.textContent = note.is_post_meeting 
+    ? "Added after meeting" 
+    : formatNoteTimestamp(note.timestamp);
+  
+  const actions = document.createElement("div");
+  actions.className = "note-actions";
+  
+  const editBtn = document.createElement("button");
+  editBtn.className = "icon-btn small";
+  editBtn.innerHTML = "&#9998;"; // Pencil icon
+  editBtn.title = "Edit";
+  editBtn.addEventListener("click", () => startNoteEdit(note.id));
+  
+  const deleteBtn = document.createElement("button");
+  deleteBtn.className = "icon-btn small";
+  deleteBtn.innerHTML = "&#x2715;"; // X icon
+  deleteBtn.title = "Delete";
+  deleteBtn.addEventListener("click", () => deleteNote(note.id));
+  
+  actions.appendChild(editBtn);
+  actions.appendChild(deleteBtn);
+  
+  header.appendChild(timestamp);
+  header.appendChild(actions);
+  
+  const textEl = document.createElement("div");
+  textEl.className = "note-text";
+  textEl.textContent = note.text;
+  
+  card.appendChild(header);
+  card.appendChild(textEl);
+  
+  log.appendChild(card);
+  
+  // Scroll to bottom to show new note
+  log.scrollTop = log.scrollHeight;
+}
+
+/**
+ * Start inline editing of a note.
+ */
+function startNoteEdit(noteId) {
+  const card = document.querySelector(`.note-card[data-note-id="${noteId}"]`);
+  if (!card) return;
+  
+  const textEl = card.querySelector(".note-text");
+  if (!textEl) return;
+  
+  const currentText = textEl.textContent;
+  
+  // Replace text with textarea
+  const textarea = document.createElement("textarea");
+  textarea.className = "note-edit-textarea";
+  textarea.value = currentText;
+  textarea.rows = 2;
+  
+  // Save on blur or Enter (without shift)
+  textarea.addEventListener("blur", () => saveNoteEdit(noteId, textarea.value));
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      textarea.blur();
+    } else if (e.key === "Escape") {
+      textarea.value = currentText; // Revert
+      textarea.blur();
+    }
+  });
+  
+  textEl.replaceWith(textarea);
+  textarea.focus();
+  textarea.select();
+}
+
+/**
+ * Save an edited note.
+ */
+async function saveNoteEdit(noteId, newText) {
+  const card = document.querySelector(`.note-card[data-note-id="${noteId}"]`);
+  if (!card) return;
+  
+  const textarea = card.querySelector(".note-edit-textarea");
+  const text = newText.trim();
+  
+  if (!text) {
+    // Empty text - revert to original
+    const note = state.userNotes.find(n => n.id === noteId);
+    if (note) {
+      const textEl = document.createElement("div");
+      textEl.className = "note-text";
+      textEl.textContent = note.text;
+      textarea?.replaceWith(textEl);
+    }
+    return;
+  }
+  
+  try {
+    const updatedNote = await fetchJson(
+      `/api/meetings/${state.meetingId}/notes/${noteId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text }),
+      }
+    );
+    
+    // Update local state
+    const noteIndex = state.userNotes.findIndex(n => n.id === noteId);
+    if (noteIndex >= 0) {
+      state.userNotes[noteIndex] = updatedNote;
+    }
+    
+    // Replace textarea with text element
+    const textEl = document.createElement("div");
+    textEl.className = "note-text";
+    textEl.textContent = updatedNote.text;
+    textarea?.replaceWith(textEl);
+    
+  } catch (error) {
+    setGlobalError(`Failed to update note: ${error.message}`);
+    // Revert on error
+    const note = state.userNotes.find(n => n.id === noteId);
+    if (note) {
+      const textEl = document.createElement("div");
+      textEl.className = "note-text";
+      textEl.textContent = note.text;
+      textarea?.replaceWith(textEl);
+    }
+  }
+}
+
+/**
+ * Delete a note with confirmation.
+ */
+async function deleteNote(noteId) {
+  if (!confirm("Delete this note?")) return;
+  
+  try {
+    await fetchJson(`/api/meetings/${state.meetingId}/notes/${noteId}`, {
+      method: "DELETE",
+    });
+    
+    // Remove from local state
+    state.userNotes = state.userNotes.filter(n => n.id !== noteId);
+    
+    // Remove card from DOM
+    const card = document.querySelector(`.note-card[data-note-id="${noteId}"]`);
+    card?.remove();
+    
+    updateNotesEmptyState();
+    
+  } catch (error) {
+    setGlobalError(`Failed to delete note: ${error.message}`);
+  }
+}
+
+/**
+ * Update the empty state message visibility.
+ */
+function updateNotesEmptyState() {
+  const emptyEl = document.getElementById("notes-empty");
+  if (emptyEl) {
+    emptyEl.style.display = state.userNotes.length === 0 ? "block" : "none";
+  }
+}
+
+/**
+ * Load notes from server and render them.
+ */
+async function loadUserNotes() {
+  if (!state.meetingId) return;
+  
+  try {
+    const data = await fetchJson(`/api/meetings/${state.meetingId}/notes`);
+    state.userNotes = data.notes || [];
+    state.userNotesDraft = data.draft;
+    
+    // Render existing notes
+    const log = document.getElementById("notes-log");
+    if (log) {
+      // Clear existing note cards (keep empty message)
+      const cards = log.querySelectorAll(".note-card");
+      cards.forEach(card => card.remove());
+      
+      // Render all notes
+      for (const note of state.userNotes) {
+        renderNoteCard(note);
+      }
+    }
+    
+    updateNotesEmptyState();
+    
+    // Restore draft if exists
+    if (state.userNotesDraft) {
+      const input = document.getElementById("notes-input");
+      if (input && state.userNotesDraft.text) {
+        input.value = state.userNotesDraft.text;
+      }
+      if (state.userNotesDraft.timestamp !== null && state.userNotesDraft.timestamp !== undefined) {
+        state.noteTimestamp = state.userNotesDraft.timestamp;
+        updateNotesTimestampDisplay();
+      }
+      updateNotesSubmitButton();
+    }
+    
+  } catch (error) {
+    console.warn("Failed to load user notes:", error);
+  }
+}
+
+/**
+ * Initialize the notes panel event listeners.
+ */
+function initNotesPanel() {
+  const input = document.getElementById("notes-input");
+  const submitBtn = document.getElementById("notes-submit-btn");
+  const clearBtn = document.getElementById("notes-clear-btn");
+  
+  if (input) {
+    input.addEventListener("input", handleNotesInput);
+    // Also handle paste
+    input.addEventListener("paste", () => {
+      setTimeout(() => handleNotesInput({ target: input }), 0);
+    });
+  }
+  
+  if (submitBtn) {
+    submitBtn.addEventListener("click", submitNote);
+  }
+  
+  if (clearBtn) {
+    clearBtn.addEventListener("click", clearNoteInput);
+  }
 }
 
 // Track the first server version we see to detect updates
@@ -1551,6 +2357,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Panel maximize/restore buttons
   initPanelMaximize();
   
+  // Debug section maximize buttons
+  initDebugMaximize();
+  
+  // Initialize user notes panel
+  initNotesPanel();
+  
+  // Initialize panel search for Transcript, Summary, and Notes panels
+  initPanelSearch('transcript', '#transcript-output');
+  initPanelSearch('summary', '#summary-output');
+  initPanelSearch('notes', '#notes-log');
+  
   window.addEventListener("beforeunload", () => {
     stopPolling();
     unsubscribeFromMeetingEvents();
@@ -1577,6 +2394,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   // #endregion
 
   await refreshMeeting();
+  
+  // Load user notes after meeting is loaded
+  await loadUserNotes();
 
   // #region agent log
   fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:DOMContentLoaded:complete',message:'DOMContentLoaded fully complete',data:{meetingId:state.meetingId,hasMeeting:!!state.meeting,meetingStatus:state.meeting?.status},timestamp:Date.now(),runId:'post-fix',hypothesisId:'INIT'})}).catch(()=>{});

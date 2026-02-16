@@ -9,6 +9,7 @@ Guidelines:
 - Then include "Action items:" as a bulleted list with assignee and due date if mentioned.
 - Use plain text, no JSON, no markdown code fences.
 - Be concise but comprehensive.
+{{user_notes_section}}
 
 Transcript:
 {{transcript}}

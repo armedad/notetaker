@@ -94,15 +94,15 @@ function _attachDebugContextMenu(chatInstance) {
     menu.className = 'test-chat-context-menu';
     menu.style.cssText = `
       position: fixed; left: ${e.clientX}px; top: ${e.clientY}px;
-      background: var(--bg-color, #fff); border: 1px solid var(--border-color, #ddd);
-      border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      background: #1a1a2e; color: #e0e0e0; border: 1px solid #444;
+      border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
       z-index: 10000; padding: 4px 0; min-width: 150px;
     `;
 
     const option = document.createElement('div');
     option.textContent = 'Submit and Log';
-    option.style.cssText = 'padding: 8px 16px; cursor: pointer; font-size: 14px;';
-    option.addEventListener('mouseenter', () => { option.style.background = 'var(--hover-bg, #f0f0f0)'; });
+    option.style.cssText = 'padding: 8px 16px; cursor: pointer; font-size: 14px; color: #e0e0e0;';
+    option.addEventListener('mouseenter', () => { option.style.background = '#2a2a4a'; });
     option.addEventListener('mouseleave', () => { option.style.background = 'transparent'; });
     option.addEventListener('click', () => {
       menu.remove();

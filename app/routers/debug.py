@@ -129,4 +129,33 @@ def create_test_debug_router(
         llm_logger.test_set_log_all(request.enabled)
         return {"status": "ok", "enabled": request.enabled}
     
+    # -------------------------------------------------------------------------
+    # Submit-and-Log Prompt Endpoints
+    # -------------------------------------------------------------------------
+    
+    @router.get("/latest-submit-log")
+    def get_latest_submit_log() -> dict:
+        """Return the most recent submit_*.log file path and content."""
+        logs_dir = os.path.join(os.getcwd(), "logs")
+        if not os.path.isdir(logs_dir):
+            raise HTTPException(status_code=404, detail="No submit logs found")
+        
+        submit_files = [
+            f for f in os.listdir(logs_dir)
+            if f.startswith("submit_") and f.endswith(".log")
+        ]
+        if not submit_files:
+            raise HTTPException(status_code=404, detail="No submit logs found")
+        
+        latest = max(
+            submit_files,
+            key=lambda f: os.path.getmtime(os.path.join(logs_dir, f)),
+        )
+        full_path = os.path.join(logs_dir, latest)
+        
+        with open(full_path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        
+        return {"path": full_path, "filename": latest, "content": content}
+    
     return router

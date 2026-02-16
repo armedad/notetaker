@@ -268,3 +268,79 @@ Provide a chat interface in the main home page where the user can ask questions 
   - Status: done
 
 Dark mode with light/dark/system toggle in settings page. Persisted to config.json. Applied across all pages. Icons adapt to mode.
+
+---
+
+## user notes feature
+  - Type: new feature
+  - Size: medium
+  - Status: done
+  - Plan: .cursor/plans/user_notes_feature_fef31a46.plan.md
+
+Enable users to type timestamped notes during meetings. Notes are logged with the time the user started typing, acknowledging natural lag between discussion and note-taking.
+
+Implementation notes:
+- Notes panel in meeting page lower-right with running log of submitted notes
+- Timestamp captured when user starts typing; persists until explicit clear
+- Submit button adds note to log; clear button (X) clears input and timestamp
+- Inline editing of existing notes preserves original timestamp
+- Post-meeting notes marked as "Added after meeting"
+- Draft auto-save to meeting JSON with restore on return
+- Backend API: GET/POST/PATCH/DELETE for notes CRUD, PUT for draft
+- Summarization includes notes with timestamp context in LLM prompt
+- Chat integration: notes included in meeting and overall chat prompts
+
+---
+
+## ai chat issues
+  - Type: bug / enhancement
+  - Status: done
+  - Plan: .cursor/plans/ai_chat_issues_implementation_03a3c2c7.plan.md
+
+### 1) chat persistence
+
+Chat messages (user prompts and LLM responses) are preserved and restored on reload. Each message has a timestamp. Meeting chats stored in meeting JSON; homepage chat in homepage_state.json.
+
+Implementation notes:
+- Backend: 4 new API endpoints in chat.py (GET/PUT for meeting and homepage chat history)
+- MeetingStore: get_chat_history() / save_chat_history() read/write chat_history in meeting JSON
+- ChatService: get_homepage_chat_history() / save_homepage_chat_history() read/write data/homepage_state.json
+- Frontend: ChatUI accepts historyEndpoint option; loadHistory() on init, saveHistory() after each send/response cycle and clear
+- Messages stored as {role, content, timestamp} with ISO timestamps displayed as relative/short datetime
+
+### 2) chat search
+
+Search box in chat panel banner with case-insensitive search, next/prev navigation, and keyboard shortcuts.
+
+Implementation notes:
+- Search bar added to all ChatUI variants (fullscreen, minimal, standard) in chat.js
+- Ctrl+F / Cmd+F opens search when chat panel is focused
+- Case-insensitive search with <mark> highlighting across all .chat-message-content elements
+- Next/Prev navigation with wrapping, Enter/Shift+Enter shortcuts, Escape to close
+- Count display shows "N/M" (current match / total matches)
+
+### 3) attendee names in chat context
+
+LLM knows about renamed attendees in both meeting and homepage chat contexts.
+
+Implementation notes:
+- Added _format_transcript_with_speakers() and _format_attendee_list() helpers to ChatService
+- All transcript formatting locations resolve speaker_id to attendee name using the meeting's attendees list
+- Attendee list included in prompt context so LLM knows meeting participants
+
+---
+
+## update to attendee list
+  - Type: new feature
+  - Size: medium
+  - Status: done
+
+Interactive attendee list UI with selection, inline rename, and AI auto-rename capabilities.
+
+Implementation notes:
+- Replaced textarea with interactive attendee list (left column)
+- Selecting an attendee shows their spoken segments (right column)
+- Rename button enables inline editing (Enter to save, Escape to cancel)
+- Auto button calls AI to identify speaker name from their speech
+- Backend API: POST /api/meetings/{id}/attendees/{id}/auto-rename
+- Added `prompt()` method to all LLM providers for raw prompts

@@ -1,17 +1,96 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import platform
+import shutil
+import subprocess
+import time
 from typing import Generator
 
 import requests
 
 from app.services.llm.base import BaseLLMProvider, LLMProviderError
 
+_logger = logging.getLogger("notetaker.llm.ollama")
+
+_LAUNCH_WAIT_MAX = 30  # seconds
+_LAUNCH_POLL_INTERVAL = 1  # seconds
+
+
+def _find_ollama_launch_cmd() -> list:
+    """Return the platform-appropriate command to start Ollama."""
+    system = platform.system()
+
+    if system == "Darwin":
+        # macOS — prefer the .app bundle, fall back to CLI
+        if os.path.isdir("/Applications/Ollama.app"):
+            return ["open", "-a", "/Applications/Ollama.app"]
+
+    if system == "Windows":
+        # Windows — check common install location, then PATH
+        local_exe = os.path.join(
+            os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama.exe"
+        )
+        if os.path.isfile(local_exe):
+            return [local_exe, "serve"]
+
+    # Any OS — fall back to ollama on PATH
+    if shutil.which("ollama"):
+        return ["ollama", "serve"]
+
+    return []
+
+
+def ensure_ollama_running(base_url: str = "http://127.0.0.1:11434") -> None:
+    """Launch Ollama if it isn't already running. Blocks until ready.
+    
+    Works on macOS, Windows, and Linux. Call this at boot (when selected
+    provider is Ollama) and when the user switches to an Ollama model.
+    """
+    base_url = base_url.rstrip("/")
+    try:
+        resp = requests.get(f"{base_url}/api/tags", timeout=3)
+        if resp.status_code == 200:
+            _logger.info("Ollama is already running at %s", base_url)
+            return
+    except requests.RequestException:
+        pass
+
+    cmd = _find_ollama_launch_cmd()
+    if not cmd:
+        _logger.warning("Ollama not reachable and no installation found — cannot auto-launch")
+        return
+
+    _logger.info("Ollama not reachable — launching: %s", " ".join(cmd))
+    try:
+        kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if platform.system() == "Windows":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        subprocess.Popen(cmd, **kwargs)
+    except Exception as exc:
+        _logger.warning("Failed to launch Ollama: %s", exc)
+        return
+
+    # Poll until reachable or timeout
+    deadline = time.monotonic() + _LAUNCH_WAIT_MAX
+    while time.monotonic() < deadline:
+        time.sleep(_LAUNCH_POLL_INTERVAL)
+        try:
+            resp = requests.get(f"{base_url}/api/tags", timeout=3)
+            if resp.status_code == 200:
+                _logger.info("Ollama is now reachable")
+                return
+        except requests.RequestException:
+            pass
+
+    _logger.warning("Launched Ollama but it didn't become reachable within %ds", _LAUNCH_WAIT_MAX)
+
 
 class OllamaProvider(BaseLLMProvider):
     """LLM provider for local Ollama models."""
-    
+
     def __init__(self, base_url: str, model: str) -> None:
         super().__init__(logger_name="notetaker.llm.ollama")
         self._base_url = base_url.rstrip("/")
