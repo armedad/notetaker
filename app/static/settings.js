@@ -330,6 +330,11 @@ async function testProvider(provider, payload) {
       body: JSON.stringify(payload),
     });
     if (result.status !== "ok") {
+      if (result.can_launch && provider === "ollama") {
+        _showOllamaLaunchOffer(payload, result.message);
+        setProviderStatus(provider, false);
+        return;
+      }
       throw new Error(result.message || "Test failed");
     }
     setModelOptions(provider, result.models || []);
@@ -344,6 +349,50 @@ async function testProvider(provider, payload) {
   } finally {
     setGlobalBusy("");
   }
+}
+
+function _showOllamaLaunchOffer(payload, errorMsg) {
+  const output = document.getElementById("model-output");
+  if (!output) return;
+  output.textContent = "";
+
+  const msg = document.createElement("span");
+  msg.textContent = errorMsg + " ";
+  output.appendChild(msg);
+
+  const btn = document.createElement("button");
+  btn.textContent = "Launch Ollama";
+  btn.className = "primary small";
+  btn.style.marginLeft = "8px";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "Launching...";
+    setGlobalBusy("Launching Ollama...");
+    try {
+      const result = await fetchJson("/api/settings/ollama/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (result.status === "ok") {
+        setModelOptions("ollama", result.models || []);
+        updateRegistryFromProvider("ollama");
+        syncModelChoiceFromConfig();
+        setModelOutput(`ollama OK. ${result.models?.length || 0} models.`);
+        setProviderStatus("ollama", true);
+        scheduleSave(saveSummarizationSettings);
+      } else {
+        setModelOutput(`Launch failed: ${result.message}`);
+        setProviderStatus("ollama", false);
+      }
+    } catch (err) {
+      setModelOutput(`Launch failed: ${err.message}`);
+      setProviderStatus("ollama", false);
+    } finally {
+      setGlobalBusy("");
+    }
+  });
+  output.appendChild(btn);
 }
 
 function setProviderStatus(provider, success) {
@@ -1093,6 +1142,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadDiarizationSettings();
   await loadAppearanceSettings();
   
+  // Initialize debug flags UI and load settings
+  initDebugFlagsUI();
+  await loadDebugFlags();
+  
   // Initialize debug section (test/debug infrastructure)
   testInitDebugSection();
 });
@@ -1136,6 +1189,102 @@ async function saveAppearanceSettings() {
     debugLog("Appearance settings saved");
   } catch (error) {
     debugError("Failed to save appearance settings", error);
+  }
+}
+
+// =============================================================================
+// Debug Flags Functions
+// =============================================================================
+
+async function loadDebugFlags() {
+  try {
+    const response = await fetch("/api/settings/debug");
+    if (!response.ok) return;
+    const data = await response.json();
+    
+    // Sync with frontend debug module
+    if (window.NotetakerDebug) {
+      window.NotetakerDebug.syncFromServer(data);
+    }
+    
+    // Update master toggle
+    const masterToggle = document.getElementById("debug-master-toggle");
+    if (masterToggle) {
+      masterToggle.checked = data.enabled || false;
+    }
+    
+    // Render individual flags
+    renderDebugFlags(data.definitions || {}, data.flags || {});
+  } catch (error) {
+    debugError("Failed to load debug flags", error);
+  }
+}
+
+function renderDebugFlags(definitions, currentFlags) {
+  const container = document.getElementById("debug-flags-list");
+  if (!container) return;
+  
+  container.innerHTML = Object.entries(definitions).map(([flag, def]) => {
+    const isEnabled = currentFlags[flag] ?? def.default;
+    return `
+      <div class="debug-flag-item">
+        <label>
+          <input type="checkbox" data-flag="${flag}" ${isEnabled ? "checked" : ""} />
+          <span class="debug-flag-name">${flag}</span>
+        </label>
+        <span class="debug-flag-desc">${def.desc}</span>
+      </div>
+    `;
+  }).join("");
+  
+  // Add change handlers for individual toggles
+  container.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+    checkbox.addEventListener("change", () => {
+      const flag = checkbox.dataset.flag;
+      if (window.NotetakerDebug) {
+        window.NotetakerDebug.setFlag(flag, checkbox.checked);
+      }
+    });
+  });
+}
+
+function initDebugFlagsUI() {
+  // Master toggle
+  const masterToggle = document.getElementById("debug-master-toggle");
+  if (masterToggle) {
+    masterToggle.addEventListener("change", () => {
+      if (window.NotetakerDebug) {
+        window.NotetakerDebug.setEnabled(masterToggle.checked);
+      }
+    });
+  }
+  
+  // All On button
+  const allOnBtn = document.getElementById("debug-flags-all-on");
+  if (allOnBtn) {
+    allOnBtn.addEventListener("click", () => {
+      if (window.NotetakerDebug) {
+        window.NotetakerDebug.setAllFlags(true);
+      }
+      // Update checkboxes
+      document.querySelectorAll("#debug-flags-list input[type='checkbox']").forEach(cb => {
+        cb.checked = true;
+      });
+    });
+  }
+  
+  // All Off button
+  const allOffBtn = document.getElementById("debug-flags-all-off");
+  if (allOffBtn) {
+    allOffBtn.addEventListener("click", () => {
+      if (window.NotetakerDebug) {
+        window.NotetakerDebug.setAllFlags(false);
+      }
+      // Update checkboxes
+      document.querySelectorAll("#debug-flags-list input[type='checkbox']").forEach(cb => {
+        cb.checked = false;
+      });
+    });
   }
 }
 
