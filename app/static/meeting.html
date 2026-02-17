@@ -129,10 +129,12 @@
                   <span id="notes-timestamp-text">Note at 0:00</span>
                 </div>
                 <div class="notes-input-row">
-                  <textarea id="notes-input" placeholder="Type a note..." rows="2"></textarea>
+                  <div class="notes-input-wrapper">
+                    <textarea id="notes-input" placeholder="Type a note..." rows="2"></textarea>
+                    <button id="notes-clear-btn" class="notes-clear-inline" title="Clear" style="display: none;">&#x2715;</button>
+                  </div>
                   <div class="notes-input-buttons">
                     <button id="notes-submit-btn" class="primary small" title="Submit note" disabled>Submit</button>
-                    <button id="notes-clear-btn" class="secondary small icon-btn" title="Clear">&#x2715;</button>
                   </div>
                 </div>
               </div>
