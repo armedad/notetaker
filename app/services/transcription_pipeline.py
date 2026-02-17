@@ -21,6 +21,9 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Iterator, Optional
 
+import shutil
+import subprocess
+
 import numpy as np
 import soundfile as sf
 
@@ -29,110 +32,74 @@ from app.services.debug_logging import dbg
 _logger = logging.getLogger(__name__)
 
 
+def _ffmpeg_to_wav(input_path: str, output_path: str) -> tuple[int, int]:
+    """Convert any audio file to WAV using ffmpeg.
+
+    Returns (samplerate, channels) of the output file.
+    Raises RuntimeError if ffmpeg is not available or conversion fails.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found on PATH — needed for MP3/AAC/etc. conversion")
+
+    result = subprocess.run(
+        [
+            ffmpeg, "-y", "-i", input_path,
+            "-acodec", "pcm_s16le",
+            output_path,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed ({result.returncode}): {result.stderr[-500:]}")
+
+    info = sf.info(output_path)
+    return info.samplerate, info.channels
+
+
 def convert_to_wav(
     input_path: str,
     output_dir: str,
     target_samplerate: int = 48000,
     target_channels: int = 2,
 ) -> tuple[str, int, int]:
-    """Convert any audio file to standardized WAV format.
-    
-    This ensures the pipeline is identical for both mic recording and file input:
-    - Mic recording: captures to WAV at configured samplerate/channels
-    - File input: decoded here to WAV at the same format
-    
+    """Convert any audio file to PCM_16 WAV using ffmpeg.
+
+    Uses ffmpeg as the single conversion path so every format it supports
+    (MP3, AAC, M4A, OGG, FLAC, WAV, etc.) works identically.  This keeps
+    the file-upload pipeline consistent with the mic pipeline, where raw
+    PCM is already written to WAV by ``_write_temp_wav``.
+
     Args:
-        input_path: Path to input audio file (any format soundfile supports)
-        output_dir: Directory to write the output WAV file
-        target_samplerate: Target sample rate (default 48000, same as mic default)
-        target_channels: Target channel count (default 2, same as mic default)
-    
+        input_path: Path to input audio file (any format ffmpeg supports).
+        output_dir: Directory to write the output WAV file.
+        target_samplerate: Unused (kept for API compat); actual rate is
+            preserved from the source file.
+        target_channels: Unused (kept for API compat); actual channel
+            count is preserved from the source file.
+
     Returns:
-        Tuple of (output_wav_path, actual_samplerate, actual_channels)
-        
-    Note:
-        If the input is already a WAV with matching format, we still re-encode
-        to ensure consistent format (PCM_16 subtype).
+        Tuple of (output_wav_path, actual_samplerate, actual_channels).
     """
-    # #region agent log
-    _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
-    import json as _json_cvt
-    def _dbg_cvt(msg, data=None):
-        try:
-            with open(_log_path, "a") as _f:
-                _f.write(_json_cvt.dumps({"location":"transcription_pipeline.py:convert_to_wav","message":msg,"data":data or {},"timestamp":int(time.time()*1000),"hypothesisId":"H_CONVERT"})+"\n")
-        except Exception:
-            pass
-    # #endregion
-    
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Read input file info
-    info = sf.info(input_path)
-    _logger.info(
-        "Converting audio: input=%s format=%s samplerate=%d channels=%d duration=%.1fs",
-        input_path,
-        info.format,
-        info.samplerate,
-        info.channels,
-        info.duration,
-    )
-    
-    # #region agent log
-    _dbg_cvt("convert_start", {
-        "input_path": input_path,
-        "input_format": info.format,
-        "input_samplerate": info.samplerate,
-        "input_channels": info.channels,
-        "input_duration": info.duration,
-    })
-    # #endregion
-    
-    # Use input file's format if not resampling
-    # For now, we keep the original samplerate/channels to avoid quality loss
-    # The key is standardizing to WAV/PCM_16 format
-    actual_samplerate = info.samplerate
-    actual_channels = info.channels
-    
-    # Generate output filename
+
     timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     output_filename = f"{timestamp}-{uuid.uuid4()}.wav"
     output_path = os.path.join(output_dir, output_filename)
-    
-    # Read and write as WAV
-    # For large files, this is done in chunks to avoid memory issues
-    chunk_size = 1024 * 1024  # 1M frames per chunk
-    
-    with sf.SoundFile(input_path, 'r') as src:
-        with sf.SoundFile(
-            output_path,
-            mode='w',
-            samplerate=actual_samplerate,
-            channels=actual_channels,
-            subtype='PCM_16',
-        ) as dst:
-            while True:
-                data = src.read(chunk_size, dtype='int16')
-                if len(data) == 0:
-                    break
-                dst.write(data)
-    
+
+    if not os.path.isfile(input_path):
+        raise FileNotFoundError(f"Audio file not found: {input_path}")
+
+    _logger.info("Converting audio via ffmpeg: input=%s output=%s", input_path, output_path)
+    actual_samplerate, actual_channels = _ffmpeg_to_wav(input_path, output_path)
+
     _logger.info(
         "Audio converted: output=%s samplerate=%d channels=%d",
-        output_path,
-        actual_samplerate,
-        actual_channels,
+        output_path, actual_samplerate, actual_channels,
     )
-    
-    # #region agent log
-    _dbg_cvt("convert_done", {
-        "input_path": input_path,
-        "output_path": output_path,
-        "samplerate": actual_samplerate,
-        "channels": actual_channels,
-    })
-    # #endregion
-    
+
     return output_path, actual_samplerate, actual_channels
 
 if TYPE_CHECKING:

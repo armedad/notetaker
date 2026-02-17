@@ -93,6 +93,11 @@ class AppearanceSettingsRequest(BaseModel):
     theme: str = "system"  # "light", "dark", or "system"
 
 
+class DebugSettingsRequest(BaseModel):
+    enabled: bool = False
+    flags: dict = {}
+
+
 def create_settings_router(config_path: str) -> APIRouter:
     router = APIRouter()
 
@@ -417,9 +422,19 @@ def create_settings_router(config_path: str) -> APIRouter:
             base_url = payload.base_url.strip()
             if not base_url:
                 return {"status": "error", "message": "Missing Ollama base URL"}
-            response = requests.get(
-                f"{base_url.rstrip('/')}/api/tags", timeout=15
-            )
+            try:
+                response = requests.get(
+                    f"{base_url.rstrip('/')}/api/tags", timeout=15
+                )
+            except requests.RequestException:
+                from app.services.llm.ollama_provider import _is_local_url
+                if _is_local_url(base_url):
+                    return {
+                        "status": "error",
+                        "message": "Ollama is not running.",
+                        "can_launch": True,
+                    }
+                return {"status": "error", "message": f"Cannot reach Ollama at {base_url}"}
             if response.status_code != 200:
                 return {"status": "error", "message": f"ollama error: {response.status_code}"}
             data = response.json()
@@ -427,6 +442,25 @@ def create_settings_router(config_path: str) -> APIRouter:
             return {"status": "ok", "models": sorted(models)}
 
         return {"status": "error", "message": f"Unknown provider: {provider}"}
+
+    @router.post("/api/settings/ollama/launch")
+    def launch_ollama(payload: ModelTestRequest) -> dict:
+        """Attempt to launch Ollama locally and wait until it is reachable."""
+        from app.services.llm.ollama_provider import ensure_ollama_running, _is_local_url
+        base_url = (payload.base_url or "").strip() or "http://127.0.0.1:11434"
+        if not _is_local_url(base_url):
+            return {"status": "error", "message": "Cannot launch Ollama on a remote host"}
+        ensure_ollama_running(base_url)
+        # Verify it came up
+        try:
+            resp = requests.get(f"{base_url.rstrip('/')}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = [m.get("name") for m in data.get("models", []) if m.get("name")]
+                return {"status": "ok", "models": sorted(models)}
+        except requests.RequestException:
+            pass
+        return {"status": "error", "message": "Launched Ollama but it did not become reachable"}
 
     @router.get("/api/settings/models")
     def get_model_settings() -> dict:
@@ -554,5 +588,39 @@ def create_settings_router(config_path: str) -> APIRouter:
         with open(config_path, "w", encoding="utf-8") as config_file:
             json.dump(data, config_file, indent=2)
         return {"status": "ok", "theme": theme}
+
+    @router.get("/api/settings/debug")
+    def get_debug_settings() -> dict:
+        """Get debug flags configuration."""
+        from app.services.debug import get_debug_state
+        return get_debug_state()
+
+    @router.post("/api/settings/debug")
+    def update_debug_settings(payload: DebugSettingsRequest) -> dict:
+        """Update debug flags configuration."""
+        from app.services.debug import (
+            set_debug_enabled, 
+            set_debug_flag, 
+            DEBUG, 
+            FLAG_DEFINITIONS,
+            save_debug_flags,
+            load_debug_flags,
+        )
+        
+        # Update master switch
+        set_debug_enabled(payload.enabled)
+        
+        # Update individual flags
+        for flag, value in payload.flags.items():
+            if flag in FLAG_DEFINITIONS:
+                DEBUG[flag] = bool(value)
+        
+        # Save all changes
+        save_debug_flags()
+        
+        # Reload to ensure consistency
+        load_debug_flags()
+        
+        return {"status": "ok"}
 
     return router

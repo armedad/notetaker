@@ -262,6 +262,14 @@ def create_transcription_router(
 
     @router.post("/api/transcribe", response_model=TranscribeResponse)
     def transcribe(payload: TranscribeRequest) -> TranscribeResponse:
+        # #region agent log
+        logger.warning("LEGACY ENDPOINT CALLED: POST /api/transcribe (non-streaming). Caller should use /api/transcribe/simulate instead.")
+        import json as _json_leg; import traceback as _tb_leg
+        try:
+            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                _f.write(_json_leg.dumps({"location":"transcription.py:transcribe","message":"LEGACY_ENDPOINT_HIT","data":{"endpoint":"/api/transcribe","audio_path":payload.audio_path,"stack":_tb_leg.format_stack()[-3:]},"timestamp":int(time.time()*1000),"hypothesisId":"LEGACY"})+"\n")
+        except Exception: pass
+        # #endregion
         start_time = time.perf_counter()
         logger.debug("transcribe received: %s", payload.model_dump())
 
@@ -298,6 +306,14 @@ def create_transcription_router(
     @router.post("/api/transcribe/stream")
     def transcribe_stream(payload: TranscribeRequest) -> StreamingResponse:
         """Streaming file transcription using the unified pipeline."""
+        # #region agent log
+        logger.warning("LEGACY ENDPOINT CALLED: POST /api/transcribe/stream. Caller should use /api/transcribe/simulate instead.")
+        import json as _json_leg2; import traceback as _tb_leg2
+        try:
+            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                _f.write(_json_leg2.dumps({"location":"transcription.py:transcribe_stream","message":"LEGACY_ENDPOINT_HIT","data":{"endpoint":"/api/transcribe/stream","audio_path":payload.audio_path,"simulate_live":payload.simulate_live,"stack":_tb_leg2.format_stack()[-3:]},"timestamp":int(time.time()*1000),"hypothesisId":"LEGACY"})+"\n")
+        except Exception: pass
+        # #endregion
         logger.debug("transcribe_stream received: %s", payload.model_dump())
         original_audio_path = payload.audio_path
         if not os.path.isabs(original_audio_path):
@@ -952,6 +968,13 @@ def create_transcription_router(
             "DEPRECATED: /api/transcribe/live called for meeting_id=%s. Use /api/transcribe/start instead.",
             payload.meeting_id
         )
+        # #region agent log
+        import json as _json_leg3; import traceback as _tb_leg3
+        try:
+            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                _f.write(_json_leg3.dumps({"location":"transcription.py:transcribe_live","message":"LEGACY_ENDPOINT_HIT","data":{"endpoint":"/api/transcribe/live","meeting_id":payload.meeting_id,"stack":_tb_leg3.format_stack()[-3:]},"timestamp":int(time.time()*1000),"hypothesisId":"LEGACY"})+"\n")
+        except Exception: pass
+        # #endregion
         logger.debug("transcribe_live received: %s", payload.model_dump())
         # #region agent log
         stream_id, concurrent_streams = _register_live_stream(payload.meeting_id or "unknown")

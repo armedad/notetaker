@@ -18,6 +18,9 @@ Use this index to find the core artifacts quickly.
 - `docs/testing/TESTING.md` — manual QA
 - `docs/testing/test-automation.md` — curl checks
 
+## Architecture
+- `docs/ollama-integration.md` — how Ollama is exposed to notetaker (REST interface, auto-launch, config)
+
 ## API
 - `docs/api/API.md` — API reference
 
