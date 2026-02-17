@@ -595,6 +595,14 @@ def create_transcription_router(
             if session_rt_diarization.is_active():
                 session_rt_diarization.stop()
             
+            # Unregister from job registry BEFORE finalization.
+            # This frees the slot so starting a new transcription (even for
+            # the same file) is not blocked by the dedup guard while
+            # finalization (diarization + summarization) runs in this thread.
+            with transcription_jobs_lock:
+                transcription_jobs.pop(meeting_id, None)
+            logger.info("Transcription active phase done, starting finalization: meeting_id=%s", meeting_id)
+            
             # Finalize meeting (same path as file mode)
             meeting = meeting_store.get_meeting(meeting_id)
             if meeting:
@@ -634,7 +642,8 @@ def create_transcription_router(
             except Exception:
                 pass
         finally:
-            # Unregister from job registry
+            # Safety net: ensure job is removed even if thread crashes before
+            # the early cleanup above runs.  pop() is idempotent.
             with transcription_jobs_lock:
                 transcription_jobs.pop(meeting_id, None)
             logger.info("Transcription thread finished: meeting_id=%s segments=%d", meeting_id, len(segments))

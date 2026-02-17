@@ -811,6 +811,15 @@ async function startFileRecording() {
     // #region agent log
     fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startFileRecording',message:'simulate_response_OK',data:{meetingId:response.meeting_id,status:response.status,speedPercent:response.speed_percent},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H3'})}).catch(()=>{});
     // #endregion
+    if (response.status === "running") {
+      // A transcription for this file is already in progress -- tell the
+      // user instead of silently navigating to the old meeting.
+      setStatusError("A transcription for this file is already running.");
+      setOutput("Stop the current transcription first, or wait for it to finish.");
+      state.testTranscribing = false;
+      setRecordingToggleLabel(false);
+      return;
+    }
     state.fileMeetingId = response.meeting_id || null;
     setStatus("Recording from file");
     // Navigate to the newly created meeting

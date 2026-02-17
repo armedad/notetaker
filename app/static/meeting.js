@@ -626,8 +626,16 @@ function handleMeetingEvent(event) {
       break;
     
     case "finalization_status":
-      // Finalization progress update
+      // Finalization progress update — persist on state so controls badge can read it
+      if (state.meeting) {
+        state.meeting.finalization_status = {
+          status_text: event.status_text,
+          progress: event.progress,
+        };
+      }
       showFinalizationStatus(event.status_text, event.progress);
+      // Also update the transcription controls badge to show current step
+      updateTranscriptionControls();
       break;
     
     case "transcription_error":
@@ -1628,14 +1636,20 @@ function updateNotesTimestampDisplay() {
 }
 
 /**
- * Update submit button enabled state based on input content.
+ * Update submit button and clear button state based on input content.
  */
 function updateNotesSubmitButton() {
   const input = document.getElementById("notes-input");
   const submitBtn = document.getElementById("notes-submit-btn");
+  const clearBtn = document.getElementById("notes-clear-btn");
   if (!input || !submitBtn) return;
   
-  submitBtn.disabled = !input.value.trim();
+  const hasContent = !!input.value.trim();
+  submitBtn.disabled = !hasContent;
+  
+  if (clearBtn) {
+    clearBtn.style.display = hasContent ? "flex" : "none";
+  }
 }
 
 /**
@@ -1996,6 +2010,13 @@ function initNotesPanel() {
     input.addEventListener("paste", () => {
       setTimeout(() => handleNotesInput({ target: input }), 0);
     });
+    // Enter submits, Shift+Enter inserts newline
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        submitNote();
+      }
+    });
   }
   
   if (submitBtn) {
@@ -2146,12 +2167,27 @@ async function updateTranscriptionControls() {
     statusBadge.textContent = "Transcribing";
     statusBadge.className = "status-badge in-progress";
   } else if (meetingStatus === "in_progress") {
-    // Meeting is in_progress but transcription stopped (shouldn't happen normally)
-    logToServer("in_progress but not active, showing resume");
-    stopBtn.style.display = "none";
-    resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
-    statusBadge.textContent = isAnyActive ? "Paused (another active)" : "Paused";
-    statusBadge.className = isAnyActive ? "status-badge blocked" : "status-badge in-progress";
+    // Meeting is in_progress but not the active transcription job.
+    // Check if finalization is running (has finalization_status or already
+    // has transcript segments) vs truly paused.
+    const finStatus = meeting.finalization_status;
+    const hasSegments = ((meeting.transcript?.segments) || []).length > 0;
+    const isFinalizing = finStatus && finStatus.status_text;
+
+    if (isFinalizing || hasSegments) {
+      // Finalization is running in the background -- not paused
+      logToServer("finalizing in background");
+      stopBtn.style.display = "none";
+      resumeBtn.style.display = "none";
+      statusBadge.textContent = isFinalizing ? `Finalizing: ${finStatus.status_text}` : "Finalizing...";
+      statusBadge.className = "status-badge in-progress";
+    } else {
+      logToServer("in_progress but not active, showing resume");
+      stopBtn.style.display = "none";
+      resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
+      statusBadge.textContent = isAnyActive ? "Paused (another active)" : "Paused";
+      statusBadge.className = isAnyActive ? "status-badge blocked" : "status-badge in-progress";
+    }
   } else if (meetingStatus === "completed" && meeting.audio_path) {
     // Meeting is completed but has audio - can resume
     logToServer("completed with audio, showing resume");
