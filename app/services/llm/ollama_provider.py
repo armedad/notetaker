@@ -43,8 +43,19 @@ def _find_ollama_launch_cmd() -> list:
     return []
 
 
+def _is_local_url(url: str) -> bool:
+    """Return True if the URL points to the local machine."""
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or ""
+    return host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+
+
 def ensure_ollama_running(base_url: str = "http://127.0.0.1:11434") -> None:
     """Launch Ollama if it isn't already running. Blocks until ready.
+    
+    Only attempts a local launch when base_url points to localhost.
+    If the user has configured a remote Ollama server, this function
+    will check reachability but never try to start a local process.
     
     Works on macOS, Windows, and Linux. Call this at boot (when selected
     provider is Ollama) and when the user switches to an Ollama model.
@@ -57,6 +68,13 @@ def ensure_ollama_running(base_url: str = "http://127.0.0.1:11434") -> None:
             return
     except requests.RequestException:
         pass
+
+    if not _is_local_url(base_url):
+        _logger.warning(
+            "Ollama not reachable at %s (remote host) — will not attempt local launch",
+            base_url,
+        )
+        return
 
     cmd = _find_ollama_launch_cmd()
     if not cmd:

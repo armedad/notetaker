@@ -52,8 +52,8 @@ if [[ "${CURRENT_VERSION}" != "${LAST_VERSION}" || "${FORCE_RESTART}" == "true" 
 fi
 
 log "Ensuring no stray notetaker processes are running"
-pkill -f "uvicorn run:app" >/dev/null 2>&1 || true
-pkill -f "run.py" >/dev/null 2>&1 || true
+# Kill only notetaker's uvicorn process (specific port) - avoid killing other projects' run.py
+pkill -f "uvicorn run:app.*--port 6684" >/dev/null 2>&1 || true
 
 if [[ ! -f "requirements.txt" ]]; then
   log "Missing requirements.txt in ${PROJECT_DIR}"

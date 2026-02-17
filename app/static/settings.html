@@ -368,6 +368,26 @@
         </div>
 
         <div class="debug-subsection">
+          <h3>Debug Flags</h3>
+          <p class="hint">Enable verbose logging for specific features. Logs are written to logs/server_*.log</p>
+          <div class="debug-flags-header">
+            <div class="row">
+              <label for="debug-master-toggle">
+                <input id="debug-master-toggle" type="checkbox" />
+                Enable debug logging
+              </label>
+            </div>
+            <div class="debug-flags-actions">
+              <button id="debug-flags-all-on" class="secondary small">All On</button>
+              <button id="debug-flags-all-off" class="secondary small">All Off</button>
+            </div>
+          </div>
+          <div class="debug-flags-list" id="debug-flags-list">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+
+        <div class="debug-subsection">
           <h3>RAG Metrics</h3>
           <p class="hint">Monitor data access patterns and token usage for chat queries.</p>
           <div class="actions">
@@ -448,6 +468,7 @@
       </section>
     </main>
 
-    <script src="/static/settings.js?v=2"></script>
+    <script src="/static/debug-flags.js"></script>
+    <script src="/static/settings.js?v=3"></script>
   </body>
 </html>
