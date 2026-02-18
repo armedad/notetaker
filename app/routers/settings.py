@@ -589,6 +589,78 @@ def create_settings_router(config_path: str) -> APIRouter:
             json.dump(data, config_file, indent=2)
         return {"status": "ok", "theme": theme}
 
+    # ── HuggingFace model management ──────────────────────────────────
+
+    class HfModelActionRequest(BaseModel):
+        model_id: str
+        hf_token: Optional[str] = None
+
+    class HfGlobalRequest(BaseModel):
+        auto_download: bool
+
+    def _hf_token_from_config() -> str:
+        """Resolve the HF token from diarization config (batch → realtime → legacy)."""
+        if not os.path.exists(config_path):
+            return ""
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        diar = data.get("diarization", {})
+        return (
+            diar.get("batch", {}).get("hf_token")
+            or diar.get("realtime", {}).get("hf_token")
+            or diar.get("hf_token")
+            or ""
+        )
+
+    @router.get("/api/settings/hf-models")
+    def get_hf_models() -> dict:
+        """List all known HF models with cache status + global auto-download flag."""
+        from app.services.hf_model_manager import list_models
+        models = list_models()
+
+        data = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        auto_download = data.get("hf_models", {}).get("auto_download", False)
+        return {"models": models, "auto_download": auto_download}
+
+    @router.post("/api/settings/hf-models/global")
+    def set_hf_global(payload: HfGlobalRequest) -> dict:
+        """Toggle the global HF auto-download setting.
+        Immediately updates HF_HUB_OFFLINE in the running process."""
+        data = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        hf_cfg = data.setdefault("hf_models", {})
+        hf_cfg["auto_download"] = payload.auto_download
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        if payload.auto_download:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+            _logger.info("HF auto-download enabled — HF_HUB_OFFLINE cleared")
+        else:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            _logger.info("HF auto-download disabled — HF_HUB_OFFLINE=1")
+
+        return {"status": "ok", "auto_download": payload.auto_download}
+
+    @router.post("/api/settings/hf-models/check-update")
+    def check_hf_update(payload: HfModelActionRequest) -> dict:
+        """Check whether a newer revision exists for a model."""
+        token = payload.hf_token or _hf_token_from_config()
+        from app.services.hf_model_manager import check_for_update
+        return check_for_update(payload.model_id, token or None)
+
+    @router.post("/api/settings/hf-models/download")
+    def download_hf_model(payload: HfModelActionRequest) -> dict:
+        """Download or update a model from HuggingFace Hub."""
+        token = payload.hf_token or _hf_token_from_config()
+        from app.services.hf_model_manager import download_model
+        return download_model(payload.model_id, token or None)
+
     @router.get("/api/settings/debug")
     def get_debug_settings() -> dict:
         """Get debug flags configuration."""

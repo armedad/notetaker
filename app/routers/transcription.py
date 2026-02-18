@@ -190,6 +190,12 @@ def create_transcription_router(
     transcription_jobs: dict[str, dict] = {}
     transcription_jobs_lock = threading.Lock()
     
+    # Meetings currently running finalization (diarization + summarization).
+    # Tracked separately so the frontend can distinguish "finalizing" from
+    # "stale/stuck" without scanning every meeting file on boot.
+    finalizing_meetings: set[str] = set()
+    finalizing_lock = threading.Lock()
+    
     trace_logger = logging.getLogger("notetaker.trace")
 
     def trace(stage: str, **fields) -> None:
@@ -603,25 +609,33 @@ def create_transcription_router(
                 transcription_jobs.pop(meeting_id, None)
             logger.info("Transcription active phase done, starting finalization: meeting_id=%s", meeting_id)
             
-            # Finalize meeting (same path as file mode)
-            meeting = meeting_store.get_meeting(meeting_id)
-            if meeting:
-                transcript = meeting.get("transcript") or {}
-                disk_segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
-                audio_path = meeting.get("audio_path")
-                
-                if disk_segments:
-                    # Use final device/compute for quality finalization
-                    final_pipeline = get_pipeline(model_size, final_device, final_compute)
-                    final_pipeline.finalize_meeting_with_diarization(
-                        meeting_id, disk_segments, audio_path
-                    )
-                    logger.info("Meeting finalized: meeting_id=%s segments=%d", meeting_id, len(disk_segments))
+            # Register as finalizing so the frontend can query real state
+            with finalizing_lock:
+                finalizing_meetings.add(meeting_id)
+            
+            try:
+                # Finalize meeting (same path as file mode)
+                meeting = meeting_store.get_meeting(meeting_id)
+                if meeting:
+                    transcript = meeting.get("transcript") or {}
+                    disk_segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
+                    audio_path = meeting.get("audio_path")
+                    
+                    if disk_segments:
+                        # Use final device/compute for quality finalization
+                        final_pipeline = get_pipeline(model_size, final_device, final_compute)
+                        final_pipeline.finalize_meeting_with_diarization(
+                            meeting_id, disk_segments, audio_path
+                        )
+                        logger.info("Meeting finalized: meeting_id=%s segments=%d", meeting_id, len(disk_segments))
+                    else:
+                        meeting_store.update_status(meeting_id, "completed")
+                        logger.info("Meeting completed (no segments): meeting_id=%s", meeting_id)
                 else:
                     meeting_store.update_status(meeting_id, "completed")
-                    logger.info("Meeting completed (no segments): meeting_id=%s", meeting_id)
-            else:
-                meeting_store.update_status(meeting_id, "completed")
+            finally:
+                with finalizing_lock:
+                    finalizing_meetings.discard(meeting_id)
                 
         except Exception as exc:
             logger.exception("Transcription error: meeting_id=%s error=%s", meeting_id, exc)
@@ -850,6 +864,23 @@ def create_transcription_router(
                     "audio_path": job.get("audio_path"),
                 }
         return {"active": False, "meeting_id": None, "audio_path": None}
+
+    @router.get("/api/transcribe/status/{meeting_id}")
+    def get_transcription_status(meeting_id: str) -> dict:
+        """Get the real-time transcription/finalization state for a meeting.
+
+        Returns one of:
+          transcribing  – actively processing audio
+          finalizing    – diarization / summarization running
+          idle          – nothing running for this meeting
+        """
+        with transcription_jobs_lock:
+            if meeting_id in transcription_jobs:
+                return {"meeting_id": meeting_id, "state": "transcribing"}
+        with finalizing_lock:
+            if meeting_id in finalizing_meetings:
+                return {"meeting_id": meeting_id, "state": "finalizing"}
+        return {"meeting_id": meeting_id, "state": "idle"}
 
     @router.post("/api/transcribe/stop/{meeting_id}")
     def stop_transcription_by_meeting(meeting_id: str) -> dict:

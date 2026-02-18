@@ -1142,6 +1142,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadDiarizationSettings();
   await loadAppearanceSettings();
   
+  // HuggingFace model downloads
+  hfInitEvents();
+  await hfLoadModels();
+
   // Initialize debug flags UI and load settings
   initDebugFlagsUI();
   await loadDebugFlags();
@@ -1149,6 +1153,168 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Initialize debug section (test/debug infrastructure)
   testInitDebugSection();
 });
+
+// ── HuggingFace model management ──────────────────────────────────────
+
+let _hfModels = [];
+
+async function hfLoadModels() {
+  const container = document.getElementById("hf-models-list");
+  if (!container) return;
+  try {
+    const data = await fetchJson("/api/settings/hf-models");
+    _hfModels = data.models || [];
+
+    // Global toggle
+    const cb = document.getElementById("hf-auto-download");
+    if (cb) cb.checked = !!data.auto_download;
+
+    hfRender();
+  } catch (err) {
+    container.innerHTML = `<div class="hint">Failed to load models: ${err.message}</div>`;
+    debugError("hfLoadModels", err);
+  }
+}
+
+function hfInitEvents() {
+  const cb = document.getElementById("hf-auto-download");
+  if (cb) cb.addEventListener("change", () => hfSetGlobal(cb.checked));
+
+  const checkAll = document.getElementById("hf-check-all");
+  if (checkAll) checkAll.addEventListener("click", hfCheckAll);
+}
+
+async function hfSetGlobal(enabled) {
+  try {
+    await fetchJson("/api/settings/hf-models/global", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auto_download: enabled }),
+    });
+  } catch (err) {
+    debugError("hfSetGlobal", err);
+  }
+}
+
+function hfRender() {
+  const container = document.getElementById("hf-models-list");
+  if (!container) return;
+  if (!_hfModels.length) {
+    container.innerHTML = '<div class="hint">No HuggingFace models found.</div>';
+    return;
+  }
+
+  let html = "";
+  let lastGroup = "";
+  for (const m of _hfModels) {
+    if (m.group !== lastGroup) {
+      lastGroup = m.group;
+      html += `<div class="hf-group-label">${lastGroup}</div>`;
+    }
+
+    const cached = m.cached;
+    const sizeTxt = cached ? `${m.size_mb} MB` : "not downloaded";
+    const statusCls = cached ? "cached" : "not-cached";
+    const statusTxt = cached ? "Cached" : "Not cached";
+    const gatedBadge = m.gated ? '<span class="hf-badge gated">gated</span>' : "";
+
+    html += `
+      <div class="hf-model-row" data-model-id="${m.id}">
+        <div class="hf-model-info">
+          <div class="hf-model-name">${m.label}${gatedBadge}</div>
+          <div class="hf-model-meta">${m.id} · ${sizeTxt}</div>
+          <div class="hf-model-status ${statusCls}" data-hf-status="${m.id}">${statusTxt}</div>
+        </div>
+        <div class="hf-model-actions">
+          <button class="secondary small" data-hf-check="${m.id}">Check</button>
+          <button class="secondary small" data-hf-download="${m.id}" style="display:none">Download</button>
+        </div>
+      </div>`;
+  }
+  container.innerHTML = html;
+
+  container.querySelectorAll("[data-hf-check]").forEach((el) => {
+    el.addEventListener("click", () => hfCheck(el.dataset.hfCheck));
+  });
+  container.querySelectorAll("[data-hf-download]").forEach((el) => {
+    el.addEventListener("click", () => hfDownload(el.dataset.hfDownload));
+  });
+}
+
+function _hfSetStatus(modelId, text, cls) {
+  const el = document.querySelector(`[data-hf-status="${modelId}"]`);
+  if (el) {
+    el.textContent = text;
+    el.className = `hf-model-status ${cls || ""}`;
+  }
+}
+
+function _hfShowDownload(modelId, show) {
+  const btn = document.querySelector(`[data-hf-download="${modelId}"]`);
+  if (btn) btn.style.display = show ? "inline-block" : "none";
+}
+
+async function hfCheck(modelId) {
+  _hfSetStatus(modelId, "Checking…", "");
+  try {
+    const c = await fetchJson("/api/settings/hf-models/check-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_id: modelId }),
+    });
+    if (c.error) {
+      _hfSetStatus(modelId, c.message, "error");
+    } else if (c.update_available) {
+      _hfSetStatus(modelId, c.message, "update-available");
+      _hfShowDownload(modelId, true);
+    } else {
+      _hfSetStatus(modelId, c.message, "cached");
+      _hfShowDownload(modelId, false);
+    }
+  } catch (err) {
+    _hfSetStatus(modelId, `Error: ${err.message}`, "error");
+    debugError("hfCheck", err);
+  }
+}
+
+async function hfCheckAll() {
+  for (const m of _hfModels) {
+    await hfCheck(m.id);
+  }
+}
+
+async function hfDownload(modelId) {
+  const btn = document.querySelector(`[data-hf-download="${modelId}"]`);
+  if (btn) {
+    btn.textContent = "Downloading…";
+    btn.classList.add("downloading");
+  }
+  _hfSetStatus(modelId, "Downloading…", "");
+  try {
+    const d = await fetchJson("/api/settings/hf-models/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_id: modelId }),
+    });
+    if (d.status === "ok") {
+      _hfSetStatus(modelId, `Downloaded · ${d.size_mb || "?"} MB`, "cached");
+      _hfShowDownload(modelId, false);
+      await hfLoadModels();
+    } else {
+      _hfSetStatus(modelId, d.message || "Download failed", "error");
+    }
+  } catch (err) {
+    _hfSetStatus(modelId, `Error: ${err.message}`, "error");
+    debugError("hfDownload", err);
+  } finally {
+    if (btn) {
+      btn.textContent = "Download";
+      btn.classList.remove("downloading");
+    }
+  }
+}
+
+// ── Appearance settings ───────────────────────────────────────────────
 
 async function loadAppearanceSettings() {
   try {

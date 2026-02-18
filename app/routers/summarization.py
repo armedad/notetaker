@@ -231,8 +231,6 @@ def create_summarization_router(
                 force=True,
             )
             
-            # Also clear finalization status since we're done
-            meeting_store.clear_finalization_status(meeting_id)
             meeting_store.update_status(meeting_id, "completed")
             
             updated = meeting_store.get_meeting(meeting_id) or {}
