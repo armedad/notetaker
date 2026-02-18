@@ -7,494 +7,519 @@
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/theme.js"></script>
   </head>
-  <body>
-    <main class="container">
-      <header>
-        <div class="title-row">
-          <a href="/" class="app-brand">Notetaker</a>
-          <h1>Settings</h1>
-          <span id="version-badge" class="version-badge">v0.0.0.0</span>
-        </div>
-        <p class="subtitle">Configure devices, transcription, and models</p>
-        <div class="status error" id="global-error"></div>
-        <div class="status" id="global-busy"></div>
-      </header>
+  <body class="settings-page">
+    <header class="settings-header">
+      <div class="title-row">
+        <a href="/" class="app-brand">Notetaker</a>
+        <span class="settings-page-title">Settings</span>
+        <span id="version-badge" class="version-badge">v0.0.0.0</span>
+        <div class="status error inline" id="global-error"></div>
+        <div class="status inline" id="global-busy"></div>
+        <div class="header-actions"></div>
+      </div>
+    </header>
 
-      <section class="panel">
-        <h2>Appearance</h2>
-        <div class="row-setting">
-          <label for="theme-select">Theme</label>
-          <select id="theme-select">
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-            <option value="system">Follow system</option>
-          </select>
-        </div>
-      </section>
+    <main class="settings-body">
+      <div class="settings-layout">
+        <nav class="settings-sidebar">
+          <button class="settings-tab active" data-tab="general">General</button>
+          <button class="settings-tab" data-tab="models">Models</button>
+          <button class="settings-tab" data-tab="debug">Debug</button>
+        </nav>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Audio Devices</h2>
-          <button id="refresh-devices" class="secondary">Refresh</button>
-        </div>
-        <div class="row-setting">
-          <label for="device-select">Input device</label>
-          <select id="device-select"></select>
-        </div>
-        <div class="row-setting">
-          <label for="samplerate">Sample rate</label>
-          <input id="samplerate" type="number" value="48000" min="8000" step="1000" />
-        </div>
-        <div class="row-setting">
-          <label for="channels">Channels</label>
-          <input id="channels" type="number" value="2" min="1" max="8" />
-        </div>
-      </section>
+        <div class="settings-content">
+          <!-- ═══ General ═══ -->
+          <div class="settings-tab-content active" data-tab="general">
 
-      <section class="panel">
-        <h2>Transcription</h2>
-        <div class="row-setting">
-          <label for="live-model-size">Live model size</label>
-          <select id="live-model-size">
-            <option value="tiny">tiny</option>
-            <option value="base" selected>base</option>
-            <option value="small">small</option>
-            <option value="medium">medium</option>
-            <option value="large-v3">large-v3</option>
-          </select>
-        </div>
-        <div class="row-setting">
-          <label for="final-model-size">Final model size</label>
-          <select id="final-model-size">
-            <option value="tiny">tiny</option>
-            <option value="base">base</option>
-            <option value="small" selected>small</option>
-            <option value="medium">medium</option>
-            <option value="large-v3">large-v3</option>
-          </select>
-        </div>
-        <div class="row">
-          <label>
-            <input id="auto-transcribe" type="checkbox" checked />
-            Auto-transcribe after stop
-          </label>
-        </div>
-        <div class="row">
-          <label>
-            <input id="stream-transcribe" type="checkbox" checked />
-            Stream transcript updates
-          </label>
-        </div>
-        <div class="row">
-          <label>
-            <input id="live-transcribe" type="checkbox" checked />
-            Live transcription during recording
-          </label>
-        </div>
-        <div class="row-setting">
-          <label for="consolidation-max-duration">Consolidate chunks up to (seconds)</label>
-          <input id="consolidation-max-duration" type="number" value="15" min="5" max="60" step="1" />
-        </div>
-        <div class="row-setting">
-          <label for="consolidation-max-gap">Max gap between chunks (seconds)</label>
-          <input id="consolidation-max-gap" type="number" value="2" min="0.5" max="10" step="0.5" />
-        </div>
-        <div class="output" id="transcription-output"></div>
-      </section>
+            <section class="panel">
+              <h2>Appearance</h2>
+              <div class="row-setting">
+                <label for="theme-select">Theme</label>
+                <select id="theme-select">
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                  <option value="system">Follow system</option>
+                </select>
+              </div>
+            </section>
 
-      <section class="panel">
-        <h2>Real-Time Diarization</h2>
-        <p class="panel-description">
-          Identifies speakers during live transcription. Provides immediate speaker labels but lower accuracy.
-          Only <strong>diart</strong> supports real-time operation.
-        </p>
-        <div class="row">
-          <label for="realtime-diarization-enabled">
-            <input id="realtime-diarization-enabled" type="checkbox" />
-            Enable real-time speaker detection
-          </label>
-        </div>
-        <div class="row-setting">
-          <label for="realtime-diarization-provider">Provider</label>
-          <select id="realtime-diarization-provider">
-            <option value="none">Off</option>
-            <option value="diart">diart — Real-time streaming</option>
-          </select>
-        </div>
-        <div class="row-setting" id="realtime-device-row">
-          <label for="realtime-diarization-device">Device</label>
-          <select id="realtime-diarization-device">
-            <option value="cpu">CPU</option>
-            <option value="cuda">CUDA (GPU)</option>
-          </select>
-        </div>
-        <div class="row" id="realtime-performance-row">
-          <label for="realtime-performance-level">Latency / Accuracy tradeoff</label>
-          <input id="realtime-performance-level" type="range" min="0" max="1" step="0.1" value="0.5" />
-          <div class="hint">Lower = faster but less accurate. Higher = slower but more accurate.</div>
-        </div>
-        <div class="row" id="realtime-token-row">
-          <label for="realtime-hf-token">Hugging Face token</label>
-          <input id="realtime-hf-token" type="password" placeholder="hf_..." />
-          <div class="hint">
-            Get your free token at
-            <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>.
-          </div>
-        </div>
-        <div class="output" id="realtime-diarization-output"></div>
-      </section>
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Audio Devices</h2>
+                <button id="refresh-devices" class="secondary">Refresh</button>
+              </div>
+              <div class="row-setting">
+                <label for="device-select">Input device</label>
+                <select id="device-select"></select>
+              </div>
+              <div class="row-setting">
+                <label for="samplerate">Sample rate</label>
+                <input id="samplerate" type="number" value="48000" min="8000" step="1000" />
+              </div>
+              <div class="row-setting">
+                <label for="channels">Channels</label>
+                <input id="channels" type="number" value="2" min="1" max="8" />
+              </div>
+            </section>
 
-      <section class="panel">
-        <h2>Final Diarization</h2>
-        <p class="panel-description">
-          Identifies speakers after transcription completes. Higher accuracy with named speaker identification.
-          Runs during the finalization step.
-        </p>
-        <div class="row">
-          <label for="batch-diarization-enabled">
-            <input id="batch-diarization-enabled" type="checkbox" />
-            Enable final speaker identification
-          </label>
-        </div>
-        <div class="row-setting">
-          <label for="batch-diarization-provider">Provider</label>
-          <select id="batch-diarization-provider">
-            <option value="none">Off</option>
-            <option value="pyannote">pyannote 3.1 — High accuracy</option>
-            <option value="whisperx">whisperx — WhisperX-based</option>
-          </select>
-        </div>
-        <div class="row-setting">
-          <label for="batch-diarization-model">Model</label>
-          <select id="batch-diarization-model">
-            <option value="pyannote/speaker-diarization-3.1">pyannote/speaker-diarization-3.1</option>
-            <option value="pyannote/speaker-diarization-3.0">pyannote/speaker-diarization-3.0 (faster on CPU)</option>
-          </select>
-        </div>
-        <div class="row-setting" id="batch-device-row">
-          <label for="batch-diarization-device">Device</label>
-          <select id="batch-diarization-device">
-            <option value="cpu">CPU</option>
-            <option value="cuda">CUDA (GPU)</option>
-          </select>
-        </div>
-        <div class="row" id="batch-token-row">
-          <label for="batch-hf-token">Hugging Face token</label>
-          <input id="batch-hf-token" type="password" placeholder="hf_..." />
-          <div class="hint">
-            Get your free token at
-            <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>.
-            You must also accept the model terms at
-            <a href="https://huggingface.co/pyannote/speaker-diarization-3.1" target="_blank">pyannote model page</a>.
-          </div>
-        </div>
-        <div class="actions">
-          <button id="test-diarization-access" class="secondary">Test HuggingFace Access</button>
-        </div>
-        <div class="output" id="batch-diarization-output"></div>
-      </section>
+            <section class="panel">
+              <h2>Transcription</h2>
+              <div class="row-setting">
+                <label for="live-model-size">Live model size</label>
+                <select id="live-model-size">
+                  <option value="tiny">tiny</option>
+                  <option value="base" selected>base</option>
+                  <option value="small">small</option>
+                  <option value="medium">medium</option>
+                  <option value="large-v3">large-v3</option>
+                </select>
+              </div>
+              <div class="row-setting">
+                <label for="final-model-size">Final model size</label>
+                <select id="final-model-size">
+                  <option value="tiny">tiny</option>
+                  <option value="base">base</option>
+                  <option value="small" selected>small</option>
+                  <option value="medium">medium</option>
+                  <option value="large-v3">large-v3</option>
+                </select>
+              </div>
+              <div class="row">
+                <label>
+                  <input id="auto-transcribe" type="checkbox" checked />
+                  Auto-transcribe after stop
+                </label>
+              </div>
+              <div class="row">
+                <label>
+                  <input id="stream-transcribe" type="checkbox" checked />
+                  Stream transcript updates
+                </label>
+              </div>
+              <div class="row">
+                <label>
+                  <input id="live-transcribe" type="checkbox" checked />
+                  Live transcription during recording
+                </label>
+              </div>
+              <div class="row-setting">
+                <label for="consolidation-max-duration">Consolidate chunks up to (seconds)</label>
+                <input id="consolidation-max-duration" type="number" value="15" min="5" max="60" step="1" />
+              </div>
+              <div class="row-setting">
+                <label for="consolidation-max-gap">Max gap between chunks (seconds)</label>
+                <input id="consolidation-max-gap" type="number" value="2" min="0.5" max="10" step="0.5" />
+              </div>
+              <div class="output" id="transcription-output"></div>
+            </section>
 
-      <section class="panel">
-        <h2>Model Downloads</h2>
-        <p class="panel-description">
-          Manage locally cached HuggingFace models. When auto-download is off,
-          models are only loaded from the local cache. Use the buttons below
-          to check for updates or download models on demand.
-        </p>
-        <div class="row">
-          <label for="hf-auto-download">
-            <input id="hf-auto-download" type="checkbox" />
-            Allow HuggingFace auto-download
-          </label>
-          <div class="hint">
-            When on, models may be downloaded automatically at runtime if not cached.
-            When off (default), only locally cached models are used.
           </div>
-        </div>
-        <div class="actions" style="margin-bottom:12px">
-          <button id="hf-check-all" class="secondary">Check All for Updates</button>
-        </div>
-        <div id="hf-models-list" class="hf-models-list">
-          <div class="hint">Loading…</div>
-        </div>
-        <div class="output" id="hf-models-output"></div>
-      </section>
 
-      <section class="panel">
-        <h2>AI Models</h2>
-        <div class="row-setting">
-          <label for="model-choice">Choose model</label>
-          <input id="model-choice" type="text" placeholder="Select or type a model" list="model-options" />
-          <datalist id="model-options"></datalist>
-        </div>
-        <div class="hint" id="model-empty-hint" style="margin-bottom: 12px;">
-          No visible models yet. Enable models below.
-        </div>
-        <div class="row">
-          <label>Discovered models</label>
-          <input
-            id="model-filter"
-            type="text"
-            placeholder="Filter discovered models"
-          />
-          <div class="model-registry" id="model-registry"></div>
-          <div class="hint">
-            Models are hidden by default. Toggle visibility to make them selectable.
-          </div>
-        </div>
+          <!-- ═══ Models ═══ -->
+          <div class="settings-tab-content" data-tab="models">
 
-        <div class="provider-block" id="openai-block">
-          <div class="provider-header">
-            <h3>OpenAI</h3>
-            <label class="toggle-switch">
-              <input type="checkbox" id="openai-enabled" />
-              <span class="toggle-slider"></span>
-            </label>
+            <section class="panel">
+              <h2>Real-Time Diarization</h2>
+              <p class="panel-description">
+                Identifies speakers during live transcription. Provides immediate speaker labels but lower accuracy.
+                Only <strong>diart</strong> supports real-time operation.
+              </p>
+              <div class="row">
+                <label for="realtime-diarization-enabled">
+                  <input id="realtime-diarization-enabled" type="checkbox" />
+                  Enable real-time speaker detection
+                </label>
+              </div>
+              <div class="row-setting">
+                <label for="realtime-diarization-provider">Provider</label>
+                <select id="realtime-diarization-provider">
+                  <option value="none">Off</option>
+                  <option value="diart">diart — Real-time streaming</option>
+                </select>
+              </div>
+              <div class="row-setting" id="realtime-device-row">
+                <label for="realtime-diarization-device">Device</label>
+                <select id="realtime-diarization-device">
+                  <option value="cpu">CPU</option>
+                  <option value="cuda">CUDA (GPU)</option>
+                </select>
+              </div>
+              <div class="row" id="realtime-performance-row">
+                <label for="realtime-performance-level">Latency / Accuracy tradeoff</label>
+                <input id="realtime-performance-level" type="range" min="0" max="1" step="0.1" value="0.5" />
+                <div class="hint">Lower = faster but less accurate. Higher = slower but more accurate.</div>
+              </div>
+              <div class="row" id="realtime-token-row">
+                <label for="realtime-hf-token">Hugging Face token</label>
+                <input id="realtime-hf-token" type="password" placeholder="hf_..." />
+                <div class="hint">
+                  Get your free token at
+                  <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>.
+                </div>
+              </div>
+              <div class="output" id="realtime-diarization-output"></div>
+            </section>
+
+            <section class="panel">
+              <h2>Final Diarization</h2>
+              <p class="panel-description">
+                Identifies speakers after transcription completes. Higher accuracy with named speaker identification.
+                Runs during the finalization step.
+              </p>
+              <div class="row">
+                <label for="batch-diarization-enabled">
+                  <input id="batch-diarization-enabled" type="checkbox" />
+                  Enable final speaker identification
+                </label>
+              </div>
+              <div class="row-setting">
+                <label for="batch-diarization-provider">Provider</label>
+                <select id="batch-diarization-provider">
+                  <option value="none">Off</option>
+                  <option value="pyannote">pyannote 3.1 — High accuracy</option>
+                  <option value="whisperx">whisperx — WhisperX-based</option>
+                </select>
+              </div>
+              <div class="row-setting">
+                <label for="batch-diarization-model">Model</label>
+                <select id="batch-diarization-model">
+                  <option value="pyannote/speaker-diarization-3.1">pyannote/speaker-diarization-3.1</option>
+                  <option value="pyannote/speaker-diarization-3.0">pyannote/speaker-diarization-3.0 (faster on CPU)</option>
+                </select>
+              </div>
+              <div class="row-setting" id="batch-device-row">
+                <label for="batch-diarization-device">Device</label>
+                <select id="batch-diarization-device">
+                  <option value="cpu">CPU</option>
+                  <option value="cuda">CUDA (GPU)</option>
+                </select>
+              </div>
+              <div class="row" id="batch-token-row">
+                <label for="batch-hf-token">Hugging Face token</label>
+                <input id="batch-hf-token" type="password" placeholder="hf_..." />
+                <div class="hint">
+                  Get your free token at
+                  <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>.
+                  You must also accept the model terms at
+                  <a href="https://huggingface.co/pyannote/speaker-diarization-3.1" target="_blank">pyannote model page</a>.
+                </div>
+              </div>
+              <div class="actions">
+                <button id="test-diarization-access" class="secondary">Test HuggingFace Access</button>
+              </div>
+              <div class="output" id="batch-diarization-output"></div>
+            </section>
+
+            <section class="panel">
+              <h2>Model Downloads</h2>
+              <p class="panel-description">
+                Manage locally cached HuggingFace models. When auto-download is off,
+                models are only loaded from the local cache. Use the buttons below
+                to check for updates or download models on demand.
+              </p>
+              <div class="row">
+                <label for="hf-auto-download">
+                  <input id="hf-auto-download" type="checkbox" />
+                  Allow HuggingFace auto-download
+                </label>
+                <div class="hint">
+                  When on, models may be downloaded automatically at runtime if not cached.
+                  When off (default), only locally cached models are used.
+                </div>
+              </div>
+              <div class="actions" style="margin-bottom:12px">
+                <button id="hf-check-all" class="secondary">Check All for Updates</button>
+              </div>
+              <div id="hf-models-list" class="hf-models-list">
+                <div class="hint">Loading…</div>
+              </div>
+              <div class="output" id="hf-models-output"></div>
+            </section>
+
+            <section class="panel">
+              <h2>AI Models</h2>
+              <div class="row-setting">
+                <label for="model-choice">Choose model</label>
+                <input id="model-choice" type="text" placeholder="Select or type a model" list="model-options" />
+                <datalist id="model-options"></datalist>
+              </div>
+              <div class="hint" id="model-empty-hint" style="margin-bottom: 12px;">
+                No visible models yet. Enable models below.
+              </div>
+              <div class="row">
+                <label>Discovered models</label>
+                <input
+                  id="model-filter"
+                  type="text"
+                  placeholder="Filter discovered models"
+                />
+                <div class="model-registry" id="model-registry"></div>
+                <div class="hint">
+                  Models are hidden by default. Toggle visibility to make them selectable.
+                </div>
+              </div>
+
+              <div class="provider-block" id="openai-block">
+                <div class="provider-header">
+                  <h3>OpenAI</h3>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="openai-enabled" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="provider-settings" id="openai-settings">
+                  <div class="row-setting">
+                    <label for="openai-api-key">API key</label>
+                    <input id="openai-api-key" type="password" placeholder="sk-..." />
+                  </div>
+                  <div class="row-setting-with-buttons">
+                    <label for="openai-base-url">Base URL</label>
+                    <input id="openai-base-url" type="text" value="https://api.openai.com" />
+                    <button id="openai-default" class="secondary">Default</button>
+                    <button id="test-openai" class="secondary">Test</button>
+                    <span id="openai-status" class="status-pill"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="provider-block" id="anthropic-block">
+                <div class="provider-header">
+                  <h3>Anthropic</h3>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="anthropic-enabled" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="provider-settings" id="anthropic-settings">
+                  <div class="row-setting">
+                    <label for="anthropic-api-key">API key</label>
+                    <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." />
+                  </div>
+                  <div class="row-setting-with-buttons">
+                    <label for="anthropic-base-url">Base URL</label>
+                    <input id="anthropic-base-url" type="text" value="https://api.anthropic.com" />
+                    <button id="anthropic-default" class="secondary">Default</button>
+                    <button id="test-anthropic" class="secondary">Test</button>
+                    <span id="anthropic-status" class="status-pill"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="provider-block" id="gemini-block">
+                <div class="provider-header">
+                  <h3>Gemini</h3>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="gemini-enabled" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="provider-settings" id="gemini-settings">
+                  <div class="row-setting">
+                    <label for="gemini-api-key">API key</label>
+                    <input id="gemini-api-key" type="password" placeholder="AIza..." />
+                  </div>
+                  <div class="row-setting-with-buttons">
+                    <label for="gemini-base-url">Base URL</label>
+                    <input id="gemini-base-url" type="text" value="https://generativelanguage.googleapis.com" />
+                    <button id="gemini-default" class="secondary">Default</button>
+                    <button id="test-gemini" class="secondary">Test</button>
+                    <span id="gemini-status" class="status-pill"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="provider-block" id="grok-block">
+                <div class="provider-header">
+                  <h3>Grok</h3>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="grok-enabled" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="provider-settings" id="grok-settings">
+                  <div class="row-setting">
+                    <label for="grok-api-key">API key</label>
+                    <input id="grok-api-key" type="password" placeholder="xai-..." />
+                  </div>
+                  <div class="row-setting-with-buttons">
+                    <label for="grok-base-url">Base URL</label>
+                    <input id="grok-base-url" type="text" value="https://api.x.ai" />
+                    <button id="grok-default" class="secondary">Default</button>
+                    <button id="test-grok" class="secondary">Test</button>
+                    <span id="grok-status" class="status-pill"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="provider-block" id="ollama-block">
+                <div class="provider-header">
+                  <h3>Ollama</h3>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="ollama-enabled" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="provider-settings" id="ollama-settings">
+                  <div class="row-setting">
+                    <label for="ollama-api-key">API key (optional)</label>
+                    <input id="ollama-api-key" type="password" placeholder="optional" />
+                  </div>
+                  <div class="row-setting-with-buttons">
+                    <label for="ollama-base-url">Base URL</label>
+                    <input id="ollama-base-url" type="text" value="http://127.0.0.1:11434" />
+                    <button id="ollama-default" class="secondary">Default</button>
+                    <button id="test-ollama" class="secondary">Test</button>
+                    <span id="ollama-status" class="status-pill"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="provider-block" id="lmstudio-block">
+                <div class="provider-header">
+                  <h3>LM Studio</h3>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="lmstudio-enabled" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="provider-settings" id="lmstudio-settings">
+                  <div class="row-setting">
+                    <label for="lmstudio-api-key">API key (optional)</label>
+                    <input id="lmstudio-api-key" type="password" placeholder="optional" />
+                  </div>
+                  <div class="row-setting-with-buttons">
+                    <label for="lmstudio-base-url">Base URL</label>
+                    <input id="lmstudio-base-url" type="text" value="http://127.0.0.1:1234" />
+                    <button id="lmstudio-default" class="secondary">Default</button>
+                    <button id="test-lmstudio" class="secondary">Test</button>
+                    <span id="lmstudio-status" class="status-pill"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="output" id="model-output"></div>
+            </section>
+
           </div>
-          <div class="provider-settings" id="openai-settings">
-            <div class="row-setting">
-              <label for="openai-api-key">API key</label>
-              <input id="openai-api-key" type="password" placeholder="sk-..." />
-            </div>
-            <div class="row-setting-with-buttons">
-              <label for="openai-base-url">Base URL</label>
-              <input id="openai-base-url" type="text" value="https://api.openai.com" />
-              <button id="openai-default" class="secondary">Default</button>
-              <button id="test-openai" class="secondary">Test</button>
-              <span id="openai-status" class="status-pill"></span>
-            </div>
+
+          <!-- ═══ Debug ═══ -->
+          <div class="settings-tab-content" data-tab="debug">
+
+            <section class="panel">
+              <h2>Developer Tools</h2>
+              <p class="panel-description">
+                Tools for debugging and testing the application.
+              </p>
+              <div class="actions">
+                <a href="/test" class="button-link">Open Test Harness</a>
+              </div>
+
+              <div class="debug-subsection">
+                <h3>Debug Flags</h3>
+                <p class="hint">Enable verbose logging for specific features. Logs are written to logs/server_*.log</p>
+                <div class="debug-flags-header">
+                  <div class="row">
+                    <label for="debug-master-toggle">
+                      <input id="debug-master-toggle" type="checkbox" />
+                      Enable debug logging
+                    </label>
+                  </div>
+                  <div class="debug-flags-actions">
+                    <button id="debug-flags-all-on" class="secondary small">All On</button>
+                    <button id="debug-flags-all-off" class="secondary small">All Off</button>
+                  </div>
+                </div>
+                <div class="debug-flags-list" id="debug-flags-list">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+
+              <div class="debug-subsection">
+                <h3>RAG Metrics</h3>
+                <p class="hint">Monitor data access patterns and token usage for chat queries.</p>
+                <div class="actions">
+                  <button id="test-refresh-rag-metrics" class="secondary">Refresh</button>
+                  <button id="test-reset-rag-metrics" class="secondary">Reset</button>
+                </div>
+                <div class="debug-stats" id="test-rag-aggregate">
+                  <div class="debug-stat">
+                    <span class="debug-stat-label">Total Queries</span>
+                    <span class="debug-stat-value" id="test-rag-total-queries">-</span>
+                  </div>
+                  <div class="debug-stat">
+                    <span class="debug-stat-label">Avg Duration</span>
+                    <span class="debug-stat-value" id="test-rag-avg-duration">-</span>
+                  </div>
+                  <div class="debug-stat">
+                    <span class="debug-stat-label">Avg Input Tokens</span>
+                    <span class="debug-stat-value" id="test-rag-avg-input">-</span>
+                  </div>
+                  <div class="debug-stat">
+                    <span class="debug-stat-label">Avg Output Tokens</span>
+                    <span class="debug-stat-value" id="test-rag-avg-output">-</span>
+                  </div>
+                  <div class="debug-stat">
+                    <span class="debug-stat-label">Avg Meetings Loaded</span>
+                    <span class="debug-stat-value" id="test-rag-avg-meetings">-</span>
+                  </div>
+                  <div class="debug-stat">
+                    <span class="debug-stat-label">Avg Search Calls</span>
+                    <span class="debug-stat-value" id="test-rag-avg-search">-</span>
+                  </div>
+                </div>
+                <h4>Recent Queries</h4>
+                <div class="debug-table-wrapper">
+                  <table class="debug-table" id="test-rag-recent-table">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Type</th>
+                        <th>Duration</th>
+                        <th>Input</th>
+                        <th>Output</th>
+                        <th>Meetings</th>
+                      </tr>
+                    </thead>
+                    <tbody id="test-rag-recent-body">
+                      <tr><td colspan="6" class="empty">No queries yet</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="debug-subsection">
+                <h3>LLM Logging</h3>
+                <p class="hint">Log full LLM inputs and outputs for debugging. Right-click the chat Send button to log individual requests.</p>
+                <div class="row">
+                  <label for="test-log-all-enabled">
+                    <input id="test-log-all-enabled" type="checkbox" />
+                    Log all LLM calls (summarization, title, etc.)
+                  </label>
+                </div>
+                <div class="actions">
+                  <button id="test-refresh-llm-logs" class="secondary">Refresh Logs</button>
+                  <button id="test-clear-llm-logs" class="secondary">Clear All Logs</button>
+                </div>
+                <h4>Log Files</h4>
+                <div class="debug-log-list" id="test-llm-log-list">
+                  <div class="empty">No log files</div>
+                </div>
+                <div class="debug-log-viewer" id="test-llm-log-viewer" style="display: none;">
+                  <div class="debug-log-viewer-header">
+                    <span id="test-llm-log-filename"></span>
+                    <button id="test-llm-log-close" class="secondary small">Close</button>
+                  </div>
+                  <pre id="test-llm-log-content"></pre>
+                </div>
+              </div>
+            </section>
+
           </div>
         </div>
-
-        <div class="provider-block" id="anthropic-block">
-          <div class="provider-header">
-            <h3>Anthropic</h3>
-            <label class="toggle-switch">
-              <input type="checkbox" id="anthropic-enabled" />
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="provider-settings" id="anthropic-settings">
-            <div class="row-setting">
-              <label for="anthropic-api-key">API key</label>
-              <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." />
-            </div>
-            <div class="row-setting-with-buttons">
-              <label for="anthropic-base-url">Base URL</label>
-              <input id="anthropic-base-url" type="text" value="https://api.anthropic.com" />
-              <button id="anthropic-default" class="secondary">Default</button>
-              <button id="test-anthropic" class="secondary">Test</button>
-              <span id="anthropic-status" class="status-pill"></span>
-            </div>
-          </div>
-        </div>
-
-        <div class="provider-block" id="gemini-block">
-          <div class="provider-header">
-            <h3>Gemini</h3>
-            <label class="toggle-switch">
-              <input type="checkbox" id="gemini-enabled" />
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="provider-settings" id="gemini-settings">
-            <div class="row-setting">
-              <label for="gemini-api-key">API key</label>
-              <input id="gemini-api-key" type="password" placeholder="AIza..." />
-            </div>
-            <div class="row-setting-with-buttons">
-              <label for="gemini-base-url">Base URL</label>
-              <input id="gemini-base-url" type="text" value="https://generativelanguage.googleapis.com" />
-              <button id="gemini-default" class="secondary">Default</button>
-              <button id="test-gemini" class="secondary">Test</button>
-              <span id="gemini-status" class="status-pill"></span>
-            </div>
-          </div>
-        </div>
-
-        <div class="provider-block" id="grok-block">
-          <div class="provider-header">
-            <h3>Grok</h3>
-            <label class="toggle-switch">
-              <input type="checkbox" id="grok-enabled" />
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="provider-settings" id="grok-settings">
-            <div class="row-setting">
-              <label for="grok-api-key">API key</label>
-              <input id="grok-api-key" type="password" placeholder="xai-..." />
-            </div>
-            <div class="row-setting-with-buttons">
-              <label for="grok-base-url">Base URL</label>
-              <input id="grok-base-url" type="text" value="https://api.x.ai" />
-              <button id="grok-default" class="secondary">Default</button>
-              <button id="test-grok" class="secondary">Test</button>
-              <span id="grok-status" class="status-pill"></span>
-            </div>
-          </div>
-        </div>
-
-        <div class="provider-block" id="ollama-block">
-          <div class="provider-header">
-            <h3>Ollama</h3>
-            <label class="toggle-switch">
-              <input type="checkbox" id="ollama-enabled" />
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="provider-settings" id="ollama-settings">
-            <div class="row-setting">
-              <label for="ollama-api-key">API key (optional)</label>
-              <input id="ollama-api-key" type="password" placeholder="optional" />
-            </div>
-            <div class="row-setting-with-buttons">
-              <label for="ollama-base-url">Base URL</label>
-              <input id="ollama-base-url" type="text" value="http://127.0.0.1:11434" />
-              <button id="ollama-default" class="secondary">Default</button>
-              <button id="test-ollama" class="secondary">Test</button>
-              <span id="ollama-status" class="status-pill"></span>
-            </div>
-          </div>
-        </div>
-
-        <div class="provider-block" id="lmstudio-block">
-          <div class="provider-header">
-            <h3>LM Studio</h3>
-            <label class="toggle-switch">
-              <input type="checkbox" id="lmstudio-enabled" />
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="provider-settings" id="lmstudio-settings">
-            <div class="row-setting">
-              <label for="lmstudio-api-key">API key (optional)</label>
-              <input id="lmstudio-api-key" type="password" placeholder="optional" />
-            </div>
-            <div class="row-setting-with-buttons">
-              <label for="lmstudio-base-url">Base URL</label>
-              <input id="lmstudio-base-url" type="text" value="http://127.0.0.1:1234" />
-              <button id="lmstudio-default" class="secondary">Default</button>
-              <button id="test-lmstudio" class="secondary">Test</button>
-              <span id="lmstudio-status" class="status-pill"></span>
-            </div>
-          </div>
-        </div>
-
-        <div class="output" id="model-output"></div>
-      </section>
-
-      <section class="panel">
-        <h2>Developer Tools</h2>
-        <p class="panel-description">
-          Tools for debugging and testing the application.
-        </p>
-        <div class="actions">
-          <a href="/test" class="button-link">Open Test Harness</a>
-        </div>
-
-        <div class="debug-subsection">
-          <h3>Debug Flags</h3>
-          <p class="hint">Enable verbose logging for specific features. Logs are written to logs/server_*.log</p>
-          <div class="debug-flags-header">
-            <div class="row">
-              <label for="debug-master-toggle">
-                <input id="debug-master-toggle" type="checkbox" />
-                Enable debug logging
-              </label>
-            </div>
-            <div class="debug-flags-actions">
-              <button id="debug-flags-all-on" class="secondary small">All On</button>
-              <button id="debug-flags-all-off" class="secondary small">All Off</button>
-            </div>
-          </div>
-          <div class="debug-flags-list" id="debug-flags-list">
-            <!-- Populated by JS -->
-          </div>
-        </div>
-
-        <div class="debug-subsection">
-          <h3>RAG Metrics</h3>
-          <p class="hint">Monitor data access patterns and token usage for chat queries.</p>
-          <div class="actions">
-            <button id="test-refresh-rag-metrics" class="secondary">Refresh</button>
-            <button id="test-reset-rag-metrics" class="secondary">Reset</button>
-          </div>
-          <div class="debug-stats" id="test-rag-aggregate">
-            <div class="debug-stat">
-              <span class="debug-stat-label">Total Queries</span>
-              <span class="debug-stat-value" id="test-rag-total-queries">-</span>
-            </div>
-            <div class="debug-stat">
-              <span class="debug-stat-label">Avg Duration</span>
-              <span class="debug-stat-value" id="test-rag-avg-duration">-</span>
-            </div>
-            <div class="debug-stat">
-              <span class="debug-stat-label">Avg Input Tokens</span>
-              <span class="debug-stat-value" id="test-rag-avg-input">-</span>
-            </div>
-            <div class="debug-stat">
-              <span class="debug-stat-label">Avg Output Tokens</span>
-              <span class="debug-stat-value" id="test-rag-avg-output">-</span>
-            </div>
-            <div class="debug-stat">
-              <span class="debug-stat-label">Avg Meetings Loaded</span>
-              <span class="debug-stat-value" id="test-rag-avg-meetings">-</span>
-            </div>
-            <div class="debug-stat">
-              <span class="debug-stat-label">Avg Search Calls</span>
-              <span class="debug-stat-value" id="test-rag-avg-search">-</span>
-            </div>
-          </div>
-          <h4>Recent Queries</h4>
-          <div class="debug-table-wrapper">
-            <table class="debug-table" id="test-rag-recent-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Type</th>
-                  <th>Duration</th>
-                  <th>Input</th>
-                  <th>Output</th>
-                  <th>Meetings</th>
-                </tr>
-              </thead>
-              <tbody id="test-rag-recent-body">
-                <tr><td colspan="6" class="empty">No queries yet</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="debug-subsection">
-          <h3>LLM Logging</h3>
-          <p class="hint">Log full LLM inputs and outputs for debugging. Right-click the chat Send button to log individual requests.</p>
-          <div class="row">
-            <label for="test-log-all-enabled">
-              <input id="test-log-all-enabled" type="checkbox" />
-              Log all LLM calls (summarization, title, etc.)
-            </label>
-          </div>
-          <div class="actions">
-            <button id="test-refresh-llm-logs" class="secondary">Refresh Logs</button>
-            <button id="test-clear-llm-logs" class="secondary">Clear All Logs</button>
-          </div>
-          <h4>Log Files</h4>
-          <div class="debug-log-list" id="test-llm-log-list">
-            <div class="empty">No log files</div>
-          </div>
-          <div class="debug-log-viewer" id="test-llm-log-viewer" style="display: none;">
-            <div class="debug-log-viewer-header">
-              <span id="test-llm-log-filename"></span>
-              <button id="test-llm-log-close" class="secondary small">Close</button>
-            </div>
-            <pre id="test-llm-log-content"></pre>
-          </div>
-        </div>
-      </section>
+      </div>
     </main>
 
     <script src="/static/debug-flags.js"></script>
-    <script src="/static/settings.js?v=3"></script>
+    <script src="/static/settings.js?v=5"></script>
   </body>
 </html>
