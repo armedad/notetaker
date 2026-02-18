@@ -25,8 +25,8 @@ class RecordingState:
 
 
 class AudioCaptureService:
-    def __init__(self, recordings_dir: str) -> None:
-        self._recordings_dir = recordings_dir
+    def __init__(self, ctx) -> None:
+        self._ctx = ctx
         self._state = RecordingState()
         self._lock = threading.RLock()
         self._audio_queue: "queue.Queue[bytes]" = queue.Queue()
@@ -223,10 +223,10 @@ class AudioCaptureService:
             sd.default.samplerate = samplerate
             sd.default.channels = channels
 
-            os.makedirs(self._recordings_dir, exist_ok=True)
+            os.makedirs(self._ctx.recordings_dir, exist_ok=True)
             recording_id = str(uuid.uuid4())
             filename = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{recording_id}.wav"
-            file_path = os.path.join(self._recordings_dir, filename)
+            file_path = os.path.join(self._ctx.recordings_dir, filename)
 
             self._state = RecordingState(
                 recording_id=recording_id,

@@ -44,6 +44,57 @@
             </section>
 
             <section class="panel">
+              <h2>Data Folder</h2>
+              <p class="panel-description">
+                Where Notetaker stores meetings, recordings, and uploads.
+                Changing this folder will require a restart.
+              </p>
+              <div class="row-setting data-dir-row">
+                <label for="data-dir-input">Path</label>
+                <div class="data-dir-controls">
+                  <input id="data-dir-input" type="text" readonly />
+                  <button id="data-dir-browse" class="secondary">Browse</button>
+                  <button id="data-dir-reset" class="secondary">Reset to Default</button>
+                </div>
+              </div>
+              <div class="output" id="data-dir-output"></div>
+            </section>
+
+            <!-- Folder browser modal -->
+            <div id="folder-browser-modal" class="modal-overlay" style="display:none">
+              <div class="modal folder-browser-modal">
+                <div class="modal-header">
+                  <h3>Choose Data Folder</h3>
+                  <button class="modal-close" id="folder-browser-close">&times;</button>
+                </div>
+                <div class="folder-browser-path" id="folder-browser-path"></div>
+                <div class="folder-browser-list" id="folder-browser-list"></div>
+                <div class="folder-browser-actions">
+                  <button id="folder-browser-up" class="secondary">Up</button>
+                  <button id="folder-browser-new" class="secondary">New Folder</button>
+                  <button id="folder-browser-select" class="primary">Select This Folder</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Move/Copy/Fresh dialog -->
+            <div id="data-dir-action-modal" class="modal-overlay" style="display:none">
+              <div class="modal data-dir-action-modal">
+                <div class="modal-header">
+                  <h3>What about existing data?</h3>
+                  <button class="modal-close" id="data-dir-action-close">&times;</button>
+                </div>
+                <p class="modal-description" id="data-dir-action-desc"></p>
+                <div class="data-dir-action-buttons">
+                  <button id="data-dir-action-move" class="primary">Move data</button>
+                  <button id="data-dir-action-copy" class="secondary">Copy data</button>
+                  <button id="data-dir-action-fresh" class="secondary">Start fresh</button>
+                </div>
+                <div class="output" id="data-dir-action-output"></div>
+              </div>
+            </div>
+
+            <section class="panel">
               <div class="panel-header">
                 <h2>Audio Devices</h2>
                 <button id="refresh-devices" class="secondary">Refresh</button>

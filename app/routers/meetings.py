@@ -55,29 +55,35 @@ class SaveUserNoteDraftRequest(BaseModel):
 
 
 def create_meetings_router(
-    meeting_store: MeetingStore, summarization_service, config_path: str = None
+    meeting_store: MeetingStore, summarization_service, ctx,
 ) -> APIRouter:
     router = APIRouter()
     logger = logging.getLogger("notetaker.api.meetings")
-    
+
     def _get_consolidation_settings() -> tuple[float, float]:
         """Load consolidation settings from config, with defaults."""
         max_duration = 15.0
         max_gap = 2.0
-        if config_path and os.path.exists(config_path):
+        if os.path.exists(ctx.config_path):
             try:
-                with open(config_path, "r", encoding="utf-8") as f:
+                with open(ctx.config_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 transcription = data.get("transcription", {})
                 max_duration = transcription.get("consolidation_max_duration", 15.0)
                 max_gap = transcription.get("consolidation_max_gap", 2.0)
             except Exception:
-                pass  # Use defaults on error
+                pass
         return max_duration, max_gap
 
     @router.get("/api/meetings")
     def list_meetings() -> list[dict]:
-        return meeting_store.list_meetings()
+        meetings = meeting_store.list_meetings()
+        # Add computed finalization fields for UI
+        for meeting in meetings:
+            meeting["needs_finalization"] = meeting_store.needs_finalization(meeting)
+            meeting["pending_stages"] = meeting_store.get_pending_finalization_stages(meeting)
+            meeting["failed_stages"] = meeting_store.get_failed_finalization_stages(meeting)
+        return meetings
 
     @router.get("/api/meetings/events")
     def meeting_events() -> StreamingResponse:
@@ -115,6 +121,11 @@ def create_meetings_router(
                     meeting = dict(meeting)
                     meeting["transcript"] = dict(transcript)
                     meeting["transcript"]["segments"] = consolidated
+        
+        # Add computed finalization fields
+        meeting["needs_finalization"] = meeting_store.needs_finalization(meeting)
+        meeting["pending_stages"] = meeting_store.get_pending_finalization_stages(meeting)
+        meeting["failed_stages"] = meeting_store.get_failed_finalization_stages(meeting)
         
         return meeting
 
