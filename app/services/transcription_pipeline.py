@@ -680,15 +680,24 @@ class TranscriptionPipeline:
                 audio_path,
             )
             
+            # #region agent log
+            _DBG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+            import json as _jfin, time as _tfin
+            def _dbg_step(step, data=None):
+                try:
+                    with open(_DBG_PATH, "a") as _ff:
+                        _ff.write(_jfin.dumps({"location":"pipeline:finalize","message":step,"data":data or {},"timestamp":int(_tfin.time()*1000),"hypothesisId":"FIN"})+"\n")
+                except: pass
+            _dbg_step("ENTER", {"meeting_id": meeting_id, "segments": len(segments) if segments else 0, "audio_path": audio_path})
+            # #endregion
+            
             # Guard against double finalization
             meeting = self._meeting_store.get_meeting(meeting_id)
             if meeting:
                 current_status = meeting.get("status")
-                finalization_status = meeting.get("finalization_status")
-                # If already completed or currently processing, skip
-                if current_status == "completed" and finalization_status and finalization_status.get("step") == "complete":
+                if current_status == "completed":
                     self._logger.warning(
-                        "finalize_meeting_with_diarization: skipping - already finalized: meeting_id=%s",
+                        "finalize_meeting_with_diarization: skipping - already completed: meeting_id=%s",
                         meeting_id,
                     )
                     _dbg_fin("finalize_skipped_already_complete", {"meeting_id": meeting_id, "status": current_status})
@@ -732,6 +741,7 @@ class TranscriptionPipeline:
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Analyzing speakers...", 0.1
                 )
+                _dbg_step("DIARIZATION_START", {"meeting_id": meeting_id})
                 try:
                     diarization_segments = self._diarization.run(audio_path)
                     self._logger.info(
@@ -767,6 +777,11 @@ class TranscriptionPipeline:
                         "Diarization failed, continuing without: meeting_id=%s error=%s",
                         meeting_id, exc
                     )
+                    self._meeting_store.publish_finalization_status(
+                        meeting_id,
+                        f"Speaker analysis failed: {type(exc).__name__}: {str(exc)[:120]}. Continuing without speaker labels.",
+                        0.2,
+                    )
                     # #region agent log
                     import traceback
                     try:
@@ -787,6 +802,7 @@ class TranscriptionPipeline:
                     # #endregion
             
             # Step 4-6: Identify speaker names using LLM
+            _dbg_step("DIARIZATION_DONE", {"meeting_id": meeting_id, "diar_segments": len(diarization_segments)})
             if diarization_segments:
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Identifying speaker names...", 0.3
@@ -798,9 +814,15 @@ class TranscriptionPipeline:
                         "Speaker name identification failed: meeting_id=%s error=%s",
                         meeting_id, exc
                     )
+                    self._meeting_store.publish_finalization_status(
+                        meeting_id,
+                        f"Speaker identification failed: {str(exc)[:100]}. Continuing with generic names.",
+                        0.4,
+                    )
             
             # Step 7-9: Generate summary with streaming events
             # Backend always generates - frontend subscribes to events if connected
+            _dbg_step("SPEAKER_ID_DONE", {"meeting_id": meeting_id})
             self._meeting_store.publish_finalization_status(
                 meeting_id, "Generating summary...", 0.6
             )
@@ -816,6 +838,7 @@ class TranscriptionPipeline:
             )
             
             result = None
+            _dbg_step("SUMMARY_TEXT_READY", {"meeting_id": meeting_id, "summary_text_len": len(summary_text.strip())})
             if summary_text.strip():
                 try:
                     # Emit summary_start event for any connected frontends
@@ -833,6 +856,7 @@ class TranscriptionPipeline:
                             _f.write(_json.dumps({"location":"transcription_pipeline.py:finalize","message":msg,"data":data or {},"timestamp":int(_time.time()*1000),"hypothesisId":"STREAM"})+"\n")
                     _dbg("summary_stream_start", {"meeting_id": meeting_id})
                     # #endregion
+                    _dbg_step("LLM_SUMMARIZE_STREAM_START", {"meeting_id": meeting_id})
                     for token in self._summarization.summarize_stream(summary_text, user_notes=user_notes):
                         accumulated_summary += token
                         token_count += 1
@@ -880,20 +904,32 @@ class TranscriptionPipeline:
                     )
                     
                     # Auto-generate title
+                    _dbg_step("SUMMARY_SAVED", {"meeting_id": meeting_id, "summary_len": len(result.get("summary",""))})
                     self._meeting_store.publish_finalization_status(
                         meeting_id, "Generating title...", 0.9
                     )
+                    _dbg_step("TITLE_GEN_START", {"meeting_id": meeting_id})
                     self._meeting_store.maybe_auto_title(
                         meeting_id,
                         result.get("summary", ""),
                         self._summarization,
                         force=True,
                     )
+                    _dbg_step("TITLE_GEN_DONE", {"meeting_id": meeting_id})
                 except Exception as exc:
                     self._logger.warning(
                         "Summarization failed: meeting_id=%s error=%s",
                         meeting_id, exc
                     )
+                    self._meeting_store.publish_finalization_status(
+                        meeting_id,
+                        f"Summary generation failed: {type(exc).__name__}: {str(exc)[:120]}",
+                        0.7,
+                    )
+                    # #region agent log
+                    import traceback as _tb_sum
+                    _dbg_step("SUMMARIZATION_ERROR", {"meeting_id": meeting_id, "error": str(exc)[:500], "traceback": _tb_sum.format_exc()[-1000:]})
+                    # #endregion
             
             # Step 10: Ensure attendees are created from speaker labels
             # This handles cases where real-time diarization added speakers but batch diarization was skipped
@@ -915,20 +951,25 @@ class TranscriptionPipeline:
             
             # Step 11: Complete
             self._meeting_store.update_status(meeting_id, "completed")
-            self._meeting_store.clear_finalization_status(meeting_id)
             self._meeting_store.publish_event("meeting_updated", meeting_id)
             
+            _dbg_step("FINALIZATION_COMPLETE", {"meeting_id": meeting_id})
             self._logger.info("finalize_meeting_with_diarization complete: meeting_id=%s", meeting_id)
             return result
             
         except Exception as exc:
+            _dbg_step("FINALIZATION_CRASH", {"meeting_id": meeting_id, "error": str(exc)[:500]})  # #region agent log  # #endregion
             self._logger.exception(
                 "finalize_meeting_with_diarization failed: meeting_id=%s error=%s",
                 meeting_id, exc
             )
-            # Make sure to clear status on error
+            self._meeting_store.publish_finalization_status(
+                meeting_id,
+                f"Finalization failed: {type(exc).__name__}: {str(exc)[:120]}",
+                0.0,
+            )
+            # Make sure to mark completed on error
             self._meeting_store.update_status(meeting_id, "completed")
-            self._meeting_store.clear_finalization_status(meeting_id)
             return None
 
     def _identify_and_update_speaker_names(

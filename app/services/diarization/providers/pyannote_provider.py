@@ -1,8 +1,33 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from app.services.diarization.providers.base import DiarizationConfig, DiarizationProvider
+
+
+def _patch_torch_load_for_pyannote():
+    """PyTorch 2.6+ defaults torch.load to weights_only=True.
+    pyannote model checkpoints contain custom classes (Specifications,
+    TorchVersion, etc.) that aren't in the safe-globals allowlist,
+    so loading them with weights_only=True raises UnpicklingError.
+    We temporarily set weights_only=False for the trusted HuggingFace
+    models used by pyannote."""
+    import torch
+    _original = torch.load
+
+    def _patched_load(*args, **kwargs):
+        if kwargs.get("weights_only") is None:
+            kwargs["weights_only"] = False
+        return _original(*args, **kwargs)
+
+    torch.load = _patched_load
+    return _original
+
+
+def _restore_torch_load(original):
+    import torch
+    torch.load = original
 
 
 class PyannoteProvider(DiarizationProvider):
@@ -25,14 +50,18 @@ class PyannoteProvider(DiarizationProvider):
                 self._config.model,
                 self._config.device,
             )
+            original_torch_load = _patch_torch_load_for_pyannote()
+            # HF_HUB_OFFLINE is set globally at boot (main.py).
+            # No per-call override needed — the settings UI handles downloads.
             try:
                 self._pipeline = Pipeline.from_pretrained(
                     self._config.model,
                     use_auth_token=self._config.hf_token,
                 )
-                # #region agent log
-                import torch as _torch, json as _json, time as _time
+                import torch as _torch
                 _dev = _torch.device(self._config.device)
+                # #region agent log
+                import json as _json, time as _time
                 try:
                     with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
                         _f.write(_json.dumps({"location":"pyannote_provider.py:33","message":"pipeline.to device","data":{"config_device":self._config.device,"torch_device":str(_dev)},"timestamp":_time.time()*1000,"runId":"diar-fix","hypothesisId":"H2"})+"\n")
@@ -53,8 +82,24 @@ class PyannoteProvider(DiarizationProvider):
                         f"HuggingFace 403: Accept the pyannote license at {model_url}"
                     ) from exc
                 raise
+            finally:
+                _restore_torch_load(original_torch_load)
 
+        # #region agent log
+        import json as _jpy, time as _tpy, os as _ospy
+        _DBG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
+        def _dbg_pyannote(msg, data=None):
+            try:
+                with open(_DBG_PATH, "a") as _fp:
+                    _fp.write(_jpy.dumps({"location":"pyannote_provider.py:diarize","message":msg,"data":data or {},"timestamp":int(_tpy.time()*1000),"hypothesisId":"H1"})+"\n")
+            except: pass
+        _t0 = _tpy.time()
+        _dbg_pyannote("PIPELINE_CALL_START", {"audio_path": _ospy.path.basename(audio_path), "audio_size_mb": round(_ospy.path.getsize(audio_path)/1024/1024,2) if _ospy.path.isfile(audio_path) else None})
+        # #endregion
         diarization = self._pipeline(audio_path)
+        # #region agent log
+        _dbg_pyannote("PIPELINE_CALL_DONE", {"elapsed_s": round(_tpy.time()-_t0,1)})
+        # #endregion
         segments: list[dict] = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
             segments.append(
