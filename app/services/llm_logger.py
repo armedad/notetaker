@@ -22,20 +22,27 @@ class TestLLMLogger:
     _instance: Optional["TestLLMLogger"] = None
     _lock = threading.Lock()
     
-    def __new__(cls, logs_dir: Optional[str] = None) -> "TestLLMLogger":
+    def __new__(cls, ctx=None) -> "TestLLMLogger":
         with cls._lock:
             if cls._instance is None:
                 instance = super().__new__(cls)
                 instance._initialized = False
                 cls._instance = instance
             return cls._instance
-    
-    def __init__(self, logs_dir: Optional[str] = None) -> None:
+
+    def __init__(self, ctx=None) -> None:
         if self._initialized:
             return
-        
-        self._logs_dir = logs_dir or os.path.join(os.getcwd(), "logs", "llm")
+
+        self._ctx = ctx
+        self._logs_dir_fallback = os.path.join(os.getcwd(), "logs", "llm")
         os.makedirs(self._logs_dir, exist_ok=True)
+
+    @property
+    def _logs_dir(self) -> str:
+        if self._ctx is not None:
+            return self._ctx.llm_logs_dir
+        return self._logs_dir_fallback
         self._test_log_all_enabled = False
         self._write_lock = threading.Lock()
         self._initialized = True

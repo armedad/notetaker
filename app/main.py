@@ -49,6 +49,7 @@ def _boot_log(location: str, message: str, data: dict, hypothesis_id: str) -> No
     )
 # #endregion
 
+from app.context import AppContext
 from app.routers.recording import create_recording_router
 from app.routers.logs import create_logs_router
 from app.routers.transcription import create_transcription_router
@@ -71,6 +72,8 @@ from app.services.crash_logging import enable_crash_logging
 from app.services.llm_logger import TestLLMLogger
 from app.services.rag_metrics import TestRAGMetrics
 from app.services.llm_instrumentation import test_install_instrumentation
+from app.services.background_finalizer import BackgroundFinalizer
+from app.services.diarization import DiarizationService, parse_diarization_config
 
 def create_app() -> FastAPI:
     # #region agent log
@@ -94,10 +97,11 @@ def create_app() -> FastAPI:
     base_dir = os.path.dirname(__file__)
     cwd = os.getcwd()
     logger.info("Boot: base_dir=%s cwd=%s", base_dir, cwd)
-    data_dir = os.path.join(cwd, "data")
-    os.makedirs(data_dir, exist_ok=True)
-    logger.info("Boot: data_dir=%s exists=%s", data_dir, os.path.exists(data_dir))
-    config_path = os.path.join(data_dir, "config.json")
+
+    default_data_dir = os.path.join(cwd, "data")
+    os.makedirs(default_data_dir, exist_ok=True)
+    # Config always lives in the app-level data dir regardless of custom data_dir
+    config_path = os.path.join(default_data_dir, "config.json")
     config: dict = {}
     try:
         if os.path.exists(config_path):
@@ -134,6 +138,30 @@ def create_app() -> FastAPI:
         # #endregion
         raise
 
+    # Resolve data directory: use custom path from config if valid, else default
+    custom_data_dir = config.get("data_dir", "")
+    if custom_data_dir and os.path.isdir(custom_data_dir) and os.access(custom_data_dir, os.W_OK):
+        data_dir = custom_data_dir
+        logger.info("Boot: using custom data_dir=%s", data_dir)
+    else:
+        data_dir = default_data_dir
+        if custom_data_dir:
+            logger.warning(
+                "Boot: custom data_dir=%s is invalid or not writable, falling back to %s",
+                custom_data_dir, data_dir,
+            )
+        else:
+            logger.info("Boot: using default data_dir=%s", data_dir)
+
+    ctx = AppContext(
+        cwd=cwd,
+        data_dir=data_dir,
+        default_data_dir=default_data_dir,
+        config_path=config_path,
+    )
+    ctx.ensure_dirs()
+    logger.info("Boot: AppContext ready data_dir=%s", ctx.data_dir)
+
     # Honour the persisted auto-download preference
     if config.get("hf_models", {}).get("auto_download", False):
         os.environ.pop("HF_HUB_OFFLINE", None)
@@ -149,69 +177,40 @@ def create_app() -> FastAPI:
     logger.info("Boot: version_path=%s version=%s", version_path, version)
     app = FastAPI(title="Notetaker", version="0.1.0")
     app.state.version = version
-    static_dir = os.path.join(base_dir, "static")
-    recordings_dir = os.path.join(cwd, "data", "recordings")
-    meetings_dir = os.path.join(cwd, "data", "meetings")
+    app.state.ctx = ctx
     logger.info(
         "Boot: static_dir=%s recordings_dir=%s meetings_dir=%s",
-        static_dir,
-        recordings_dir,
-        meetings_dir,
+        ctx.static_dir,
+        ctx.recordings_dir,
+        ctx.meetings_dir,
     )
     try:
-        audio_service = AudioCaptureService(recordings_dir=recordings_dir)
+        audio_service = AudioCaptureService(ctx)
         logger.info("Boot: audio_service ready")
-        # #region agent log
-        _boot_log(
-            "app/main.py:create_app",
-            "audio_service ready",
-            {"recordings_dir": recordings_dir},
-            "H2",
-        )
-        # #endregion
     except Exception as exc:
-        # #region agent log
         _boot_log(
             "app/main.py:create_app",
             "audio_service failed",
-            {"recordings_dir": recordings_dir, "exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+            {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
             "H2",
         )
-        # #endregion
         raise
     try:
-        meeting_store = MeetingStore(meetings_dir=meetings_dir)
+        meeting_store = MeetingStore(ctx)
         logger.info("Boot: meeting_store ready")
-        # #region agent log
-        _boot_log(
-            "app/main.py:create_app",
-            "meeting_store ready",
-            {"meetings_dir": meetings_dir},
-            "H3",
-        )
-        # #endregion
+        meeting_store.regenerate_folder_docs()
+        logger.info("Boot: folder docs regenerated")
     except Exception as exc:
-        # #region agent log
         _boot_log(
             "app/main.py:create_app",
             "meeting_store failed",
-            {"meetings_dir": meetings_dir, "exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+            {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
             "H3",
         )
-        # #endregion
         raise
     try:
-        # SummarizationService reads config dynamically to use the user's selected model
-        summarization_service = SummarizationService(config_path)
+        summarization_service = SummarizationService(ctx)
         logger.info("Boot: summarization_service ready")
-        # #region agent log
-        _boot_log(
-            "app/main.py:create_app",
-            "summarization_service ready",
-            {"config_path": config_path},
-            "H4",
-        )
-        # #endregion
         # If selected model is Ollama, launch it in the background
         try:
             provider_name, _ = summarization_service._get_selected_model()
@@ -227,58 +226,39 @@ def create_app() -> FastAPI:
                 ).start()
                 logger.info("Boot: Ollama auto-launch initiated in background")
         except Exception:
-            pass  # No model selected yet or config incomplete — skip
+            pass
     except Exception as exc:
-        # #region agent log
         _boot_log(
             "app/main.py:create_app",
             "summarization_service failed",
-            {"config_path": config_path, "exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+            {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
             "H4",
         )
-        # #endregion
         raise
     try:
         app.include_router(
-            create_recording_router(
-                audio_service, meeting_store, summarization_service, config_path
-            )
+            create_recording_router(audio_service, meeting_store, summarization_service, ctx)
         )
         logger.info("Boot: recording router mounted")
-        app.include_router(create_logs_router())
+        app.include_router(create_logs_router(ctx))
         logger.info("Boot: logs router mounted")
         app.include_router(
-            create_transcription_router(
-                config,
-                audio_service,
-                meeting_store,
-                summarization_service,
-                recordings_dir,
-            )
+            create_transcription_router(config, audio_service, meeting_store, summarization_service, ctx)
         )
         logger.info("Boot: transcription router mounted")
-        app.include_router(create_meetings_router(meeting_store, summarization_service, config_path))
+        app.include_router(create_meetings_router(meeting_store, summarization_service, ctx))
         logger.info("Boot: meetings router mounted")
         app.include_router(create_summarization_router(meeting_store, summarization_service))
         logger.info("Boot: summarization router mounted")
-        # Chat service and router
         search_service = SearchService(meeting_store)
-        chat_service = ChatService(meeting_store, summarization_service, search_service)
+        chat_service = ChatService(ctx, meeting_store, summarization_service, search_service)
         app.include_router(create_chat_router(chat_service, meeting_store))
         logger.info("Boot: chat router mounted")
-        
-        # Search router
         app.include_router(create_search_router(search_service))
         logger.info("Boot: search router mounted")
-        
-        # LLM observability instrumentation (test/debug infrastructure)
-        llm_logs_dir = os.path.join(cwd, "logs", "llm")
-        os.makedirs(llm_logs_dir, exist_ok=True)
-        test_llm_logger = TestLLMLogger(llm_logs_dir)
+
+        test_llm_logger = TestLLMLogger(ctx)
         test_rag_metrics = TestRAGMetrics()
-        # #region agent log
-        _boot_log("app/main.py:create_app", "instrumentation_start", {"llm_logs_dir": llm_logs_dir}, "H1-H2")
-        # #endregion
         try:
             test_install_instrumentation(
                 meeting_store=meeting_store,
@@ -288,53 +268,51 @@ def create_app() -> FastAPI:
                 llm_logger=test_llm_logger,
                 rag_metrics=test_rag_metrics,
             )
-            # #region agent log
-            _boot_log("app/main.py:create_app", "instrumentation_ok", {}, "H2")
-            # #endregion
         except Exception as inst_exc:
-            # #region agent log
             _boot_log("app/main.py:create_app", "instrumentation_failed", {"error": str(inst_exc)[:300]}, "H2")
-            # #endregion
             raise
-        debug_router = create_test_debug_router(test_llm_logger, test_rag_metrics)
+        debug_router = create_test_debug_router(ctx, test_llm_logger, test_rag_metrics)
         app.include_router(debug_router)
-        # #region agent log
-        _boot_log("app/main.py:create_app", "debug_router_mounted", {"router_routes": [r.path for r in debug_router.routes]}, "H1")
-        # #endregion
         logger.info("Boot: test debug router mounted (LLM observability)")
-        app.include_router(create_settings_router(config_path))
+        app.include_router(create_settings_router(ctx))
         logger.info("Boot: settings router mounted")
-        app.include_router(
-            create_uploads_router(
-                config_path, os.path.join(cwd, "data", "uploads")
-            )
-        )
+        app.include_router(create_uploads_router(ctx))
         logger.info("Boot: uploads router mounted")
-        # #region agent log
-        _boot_log(
-            "app/main.py:create_app",
-            "routers mounted",
-            {"uploads_dir": os.path.join(cwd, "data", "uploads")},
-            "H5",
-        )
-        # #endregion
     except Exception as exc:
-        # #region agent log
         _boot_log(
             "app/main.py:create_app",
             "router mount failed",
             {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
             "H5",
         )
-        # #endregion
         raise
 
-    logs_dir = os.path.join(cwd, "logs")
-    os.makedirs(logs_dir, exist_ok=True)
-    app.include_router(create_testing_router(logs_dir, static_dir))
+    app.include_router(create_testing_router(ctx))
     logger.info("Boot: testing router mounted")
 
-    # Middleware to prevent caching of HTML and JS files
+    # Start background finalizer for meetings with incomplete finalization
+    try:
+        diarization_config = config.get("diarization", {})
+        _, batch_diar_cfg = parse_diarization_config(diarization_config)
+        diarization_service = DiarizationService(batch_diar_cfg)
+        
+        background_finalizer = BackgroundFinalizer(
+            meeting_store=meeting_store,
+            summarization_service=summarization_service,
+            diarization_service=diarization_service,
+        )
+        background_finalizer.start()
+        app.state.background_finalizer = background_finalizer
+        logger.info("Boot: BackgroundFinalizer started")
+    except Exception as exc:
+        logger.warning("Boot: BackgroundFinalizer failed to start: %s", exc)
+        _boot_log(
+            "app/main.py:create_app",
+            "background_finalizer_failed",
+            {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+            "H6",
+        )
+
     class NoCacheMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
             response = await call_next(request)
@@ -344,27 +322,27 @@ def create_app() -> FastAPI:
                 response.headers["Pragma"] = "no-cache"
                 response.headers["Expires"] = "0"
             return response
-    
+
     app.add_middleware(NoCacheMiddleware)
     logger.info("Boot: no-cache middleware added")
 
     @app.get("/")
     def root() -> dict:
-        index_path = os.path.join(static_dir, "index.html")
+        index_path = os.path.join(ctx.static_dir, "index.html")
         if os.path.exists(index_path):
             return FileResponse(index_path)
         return {"message": "Notetaker API running", "version": app.state.version}
 
     @app.get("/meeting")
     def meeting_view() -> dict:
-        page_path = os.path.join(static_dir, "meeting.html")
+        page_path = os.path.join(ctx.static_dir, "meeting.html")
         if os.path.exists(page_path):
             return FileResponse(page_path)
         return {"message": "Meeting view not found", "version": app.state.version}
 
     @app.get("/settings")
     def settings_view() -> dict:
-        page_path = os.path.join(static_dir, "settings.html")
+        page_path = os.path.join(ctx.static_dir, "settings.html")
         if os.path.exists(page_path):
             return FileResponse(page_path)
         return {"message": "Settings view not found", "version": app.state.version}
@@ -373,11 +351,11 @@ def create_app() -> FastAPI:
     def health() -> dict:
         return {"status": "ok", "version": app.state.version}
 
-    if os.path.exists(static_dir):
-        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    if os.path.exists(ctx.static_dir):
+        app.mount("/static", StaticFiles(directory=ctx.static_dir), name="static")
         logger.info("Boot: static mounted at /static")
     else:
-        logger.warning("Boot: static directory missing=%s", static_dir)
+        logger.warning("Boot: static directory missing=%s", ctx.static_dir)
 
     logger.info("Boot: create_app complete")
     return app

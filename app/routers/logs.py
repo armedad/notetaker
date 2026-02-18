@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter
 
 
-def create_logs_router() -> APIRouter:
+def create_logs_router(ctx) -> APIRouter:
     router = APIRouter()
     logger = logging.getLogger("notetaker.client")
     logger.setLevel(logging.DEBUG)
@@ -19,7 +19,7 @@ def create_logs_router() -> APIRouter:
 
     @router.get("/api/logs/errors")
     def error_log() -> dict:
-        logs_dir = os.path.join(os.getcwd(), "logs")
+        logs_dir = ctx.logs_dir
         if not os.path.isdir(logs_dir):
             return {"lines": []}
 

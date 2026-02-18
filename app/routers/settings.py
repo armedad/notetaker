@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 import threading
 
 import requests
@@ -98,8 +99,9 @@ class DebugSettingsRequest(BaseModel):
     flags: dict = {}
 
 
-def create_settings_router(config_path: str) -> APIRouter:
+def create_settings_router(ctx) -> APIRouter:
     router = APIRouter()
+    config_path = ctx.config_path
 
     @router.get("/api/settings/summarization")
     def get_summarization_settings() -> dict:
@@ -660,6 +662,155 @@ def create_settings_router(config_path: str) -> APIRouter:
         token = payload.hf_token or _hf_token_from_config()
         from app.services.hf_model_manager import download_model
         return download_model(payload.model_id, token or None)
+
+    # ── Data folder configuration ─────────────────────────────────────
+
+    class DataDirRequest(BaseModel):
+        data_dir: str
+
+    @router.get("/api/settings/data-dir")
+    def get_data_dir() -> dict:
+        """Return current and default data directory paths."""
+        return {
+            "data_dir": ctx.data_dir,
+            "default_data_dir": ctx.default_data_dir,
+        }
+
+    @router.post("/api/settings/data-dir")
+    def set_data_dir(payload: DataDirRequest) -> dict:
+        """Persist a new data_dir to config. Requires app restart to take effect."""
+        new_path = payload.data_dir.strip()
+        if not new_path:
+            return {"status": "error", "message": "Path cannot be empty"}
+        if not os.path.isabs(new_path):
+            return {"status": "error", "message": "Path must be absolute"}
+        data = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        data["data_dir"] = new_path
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        _logger.info("data_dir setting updated to %s", new_path)
+        return {"status": "ok", "data_dir": new_path}
+
+    class DataDirApplyRequest(BaseModel):
+        new_path: str
+        action: str  # "move", "copy", "fresh", or "mkdir"
+
+    @router.post("/api/settings/data-dir/apply")
+    def apply_data_dir(payload: DataDirApplyRequest) -> dict:
+        """Change the data directory, optionally migrating existing data."""
+        new_path = payload.new_path.strip()
+        action = payload.action.strip().lower()
+
+        if not new_path:
+            return {"status": "error", "message": "Path cannot be empty"}
+        if not os.path.isabs(new_path):
+            return {"status": "error", "message": "Path must be absolute"}
+
+        if action == "mkdir":
+            try:
+                os.makedirs(new_path, exist_ok=True)
+                return {"status": "ok"}
+            except OSError as exc:
+                return {"status": "error", "message": str(exc)}
+
+        if action not in ("move", "copy", "fresh"):
+            return {"status": "error", "message": f"Unknown action: {action}"}
+
+        current_data_dir = ctx.data_dir
+        subdirs = ("meetings", "recordings", "uploads")
+
+        try:
+            os.makedirs(new_path, exist_ok=True)
+            # Verify writable
+            test_file = os.path.join(new_path, ".write_test")
+            with open(test_file, "w") as f:
+                f.write("ok")
+            os.remove(test_file)
+        except OSError as exc:
+            return {"status": "error", "message": f"Cannot write to {new_path}: {exc}"}
+
+        try:
+            if action == "fresh":
+                for sub in subdirs:
+                    os.makedirs(os.path.join(new_path, sub), exist_ok=True)
+
+            elif action == "copy":
+                for sub in subdirs:
+                    src = os.path.join(current_data_dir, sub)
+                    dst = os.path.join(new_path, sub)
+                    if os.path.isdir(src):
+                        if os.path.exists(dst):
+                            shutil.rmtree(dst)
+                        shutil.copytree(src, dst)
+                    else:
+                        os.makedirs(dst, exist_ok=True)
+
+            elif action == "move":
+                for sub in subdirs:
+                    src = os.path.join(current_data_dir, sub)
+                    dst = os.path.join(new_path, sub)
+                    if os.path.isdir(src):
+                        if os.path.exists(dst):
+                            shutil.rmtree(dst)
+                        shutil.move(src, dst)
+                    else:
+                        os.makedirs(dst, exist_ok=True)
+        except OSError as exc:
+            return {"status": "error", "message": f"File operation failed: {exc}"}
+
+        # Persist the new path to config
+        data = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        data["data_dir"] = new_path
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        # Hot-swap: update context so all services immediately use the new path
+        ctx.data_dir = new_path
+        ctx.ensure_dirs()
+        _logger.info("data_dir hot-swapped to %s (action=%s)", new_path, action)
+        return {"status": "ok", "data_dir": new_path, "action": action}
+
+    @router.get("/api/settings/browse-folders")
+    def browse_folders(path: str = "") -> dict:
+        """List directories at the given path for folder browser UI.
+        Returns parent path and list of child directories."""
+        import pathlib
+
+        if not path:
+            path = str(pathlib.Path.home())
+
+        target = pathlib.Path(path).resolve()
+        if not target.is_dir():
+            return {"status": "error", "message": f"Not a directory: {path}"}
+
+        parent = str(target.parent) if target.parent != target else None
+        dirs = []
+        try:
+            for entry in sorted(target.iterdir()):
+                if not entry.is_dir():
+                    continue
+                name = entry.name
+                if name.startswith("."):
+                    continue
+                try:
+                    entry.stat()
+                except PermissionError:
+                    continue
+                dirs.append({"name": name, "path": str(entry)})
+        except PermissionError:
+            return {"status": "error", "message": f"Permission denied: {path}"}
+
+        return {
+            "path": str(target),
+            "parent": parent,
+            "dirs": dirs,
+        }
 
     @router.get("/api/settings/debug")
     def get_debug_settings() -> dict:

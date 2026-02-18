@@ -20,6 +20,7 @@ class TestLogAllRequest(BaseModel):
 
 
 def create_test_debug_router(
+    ctx,
     llm_logger: TestLLMLogger,
     rag_metrics: TestRAGMetrics,
 ) -> APIRouter:
@@ -48,7 +49,7 @@ def create_test_debug_router(
         # #region agent log
         import time as _time
         import json as _json
-        _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
+        _log_path = ctx.debug_log_path
         result = rag_metrics.test_to_dict()
         with open(_log_path, "a") as _f:
             _f.write(_json.dumps({"location":"debug.py:get_rag_metrics","message":"rag_metrics_called","data":{"total_queries": result.get("aggregate", {}).get("total_queries", 0), "recent_count": len(result.get("recent", []))},"timestamp":int(_time.time()*1000),"runId":"debug-api","hypothesisId":"H3-H4"})+"\n")
@@ -136,7 +137,7 @@ def create_test_debug_router(
     @router.get("/latest-submit-log")
     def get_latest_submit_log() -> dict:
         """Return the most recent submit_*.log file path and content."""
-        logs_dir = os.path.join(os.getcwd(), "logs")
+        logs_dir = ctx.logs_dir
         if not os.path.isdir(logs_dir):
             raise HTTPException(status_code=404, detail="No submit logs found")
         

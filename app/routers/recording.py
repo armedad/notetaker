@@ -31,19 +31,19 @@ def create_recording_router(
     audio_service: AudioCaptureService,
     meeting_store: MeetingStore,
     summarization_service,
-    config_path: str,
+    ctx,
 ) -> APIRouter:
     router = APIRouter()
     logger = logging.getLogger("notetaker.api.recording")
 
     def load_config() -> dict:
-        if not os.path.exists(config_path):
+        if not os.path.exists(ctx.config_path):
             return {}
-        with open(config_path, "r", encoding="utf-8") as config_file:
+        with open(ctx.config_path, "r", encoding="utf-8") as config_file:
             return json.load(config_file)
 
     def save_config(data: dict) -> None:
-        with open(config_path, "w", encoding="utf-8") as config_file:
+        with open(ctx.config_path, "w", encoding="utf-8") as config_file:
             json.dump(data, config_file, indent=2)
 
     @router.get("/api/audio/devices")
