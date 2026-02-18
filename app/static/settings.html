@@ -195,6 +195,32 @@
       </section>
 
       <section class="panel">
+        <h2>Model Downloads</h2>
+        <p class="panel-description">
+          Manage locally cached HuggingFace models. When auto-download is off,
+          models are only loaded from the local cache. Use the buttons below
+          to check for updates or download models on demand.
+        </p>
+        <div class="row">
+          <label for="hf-auto-download">
+            <input id="hf-auto-download" type="checkbox" />
+            Allow HuggingFace auto-download
+          </label>
+          <div class="hint">
+            When on, models may be downloaded automatically at runtime if not cached.
+            When off (default), only locally cached models are used.
+          </div>
+        </div>
+        <div class="actions" style="margin-bottom:12px">
+          <button id="hf-check-all" class="secondary">Check All for Updates</button>
+        </div>
+        <div id="hf-models-list" class="hf-models-list">
+          <div class="hint">Loading…</div>
+        </div>
+        <div class="output" id="hf-models-output"></div>
+      </section>
+
+      <section class="panel">
         <h2>AI Models</h2>
         <div class="row-setting">
           <label for="model-choice">Choose model</label>

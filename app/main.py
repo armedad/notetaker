@@ -85,6 +85,12 @@ def create_app() -> FastAPI:
     logger = logging.getLogger("notetaker.boot")
     logger.info("Boot: starting create_app")
     enable_crash_logging()
+
+    # Default to offline mode for HuggingFace — no auto-downloads.
+    # The global setting in config.json can override this at boot.
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    logger.info("Boot: HF_HUB_OFFLINE=%s (initial)", os.environ.get("HF_HUB_OFFLINE"))
+
     base_dir = os.path.dirname(__file__)
     cwd = os.getcwd()
     logger.info("Boot: base_dir=%s cwd=%s", base_dir, cwd)
@@ -127,6 +133,14 @@ def create_app() -> FastAPI:
         )
         # #endregion
         raise
+
+    # Honour the persisted auto-download preference
+    if config.get("hf_models", {}).get("auto_download", False):
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        logger.info("Boot: HF auto-download ON — HF_HUB_OFFLINE cleared")
+    else:
+        logger.info("Boot: HF auto-download OFF — HF_HUB_OFFLINE=1")
+
     version_path = os.path.join(os.path.dirname(base_dir), "VERSION.txt")
     version = "v0.0.0.0"
     if os.path.exists(version_path):

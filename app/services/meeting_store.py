@@ -239,50 +239,6 @@ class MeetingStore:
                 self._events = self._events[-100:]
             # Wake up any waiting SSE connections immediately
             self._events_condition.notify_all()
-        
-        # Also update the meeting's finalization_status field
-        self.update_finalization_status(meeting_id, status_text, progress)
-
-    def update_finalization_status(
-        self,
-        meeting_id: str,
-        status_text: str,
-        progress: Optional[float] = None,
-    ) -> Optional[dict]:
-        """Update the finalization_status field in the meeting file.
-        
-        This persists the status so clients can poll for it.
-        """
-        with self._lock:
-            path = self._find_meeting_path(meeting_id)
-            if not path:
-                return None
-            meeting = self._read_meeting_file(path)
-            if not meeting:
-                return None
-            
-            meeting["finalization_status"] = {
-                "status_text": status_text,
-                "progress": progress,
-                "updated_at": datetime.utcnow().isoformat(),
-            }
-            self._write_meeting_file(path, meeting)
-            return meeting
-
-    def clear_finalization_status(self, meeting_id: str) -> Optional[dict]:
-        """Clear the finalization_status field when finalization completes."""
-        with self._lock:
-            path = self._find_meeting_path(meeting_id)
-            if not path:
-                return None
-            meeting = self._read_meeting_file(path)
-            if not meeting:
-                return None
-            
-            if "finalization_status" in meeting:
-                del meeting["finalization_status"]
-            self._write_meeting_file(path, meeting)
-            return meeting
 
     def get_events_since(self, cursor: int) -> tuple[list[dict], int]:
         with self._events_condition:

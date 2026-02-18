@@ -18,6 +18,7 @@ const state = {
   noteTimestamp: null,     // When current note typing started (seconds from recording start)
   noteDraftSaveTimer: null, // Debounce timer for draft auto-save
   transcriptStartTime: null, // Client-side timestamp when we first saw this as an active meeting
+  recordingStopped: false,  // True after user clicks Stop (notes become post-meeting immediately)
   // Panel search state
   panelSearch: {},         // Per-panel search state: { panelId: { matches: [], index: -1 } }
 };
@@ -626,15 +627,8 @@ function handleMeetingEvent(event) {
       break;
     
     case "finalization_status":
-      // Finalization progress update — persist on state so controls badge can read it
-      if (state.meeting) {
-        state.meeting.finalization_status = {
-          status_text: event.status_text,
-          progress: event.progress,
-        };
-      }
+      // Finalization progress — show in the progress bar UI
       showFinalizationStatus(event.status_text, event.progress);
-      // Also update the transcription controls badge to show current step
       updateTranscriptionControls();
       break;
     
@@ -722,13 +716,18 @@ function hideFinalizationStatus() {
   if (container) container.style.display = "none";
 }
 
-function updateFinalizationStatusFromMeeting(meeting) {
-  const finStatus = meeting?.finalization_status;
-  if (finStatus && finStatus.status_text) {
-    showFinalizationStatus(finStatus.status_text, finStatus.progress);
-  } else {
-    hideFinalizationStatus();
-  }
+async function updateFinalizationStatusFromMeeting(meeting) {
+  // Check the backend for whether finalization is actually running.
+  // The SSE finalization_status events update the progress bar in real-time;
+  // this function just handles the initial page-load case.
+  try {
+    const resp = await fetchJson(`/api/transcribe/status/${meeting.id}`);
+    if (resp.state === "finalizing") {
+      showFinalizationStatus("Finalizing...");
+      return;
+    }
+  } catch (_) {}
+  hideFinalizationStatus();
 }
 
 function setMeetingTitle(title) {
@@ -1576,10 +1575,10 @@ function getCurrentRecordingTime() {
   // #endregion
   if (!state.meeting) return null;
   
-  // If meeting is completed, notes are post-meeting
-  if (state.meeting.status === "completed") {
+  // If meeting is completed OR recording was stopped, notes are post-meeting
+  if (state.meeting.status === "completed" || state.recordingStopped) {
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:getCurrentRecordingTime:completed',message:'Meeting completed - returning null',data:{status:state.meeting.status},timestamp:Date.now(),runId:'ts-fix',hypothesisId:'H_COMPLETED'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:getCurrentRecordingTime:completed',message:'Meeting completed or stopped - returning null',data:{status:state.meeting.status,recordingStopped:state.recordingStopped},timestamp:Date.now(),runId:'ts-fix',hypothesisId:'H_COMPLETED'})}).catch(()=>{});
     // #endregion
     return null;
   }
@@ -1621,14 +1620,19 @@ function formatNoteTimestamp(seconds) {
 function updateNotesTimestampDisplay() {
   const badge = document.getElementById("notes-timestamp-badge");
   const text = document.getElementById("notes-timestamp-text");
+  const input = document.getElementById("notes-input");
   if (!badge || !text) return;
   
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:updateNotesTimestampDisplay',message:'Updating timestamp display',data:{noteTimestamp:state.noteTimestamp,isNull:state.noteTimestamp===null},timestamp:Date.now(),runId:'ts-debug',hypothesisId:'H_DISPLAY'})}).catch(()=>{});
-  // #endregion
+  const hasContent = input && input.value.trim().length > 0;
+  const isPostMeeting = state.meeting?.status === "completed" || state.recordingStopped;
   
   if (state.noteTimestamp !== null) {
+    // During meeting with timestamp
     text.textContent = `Note at ${formatNoteTimestamp(state.noteTimestamp)}`;
+    badge.style.display = "block";
+  } else if (isPostMeeting && hasContent) {
+    // After meeting - show "After meeting" label
+    text.textContent = "After meeting";
     badge.style.display = "block";
   } else {
     badge.style.display = "none";
@@ -1647,8 +1651,10 @@ function updateNotesSubmitButton() {
   const hasContent = !!input.value.trim();
   submitBtn.disabled = !hasContent;
   
+  // Show clear button if there's content OR if there's a timestamp to clear
   if (clearBtn) {
-    clearBtn.style.display = hasContent ? "flex" : "none";
+    const hasTimestamp = state.noteTimestamp !== null;
+    clearBtn.style.display = (hasContent || hasTimestamp) ? "flex" : "none";
   }
 }
 
@@ -1659,20 +1665,14 @@ function updateNotesSubmitButton() {
 function handleNotesInput(e) {
   const input = e.target;
   
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleNotesInput:entry',message:'handleNotesInput called',data:{inputLength:input.value.length,currentNoteTimestamp:state.noteTimestamp,willCaptureTimestamp:state.noteTimestamp===null&&input.value.length>0},timestamp:Date.now(),runId:'ts-debug',hypothesisId:'H_INPUT'})}).catch(()=>{});
-  // #endregion
-  
   // Capture timestamp on first input if we don't have one
   if (state.noteTimestamp === null && input.value.length > 0) {
     const recordingTime = getCurrentRecordingTime();
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleNotesInput:captureTimestamp',message:'Capturing timestamp',data:{recordingTimeReturned:recordingTime,isNull:recordingTime===null},timestamp:Date.now(),runId:'ts-debug',hypothesisId:'H_INPUT'})}).catch(()=>{});
-    // #endregion
     state.noteTimestamp = recordingTime;
-    updateNotesTimestampDisplay();
   }
   
+  // Always update display (handles both timestamp and "After meeting" states)
+  updateNotesTimestampDisplay();
   updateNotesSubmitButton();
   scheduleNoteDraftSave();
 }
@@ -1723,7 +1723,7 @@ async function submitNote() {
   if (!text) return;
   
   const timestamp = state.noteTimestamp;
-  const isPostMeeting = state.meeting?.status === "completed";
+  const isPostMeeting = state.meeting?.status === "completed" || state.recordingStopped;
   
   try {
     const note = await fetchJson(`/api/meetings/${state.meetingId}/notes`, {
@@ -1731,7 +1731,7 @@ async function submitNote() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         text: text,
-        timestamp: timestamp,
+        timestamp: isPostMeeting ? null : timestamp,
         is_post_meeting: isPostMeeting,
       }),
     });
@@ -2142,52 +2142,55 @@ async function updateTranscriptionControls() {
     return;
   }
   
+  // Query the backend for the authoritative real-time state of this meeting.
+  // Returns: "transcribing", "finalizing", or "idle".
+  let liveState = "idle";
+  try {
+    const statusResp = await fetchJson(`/api/transcribe/status/${state.meetingId}`);
+    liveState = statusResp.state || "idle";
+  } catch (_) {}
+
   const active = await getActiveTranscription();
-  const isThisMeetingActive = active.active && active.meeting_id === state.meetingId;
   const isAnyActive = active.active;
   const meetingStatus = meeting.status;
   
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:updateTranscriptionControls:state',message:'transcription controls state',data:{meetingId:state.meetingId,meetingStatus,isThisMeetingActive,isAnyActive,activeResponse:active,audioPath:meeting.audio_path},timestamp:Date.now(),runId:'meeting-controls-fix',hypothesisId:'H1-H2-H3'})}).catch(()=>{});
-  // #endregion
-  
   logToServer("state", {
     meetingStatus,
+    liveState,
     audioPath: meeting.audio_path,
-    isThisMeetingActive,
     isAnyActive,
     active
   });
   
-  // Show stop button only if this meeting is currently transcribing
-  if (isThisMeetingActive) {
-    logToServer("showing stop (this meeting active)");
+  // Show controls based on the real backend state
+  if (liveState === "transcribing") {
+    logToServer("showing stop (transcribing)");
     stopBtn.style.display = "inline-block";
     resumeBtn.style.display = "none";
     statusBadge.textContent = "Transcribing";
     statusBadge.className = "status-badge in-progress";
+  } else if (liveState === "finalizing") {
+    // Finalization is actively running in the backend thread.
+    // Detailed step text arrives via SSE finalization_status events.
+    logToServer("finalizing in background");
+    stopBtn.style.display = "none";
+    resumeBtn.style.display = "none";
+    statusBadge.textContent = "Finalizing...";
+    statusBadge.className = "status-badge in-progress";
   } else if (meetingStatus === "in_progress") {
-    // Meeting is in_progress but not the active transcription job.
-    // Check if finalization is running (has finalization_status or already
-    // has transcript segments) vs truly paused.
-    const finStatus = meeting.finalization_status;
-    const hasSegments = ((meeting.transcript?.segments) || []).length > 0;
-    const isFinalizing = finStatus && finStatus.status_text;
-
-    if (isFinalizing || hasSegments) {
-      // Finalization is running in the background -- not paused
-      logToServer("finalizing in background");
-      stopBtn.style.display = "none";
-      resumeBtn.style.display = "none";
-      statusBadge.textContent = isFinalizing ? `Finalizing: ${finStatus.status_text}` : "Finalizing...";
-      statusBadge.className = "status-badge in-progress";
-    } else {
-      logToServer("in_progress but not active, showing resume");
-      stopBtn.style.display = "none";
-      resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
-      statusBadge.textContent = isAnyActive ? "Paused (another active)" : "Paused";
-      statusBadge.className = isAnyActive ? "status-badge blocked" : "status-badge in-progress";
-    }
+    // Backend says idle but meeting file still says in_progress —
+    // stale state from a crashed/restarted server.  Show as completed.
+    logToServer("stale in_progress, treating as completed");
+    stopBtn.style.display = "none";
+    resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
+    statusBadge.textContent = "Completed";
+    statusBadge.className = "status-badge completed";
+    // Fix the stale file in the background
+    fetch(`/api/meetings/${state.meetingId}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "completed" }),
+    }).catch(() => {});
   } else if (meetingStatus === "completed" && meeting.audio_path) {
     // Meeting is completed but has audio - can resume
     logToServer("completed with audio, showing resume");
@@ -2207,6 +2210,10 @@ async function updateTranscriptionControls() {
 
 async function stopTranscription() {
   if (!state.meetingId) return;  
+  
+  // Immediately mark recording as stopped so new notes are "after meeting"
+  state.recordingStopped = true;
+  
   // Disable the stop button immediately to prevent multiple clicks
   const stopBtn = document.getElementById("stop-transcription");
   if (stopBtn) {
@@ -2266,6 +2273,12 @@ async function stopTranscription() {
 
 async function resumeTranscription() {
   if (!state.meetingId) return;
+  
+  // Clear the stopped flag so notes get timestamps again
+  state.recordingStopped = false;
+  
+  // Reset transcriptStartTime to now for fresh timestamp calculation
+  state.transcriptStartTime = Date.now();
   
   setGlobalBusy("Resuming transcription...");
   try {
