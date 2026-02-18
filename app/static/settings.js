@@ -807,7 +807,31 @@ async function refreshVersion() {
   }
 }
 
+// ── Settings tab navigation ───────────────────────────────────────────
+function initSettingsTabs() {
+  const STORAGE_KEY = "notetaker-settings-tab";
+  const tabs = document.querySelectorAll(".settings-tab");
+  const panes = document.querySelectorAll(".settings-tab-content");
+  if (!tabs.length) return;
+
+  function activate(tabName) {
+    tabs.forEach((t) => t.classList.toggle("active", t.dataset.tab === tabName));
+    panes.forEach((p) => p.classList.toggle("active", p.dataset.tab === tabName));
+    try { localStorage.setItem(STORAGE_KEY, tabName); } catch (_) { /* ok */ }
+  }
+
+  tabs.forEach((t) => t.addEventListener("click", () => activate(t.dataset.tab)));
+
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved && document.querySelector(`.settings-tab[data-tab="${saved}"]`)) {
+    activate(saved);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  // Tab navigation (must run before async loads so the right pane is visible)
+  initSettingsTabs();
+
   // Provider enabled toggles
   const providers = ["openai", "anthropic", "gemini", "grok", "ollama", "lmstudio"];
   for (const provider of providers) {
