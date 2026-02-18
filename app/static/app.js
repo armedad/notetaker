@@ -1154,15 +1154,38 @@ function renderMeetings() {
       item.classList.add("selected");
     }
     item.dataset.meetingId = meeting.id || "";
+    const titleRow = document.createElement("div");
+    titleRow.className = "meeting-title-row";
+    
     const title = document.createElement("div");
     title.className = "meeting-title";
     title.textContent = meeting.title || "Untitled meeting";
+    titleRow.appendChild(title);
+    
+    // Add hourglass icon for meetings needing finalization
+    if (meeting.needs_finalization && meeting.pending_stages && meeting.pending_stages.length > 0) {
+      const finalizationIcon = document.createElement("span");
+      finalizationIcon.className = "finalization-pending-icon";
+      finalizationIcon.textContent = "⏳";
+      finalizationIcon.title = `Pending: ${meeting.pending_stages.join(", ")}`;
+      titleRow.appendChild(finalizationIcon);
+    }
+    
+    // Add warning icon for meetings with failed finalization stages
+    if (meeting.failed_stages && meeting.failed_stages.length > 0) {
+      const failedIcon = document.createElement("span");
+      failedIcon.className = "finalization-failed-icon";
+      failedIcon.textContent = "⚠️";
+      failedIcon.title = `Failed: ${meeting.failed_stages.join(", ")}`;
+      titleRow.appendChild(failedIcon);
+    }
+    
     const meta = document.createElement("div");
     meta.className = "meeting-meta";
     const timestamp = meeting.created_at || "";
     const inProgress = meeting.status === "in_progress";
     meta.textContent = inProgress ? `${timestamp} · In progress` : timestamp;
-    item.appendChild(title);
+    item.appendChild(titleRow);
     item.appendChild(meta);
     
     // Click handler: left side toggles selection, right side navigates

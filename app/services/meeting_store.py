@@ -35,20 +35,217 @@ def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothe
 # #endregion
 
 
+_DATA_FOLDER_README = """\
+# Notetaker Data Folder
+
+This directory contains all meeting data managed by [Notetaker](https://github.com/your-org/notetaker).
+
+## Folder Structure
+
+```
+.
+├── README.md          ← This file
+├── manifest.json      ← Machine-readable index of all meetings
+├── meetings/          ← One JSON file per meeting
+│   └── 20260213T140000-0800__<uuid>.json
+├── recordings/        ← Audio recordings (WAV)
+│   └── <uuid>.wav
+└── uploads/           ← Uploaded audio files + converted WAVs
+    └── <uuid>.wav
+```
+
+## Meeting JSON Schema
+
+Each file in `meetings/` is a JSON object with these top-level fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string (UUID) | Unique meeting identifier |
+| `title` | string | Meeting title (auto-generated or user-set) |
+| `created_at` | string (ISO 8601) | When the meeting was created |
+| `status` | string | `"in_progress"` or `"completed"` |
+| `segments` | array | Transcript segments (see below) |
+| `attendees` | array | List of `{id, name, speaker_label}` |
+| `summary_state` | object | `{text, generated_at}` |
+| `audio_path` | string | Path to the audio file |
+| `manual_notes` | string | User-written notes |
+
+### Segment Object
+
+```json
+{
+  "id": "<uuid>",
+  "text": "transcribed text",
+  "start": 0.0,
+  "end": 5.2,
+  "speaker": "Person 1",
+  "confidence": 0.95
+}
+```
+
+## manifest.json
+
+`manifest.json` is auto-regenerated and provides a quick index:
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-02-13T12:00:00",
+  "meeting_count": 42,
+  "meetings": [
+    {
+      "id": "<uuid>",
+      "title": "Sprint Planning",
+      "created_at": "2026-02-13T12:00:00",
+      "filename": "20260213T120000-0800__<uuid>.json",
+      "status": "completed",
+      "segment_count": 128,
+      "has_summary": true,
+      "attendee_count": 3
+    }
+  ]
+}
+```
+
+## Querying Meetings
+
+To find meetings programmatically:
+
+1. Read `manifest.json` for a quick overview
+2. Filter by date, title, or attendee count
+3. Read individual meeting JSON files from `meetings/` for full content
+"""
+
+
 class MeetingStore:
-    def __init__(self, meetings_dir: str) -> None:
-        self._meetings_dir = meetings_dir
+    def __init__(self, ctx) -> None:
+        self._ctx = ctx
         self._lock = threading.RLock()
         self._events_lock = threading.RLock()
         self._events: list[dict] = []
-        self._events_condition = threading.Condition(self._events_lock)  # For push-based SSE
+        self._events_condition = threading.Condition(self._events_lock)
         self._logger = logging.getLogger("notetaker.meetings")
         self._trace = logging.getLogger("notetaker.trace")
-        os.makedirs(self._meetings_dir, exist_ok=True)
+        os.makedirs(self._ctx.meetings_dir, exist_ok=True)
+
+    @property
+    def _meetings_dir(self) -> str:
+        """Always returns the current meetings directory from context."""
+        return self._ctx.meetings_dir
+
+    @property
+    def data_dir(self) -> str:
+        """The data folder root."""
+        return self._ctx.data_dir
 
     def _trace_log(self, stage: str, **fields) -> None:
         payload = " ".join(f"{k}={fields[k]!r}" for k in sorted(fields.keys()))
         self._trace.info("TRACE stage=%s ts=%s %s", stage, datetime.utcnow().isoformat(), payload)
+
+    # ── Data folder documentation ──────────────────────────────────────
+
+    def regenerate_folder_docs(self) -> None:
+        """Write README.md and manifest.json to the data folder root."""
+        try:
+            self._write_manifest()
+            self._write_readme()
+        except Exception as exc:
+            self._logger.warning("Failed to regenerate folder docs: %s", exc)
+
+    def _build_manifest_entries(self) -> list[dict]:
+        entries = []
+        for path in self._list_meeting_paths():
+            m = self._read_meeting_file(path)
+            if not m:
+                continue
+            segments = m.get("segments") or []
+            attendees = m.get("attendees") or []
+            summary = m.get("summary_state", {})
+            entries.append({
+                "id": m.get("id", ""),
+                "title": m.get("title", ""),
+                "created_at": m.get("created_at", ""),
+                "filename": os.path.basename(path),
+                "status": m.get("status", ""),
+                "segment_count": len(segments),
+                "has_summary": bool(summary.get("text")),
+                "attendee_count": len(attendees),
+            })
+        return entries
+
+    def _write_manifest(self) -> None:
+        manifest = {
+            "version": 1,
+            "generated_at": datetime.utcnow().isoformat(),
+            "meetings_dir": "meetings/",
+            "recordings_dir": "recordings/",
+            "uploads_dir": "uploads/",
+            "meeting_count": 0,
+            "meetings": [],
+        }
+        entries = self._build_manifest_entries()
+        manifest["meeting_count"] = len(entries)
+        manifest["meetings"] = entries
+        manifest_path = os.path.join(self.data_dir, "manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    def _write_readme(self) -> None:
+        readme_path = os.path.join(self.data_dir, "README.md")
+        content = _DATA_FOLDER_README
+        with open(readme_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def update_manifest_entry(self, meeting_id: str) -> None:
+        """Update a single meeting's entry in manifest.json without full regeneration."""
+        manifest_path = os.path.join(self.data_dir, "manifest.json")
+        try:
+            if os.path.exists(manifest_path):
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+            else:
+                self.regenerate_folder_docs()
+                return
+
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                manifest["meetings"] = [
+                    e for e in manifest.get("meetings", []) if e.get("id") != meeting_id
+                ]
+            else:
+                m = self._read_meeting_file(path)
+                if not m:
+                    return
+                segments = m.get("segments") or []
+                attendees = m.get("attendees") or []
+                summary = m.get("summary_state", {})
+                new_entry = {
+                    "id": m.get("id", ""),
+                    "title": m.get("title", ""),
+                    "created_at": m.get("created_at", ""),
+                    "filename": os.path.basename(path),
+                    "status": m.get("status", ""),
+                    "segment_count": len(segments),
+                    "has_summary": bool(summary.get("text")),
+                    "attendee_count": len(attendees),
+                }
+                existing = manifest.get("meetings", [])
+                replaced = False
+                for i, e in enumerate(existing):
+                    if e.get("id") == meeting_id:
+                        existing[i] = new_entry
+                        replaced = True
+                        break
+                if not replaced:
+                    existing.append(new_entry)
+                manifest["meetings"] = existing
+
+            manifest["meeting_count"] = len(manifest["meetings"])
+            manifest["generated_at"] = datetime.utcnow().isoformat()
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            self._logger.warning("Failed to update manifest entry for %s: %s", meeting_id, exc)
 
     def _list_meeting_paths(self) -> list[str]:
         try:
@@ -169,6 +366,7 @@ class MeetingStore:
                     meeting["user_notes_draft"] = None
                     updated = True
                 updated = self._ensure_title_fields(meeting) or updated
+                updated = self._ensure_finalization_state(meeting) or updated
                 if "schema_version" not in meeting:
                     meeting["schema_version"] = 1
                     updated = True
@@ -309,6 +507,7 @@ class MeetingStore:
                 meeting["user_notes_draft"] = None
                 updated = True
             updated = self._ensure_title_fields(meeting) or updated
+            updated = self._ensure_finalization_state(meeting) or updated
             if "schema_version" not in meeting:
                 meeting["schema_version"] = 1
                 updated = True
@@ -444,6 +643,7 @@ class MeetingStore:
                 "meeting_completed" if status == "completed" else "meeting_started",
                 meeting_id,
             )
+            self.regenerate_folder_docs()
             return meeting
 
     def create_file_meeting(
@@ -492,6 +692,7 @@ class MeetingStore:
             self._write_meeting_file(path, meeting)
             self._logger.info("File meeting created: id=%s audio=%s session_id=%s", meeting_id, audio_path, meeting["session_id"])
             self.publish_event("meeting_started", meeting_id)
+            self.regenerate_folder_docs()
             return meeting
 
     def add_transcript(
@@ -588,6 +789,7 @@ class MeetingStore:
             meeting["action_items"] = normalized_items
             self._write_meeting_file(path, meeting)
             self._logger.info("Summary saved: id=%s", meeting_id)
+            self.update_manifest_entry(meeting_id)
             return meeting
 
     def maybe_auto_title(
@@ -735,6 +937,7 @@ class MeetingStore:
                 meeting["title_generated_at"] = None
             self._write_meeting_file(path, meeting)
             self.publish_event("title_updated", meeting_id, {"title": title, "source": source})
+            self.update_manifest_entry(meeting_id)
             return meeting
 
     def update_attendees(self, meeting_id: str, attendees: list[dict]) -> Optional[dict]:
@@ -1086,6 +1289,7 @@ class MeetingStore:
                     hypothesis_id="H1",
                 )
                 # #endregion
+                self.regenerate_folder_docs()
                 return True
             except OSError as exc:
                 self._logger.warning("Failed to delete meeting file: %s error=%s", path, exc)
@@ -1624,6 +1828,229 @@ class MeetingStore:
             "last_processed_segment_index": 0,
             "updated_at": datetime.utcnow().isoformat(),
         }
+
+    # Finalization stage constants
+    FINALIZATION_PENDING = "pending"
+    FINALIZATION_COMPLETED = "completed"
+    FINALIZATION_FAILED = "failed"
+    
+    # Stage key to human-readable label mapping
+    FINALIZATION_STAGE_LABELS = {
+        "diarization": "Diarization",
+        "speaker_names": "Speaker Names",
+        "summary": "Summary",
+        "title": "Title",
+    }
+
+    def _default_finalization_state(self) -> dict:
+        """Default finalization tracking (all stages pending)."""
+        return {
+            "diarization": self.FINALIZATION_PENDING,
+            "speaker_names": self.FINALIZATION_PENDING,
+            "summary": self.FINALIZATION_PENDING,
+            "title": self.FINALIZATION_PENDING,
+        }
+
+    def _migrate_finalization_state(self, finalization: dict) -> dict:
+        """Migrate old boolean format to new tri-state format.
+        
+        Old format: {"diarization_completed": true/false, ...}
+        New format: {"diarization": "pending"/"completed"/"failed", ...}
+        """
+        # Check if already in new format
+        if "diarization" in finalization:
+            return finalization
+        
+        # Migrate from old boolean format
+        old_to_new = {
+            "diarization_completed": "diarization",
+            "speaker_names_completed": "speaker_names",
+            "summary_completed": "summary",
+            "title_completed": "title",
+        }
+        
+        migrated = {}
+        for old_key, new_key in old_to_new.items():
+            old_value = finalization.get(old_key, False)
+            if old_value is True:
+                migrated[new_key] = self.FINALIZATION_COMPLETED
+            else:
+                migrated[new_key] = self.FINALIZATION_PENDING
+        
+        return migrated
+
+    def _ensure_finalization_state(self, meeting: dict) -> bool:
+        """Ensure meeting has finalization field in new format. Returns True if updated."""
+        if "finalization" not in meeting:
+            meeting["finalization"] = self._default_finalization_state()
+            return True
+        
+        # Migrate old format if needed
+        old_finalization = meeting["finalization"]
+        migrated = self._migrate_finalization_state(old_finalization)
+        if migrated != old_finalization:
+            meeting["finalization"] = migrated
+            return True
+        
+        return False
+
+    def mark_finalization_stage(self, meeting_id: str, stage: str) -> Optional[dict]:
+        """Mark a finalization stage as completed.
+        
+        Args:
+            meeting_id: The meeting ID
+            stage: One of 'diarization', 'speaker_names', 'summary', 'title'
+                   (also accepts old format like 'diarization_completed' for compatibility)
+                   
+        Returns:
+            Updated meeting dict, or None if not found
+        """
+        # Handle old format stage names for compatibility
+        stage = stage.replace("_completed", "")
+        
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            
+            self._ensure_finalization_state(meeting)
+            meeting["finalization"][stage] = self.FINALIZATION_COMPLETED
+            self._write_meeting_file(path, meeting)
+            self._logger.debug("Marked finalization stage %s as completed for meeting %s", stage, meeting_id)
+            return meeting
+
+    def mark_finalization_stage_failed(self, meeting_id: str, stage: str) -> Optional[dict]:
+        """Mark a finalization stage as failed.
+        
+        Args:
+            meeting_id: The meeting ID
+            stage: One of 'diarization', 'speaker_names', 'summary', 'title'
+                   (also accepts old format like 'diarization_completed' for compatibility)
+                   
+        Returns:
+            Updated meeting dict, or None if not found
+        """
+        # Handle old format stage names for compatibility
+        stage = stage.replace("_completed", "")
+        
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            
+            self._ensure_finalization_state(meeting)
+            meeting["finalization"][stage] = self.FINALIZATION_FAILED
+            self._write_meeting_file(path, meeting)
+            self._logger.warning("Marked finalization stage %s as FAILED for meeting %s", stage, meeting_id)
+            return meeting
+
+    def clear_finalization_flags(self, meeting_id: str) -> Optional[dict]:
+        """Clear all finalization flags (used when resuming a meeting).
+        
+        Returns:
+            Updated meeting dict, or None if not found
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            
+            meeting["finalization"] = self._default_finalization_state()
+            self._write_meeting_file(path, meeting)
+            self._logger.info("Cleared finalization flags for meeting %s", meeting_id)
+            return meeting
+
+    def get_pending_finalization_stages(self, meeting: dict) -> list[str]:
+        """Get list of finalization stages that are still pending.
+        
+        Args:
+            meeting: Meeting dict
+            
+        Returns:
+            List of pending stage names (human-readable)
+        """
+        finalization = meeting.get("finalization", {})
+        # Migrate if needed (for reading without writing)
+        finalization = self._migrate_finalization_state(finalization)
+        pending = []
+        
+        for stage_key, label in self.FINALIZATION_STAGE_LABELS.items():
+            if finalization.get(stage_key) == self.FINALIZATION_PENDING:
+                pending.append(label)
+        
+        return pending
+
+    def get_failed_finalization_stages(self, meeting: dict) -> list[str]:
+        """Get list of finalization stages that failed.
+        
+        Args:
+            meeting: Meeting dict
+            
+        Returns:
+            List of failed stage names (human-readable)
+        """
+        finalization = meeting.get("finalization", {})
+        # Migrate if needed (for reading without writing)
+        finalization = self._migrate_finalization_state(finalization)
+        failed = []
+        
+        for stage_key, label in self.FINALIZATION_STAGE_LABELS.items():
+            if finalization.get(stage_key) == self.FINALIZATION_FAILED:
+                failed.append(label)
+        
+        return failed
+
+    def needs_finalization(self, meeting: dict) -> bool:
+        """Check if a meeting needs background finalization.
+        
+        A meeting needs finalization if:
+        - Status is not 'in_progress' (actively recording)
+        - Has audio_path (can be re-processed)
+        - Has at least one pending (not completed or failed) finalization stage
+        
+        Args:
+            meeting: Meeting dict
+            
+        Returns:
+            True if finalization is needed
+        """
+        # Don't finalize actively recording meetings
+        if meeting.get("status") == "in_progress":
+            return False
+        
+        # Need audio path to do diarization
+        if not meeting.get("audio_path"):
+            return False
+        
+        # Check if any stage is pending (not failed or completed)
+        return len(self.get_pending_finalization_stages(meeting)) > 0
+
+    def list_meetings_needing_finalization(self) -> list[dict]:
+        """Get all meetings that need background finalization.
+        
+        Returns:
+            List of meeting dicts sorted by created_at (oldest first)
+        """
+        with self._lock:
+            meetings_needing = []
+            for path in self._list_meeting_paths():
+                meeting = self._read_meeting_file(path)
+                if not meeting:
+                    continue
+                if self.needs_finalization(meeting):
+                    meetings_needing.append(meeting)
+            
+            # Process oldest first
+            return sorted(meetings_needing, key=lambda m: m.get("created_at") or "")
 
     def _ensure_title_fields(self, meeting: dict) -> bool:
         updated = False

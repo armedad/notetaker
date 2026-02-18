@@ -10,16 +10,16 @@ from fastapi.responses import HTMLResponse, FileResponse
 from app.tests.harness import TestHarness
 
 
-def create_testing_router(logs_dir: str, static_dir: str) -> APIRouter:
+def create_testing_router(ctx) -> APIRouter:
     """Create the testing router with configured harness."""
     router = APIRouter(tags=["testing"])
     logger = logging.getLogger("notetaker.api.testing")
-    harness = TestHarness(logs_dir)
+    harness = TestHarness(ctx.logs_dir)
 
     @router.get("/test", response_class=HTMLResponse)
     async def test_page():
         """Serve the test harness page."""
-        return FileResponse(f"{static_dir}/test.html")
+        return FileResponse(f"{ctx.static_dir}/test.html")
 
     @router.get("/api/test/suites")
     async def list_suites():

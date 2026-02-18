@@ -180,7 +180,7 @@ def create_transcription_router(
     audio_service: AudioCaptureService,
     meeting_store: MeetingStore,
     summarization_service: SummarizationService,
-    recordings_dir: str,
+    ctx,
 ) -> APIRouter:
     router = APIRouter()
     logger = logging.getLogger("notetaker.api.transcription")
@@ -339,7 +339,7 @@ def create_transcription_router(
                     try:
                         wav_path, samplerate, channels = convert_to_wav(
                             original_audio_path,
-                            recordings_dir,
+                            ctx.recordings_dir,
                         )
                         logger.info(
                             "Audio converted for stream transcription: original=%s wav=%s",
@@ -704,7 +704,7 @@ def create_transcription_router(
             try:
                 wav_path, samplerate, channels = convert_to_wav(
                     original_audio_path,
-                    recordings_dir,
+                    ctx.recordings_dir,
                 )
                 logger.info(
                     "Audio converted for file transcription: original=%s wav=%s sr=%d ch=%d",
@@ -965,6 +965,8 @@ def create_transcription_router(
             raise HTTPException(status_code=400, detail="Audio file not found")
         # Update meeting status back to in_progress
         meeting_store.update_status(meeting_id, "in_progress")
+        # Clear finalization flags since transcript will change
+        meeting_store.clear_finalization_flags(meeting_id)
         
         # Create FileAudioSource for resumed meeting
         audio_source = FileAudioSource(

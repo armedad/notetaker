@@ -491,10 +491,29 @@ button:disabled {
   border-bottom: none;
 }
 
+.meeting-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .meeting-title {
   font-weight: 500;
   font-size: 13px;
   color: var(--text-primary);
+}
+
+.finalization-pending-icon {
+  font-size: 12px;
+  opacity: 0.7;
+  cursor: help;
+  flex-shrink: 0;
+}
+
+.finalization-failed-icon {
+  font-size: 12px;
+  cursor: help;
+  flex-shrink: 0;
 }
 
 .meeting-meta {
@@ -2806,4 +2825,139 @@ body.settings-page {
 [data-theme="dark"] .hf-badge.gated {
   background: #451a03;
   color: #fcd34d;
+}
+
+/* ── Data folder / Folder browser ────────────────────────────────── */
+
+.data-dir-controls {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+}
+
+.data-dir-controls input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Modal overlay */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.25);
+  width: 560px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 22px;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: var(--text-primary);
+}
+
+.modal-description {
+  padding: 12px 20px 0;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Folder browser */
+.folder-browser-path {
+  padding: 10px 20px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-default);
+  word-break: break-all;
+}
+
+.folder-browser-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 340px;
+  min-height: 160px;
+  padding: 4px 0;
+}
+
+.folder-browser-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 20px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.folder-browser-item:hover {
+  background: var(--bg-secondary);
+}
+
+.folder-browser-item.selected {
+  background: var(--accent-primary);
+  color: #fff;
+}
+
+.folder-browser-item::before {
+  content: "📁";
+  font-size: 14px;
+}
+
+.folder-browser-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-default);
+}
+
+.folder-browser-actions .primary {
+  margin-left: auto;
+}
+
+/* Move / Copy / Fresh dialog */
+.data-dir-action-buttons {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px;
+}
+
+.data-dir-action-modal .output {
+  margin: 0 20px 16px;
 }

@@ -23,11 +23,18 @@ class SummarizationService:
     - providers.<provider>: contains api_key and base_url for each provider
     """
     
-    def __init__(self, config_path: str) -> None:
-        self._config_path = config_path
+    def __init__(self, ctx) -> None:
+        self._ctx = ctx
         self._logger = logging.getLogger("notetaker.summarization")
         self._title_logger = logging.getLogger("notetaker.summarization.title")
-        self._prompts_dir = os.path.join(os.path.dirname(__file__), "..", "prompts")
+
+    @property
+    def _config_path(self) -> str:
+        return self._ctx.config_path
+
+    @property
+    def _prompts_dir(self) -> str:
+        return self._ctx.prompts_dir
 
     def _read_config(self) -> dict:
         """Read config from file, returning empty dict if not found."""

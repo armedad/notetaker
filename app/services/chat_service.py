@@ -24,20 +24,29 @@ class ChatService:
     
     def __init__(
         self,
+        ctx,
         meeting_store: MeetingStore,
         summarization_service: SummarizationService,
         search_service: SearchService,
     ) -> None:
+        self._ctx = ctx
         self._meeting_store = meeting_store
         self._summarization = summarization_service
         self._search = search_service
         self._logger = logging.getLogger("notetaker.chat")
-        self._prompts_dir = os.path.join(os.path.dirname(__file__), "..", "prompts")
-        # Homepage state lives alongside the meetings dir
-        data_dir = os.path.dirname(meeting_store._meetings_dir)
-        self._homepage_state_path = os.path.join(data_dir, "homepage_state.json")
         self._homepage_lock = threading.Lock()
-        self._logs_dir = os.path.join(os.getcwd(), "logs")
+
+    @property
+    def _prompts_dir(self) -> str:
+        return self._ctx.prompts_dir
+
+    @property
+    def _homepage_state_path(self) -> str:
+        return os.path.join(self._ctx.data_dir, "homepage_state.json")
+
+    @property
+    def _logs_dir(self) -> str:
+        return self._ctx.logs_dir
 
     def _maybe_log_prompt(self, question: str, prompt: str, provider_name: str, extra: Optional[dict] = None) -> Optional[str]:
         """If test_log_this is set, write the full prompt to logs/submit_[datetime].log.

@@ -772,6 +772,8 @@ class TranscriptionPipeline:
                         segments = apply_diarization(segments, diarization_segments)
                         # Update transcript speakers in meeting store
                         self._meeting_store.update_transcript_speakers(meeting_id, segments)
+                    # Mark diarization stage complete
+                    self._meeting_store.mark_finalization_stage(meeting_id, "diarization")
                 except Exception as exc:
                     self._logger.warning(
                         "Diarization failed, continuing without: meeting_id=%s error=%s",
@@ -782,6 +784,8 @@ class TranscriptionPipeline:
                         f"Speaker analysis failed: {type(exc).__name__}: {str(exc)[:120]}. Continuing without speaker labels.",
                         0.2,
                     )
+                    # Mark diarization as failed (not retried by background finalizer)
+                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "diarization")
                     # #region agent log
                     import traceback
                     try:
@@ -809,6 +813,8 @@ class TranscriptionPipeline:
                 )
                 try:
                     self._identify_and_update_speaker_names(meeting_id, segments)
+                    # Mark speaker names stage complete
+                    self._meeting_store.mark_finalization_stage(meeting_id, "speaker_names")
                 except Exception as exc:
                     self._logger.warning(
                         "Speaker name identification failed: meeting_id=%s error=%s",
@@ -819,6 +825,16 @@ class TranscriptionPipeline:
                         f"Speaker identification failed: {str(exc)[:100]}. Continuing with generic names.",
                         0.4,
                     )
+                    # Mark speaker names as failed
+                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "speaker_names")
+            elif audio_path and self._diarization.is_enabled():
+                # Diarization ran but returned no segments - no speakers to identify
+                self._meeting_store.mark_finalization_stage(meeting_id, "speaker_names")
+            else:
+                # Diarization was disabled/skipped, mark both as complete
+                # (nothing to do for these stages)
+                self._meeting_store.mark_finalization_stage(meeting_id, "diarization")
+                self._meeting_store.mark_finalization_stage(meeting_id, "speaker_names")
             
             # Step 7-9: Generate summary with streaming events
             # Backend always generates - frontend subscribes to events if connected
@@ -902,6 +918,8 @@ class TranscriptionPipeline:
                         action_items=result.get("action_items", []),
                         provider="default",
                     )
+                    # Mark summary stage complete
+                    self._meeting_store.mark_finalization_stage(meeting_id, "summary")
                     
                     # Auto-generate title
                     _dbg_step("SUMMARY_SAVED", {"meeting_id": meeting_id, "summary_len": len(result.get("summary",""))})
@@ -915,6 +933,8 @@ class TranscriptionPipeline:
                         self._summarization,
                         force=True,
                     )
+                    # Mark title stage complete
+                    self._meeting_store.mark_finalization_stage(meeting_id, "title")
                     _dbg_step("TITLE_GEN_DONE", {"meeting_id": meeting_id})
                 except Exception as exc:
                     self._logger.warning(
@@ -926,6 +946,9 @@ class TranscriptionPipeline:
                         f"Summary generation failed: {type(exc).__name__}: {str(exc)[:120]}",
                         0.7,
                     )
+                    # Mark summary and title as failed (title depends on summary)
+                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary")
+                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "title")
                     # #region agent log
                     import traceback as _tb_sum
                     _dbg_step("SUMMARIZATION_ERROR", {"meeting_id": meeting_id, "error": str(exc)[:500], "traceback": _tb_sum.format_exc()[-1000:]})

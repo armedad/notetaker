@@ -1165,7 +1165,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadSummarizationSettings();
   await loadDiarizationSettings();
   await loadAppearanceSettings();
-  
+
+  // Data folder
+  dataDirInit();
+  await dataDirLoad();
+
   // HuggingFace model downloads
   hfInitEvents();
   await hfLoadModels();
@@ -1651,4 +1655,229 @@ function testInitDebugSection() {
   testLoadRagMetrics();
   testLoadLlmLogs();
   testLoadLogAllStatus();
+}
+
+// ── Data folder configuration ─────────────────────────────────────────
+
+let _dataDirCurrent = "";
+let _dataDirDefault = "";
+let _folderBrowserPath = "";
+let _folderBrowserSelected = "";
+
+async function dataDirLoad() {
+  try {
+    const resp = await fetch("/api/settings/data-dir");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    _dataDirCurrent = data.data_dir || "";
+    _dataDirDefault = data.default_data_dir || "";
+    const input = document.getElementById("data-dir-input");
+    if (input) input.value = _dataDirCurrent;
+  } catch (err) {
+    debugError("dataDirLoad", err);
+  }
+}
+
+function dataDirInit() {
+  const browseBtn = document.getElementById("data-dir-browse");
+  const resetBtn = document.getElementById("data-dir-reset");
+  if (browseBtn) browseBtn.addEventListener("click", () => folderBrowserOpen(_dataDirCurrent || _dataDirDefault));
+  if (resetBtn) resetBtn.addEventListener("click", dataDirReset);
+
+  // Modal close buttons
+  const closeModal = document.getElementById("folder-browser-close");
+  if (closeModal) closeModal.addEventListener("click", folderBrowserClose);
+  const closeAction = document.getElementById("data-dir-action-close");
+  if (closeAction) closeAction.addEventListener("click", dataDirActionClose);
+
+  // Folder browser buttons
+  const upBtn = document.getElementById("folder-browser-up");
+  if (upBtn) upBtn.addEventListener("click", folderBrowserUp);
+  const newBtn = document.getElementById("folder-browser-new");
+  if (newBtn) newBtn.addEventListener("click", folderBrowserNewFolder);
+  const selectBtn = document.getElementById("folder-browser-select");
+  if (selectBtn) selectBtn.addEventListener("click", folderBrowserSelectCurrent);
+
+  // Action buttons
+  const moveBtn = document.getElementById("data-dir-action-move");
+  const copyBtn = document.getElementById("data-dir-action-copy");
+  const freshBtn = document.getElementById("data-dir-action-fresh");
+  if (moveBtn) moveBtn.addEventListener("click", () => dataDirApply("move"));
+  if (copyBtn) copyBtn.addEventListener("click", () => dataDirApply("copy"));
+  if (freshBtn) freshBtn.addEventListener("click", () => dataDirApply("fresh"));
+}
+
+async function dataDirReset() {
+  if (!_dataDirDefault) return;
+  if (_dataDirCurrent === _dataDirDefault) {
+    _dataDirOutput("Already using default folder.", "");
+    return;
+  }
+  dataDirShowActionDialog(_dataDirDefault);
+}
+
+function _dataDirOutput(msg, cls) {
+  const el = document.getElementById("data-dir-output");
+  if (el) {
+    el.textContent = msg;
+    el.className = "output" + (cls ? " " + cls : "");
+  }
+}
+
+// ── Folder browser ────────────────────────────────────────────────────
+
+async function folderBrowserOpen(startPath) {
+  _folderBrowserSelected = "";
+  const modal = document.getElementById("folder-browser-modal");
+  if (modal) modal.style.display = "flex";
+  await folderBrowserNavigate(startPath || "");
+}
+
+function folderBrowserClose() {
+  const modal = document.getElementById("folder-browser-modal");
+  if (modal) modal.style.display = "none";
+}
+
+async function folderBrowserNavigate(path) {
+  const listEl = document.getElementById("folder-browser-list");
+  const pathEl = document.getElementById("folder-browser-path");
+  if (!listEl) return;
+  listEl.innerHTML = '<div class="hint">Loading…</div>';
+
+  try {
+    const url = "/api/settings/browse-folders" + (path ? "?path=" + encodeURIComponent(path) : "");
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (data.status === "error") {
+      listEl.innerHTML = `<div class="hint">${data.message}</div>`;
+      return;
+    }
+    _folderBrowserPath = data.path;
+    _folderBrowserSelected = "";
+    if (pathEl) pathEl.textContent = data.path;
+
+    if (!data.dirs || data.dirs.length === 0) {
+      listEl.innerHTML = '<div class="hint">No subdirectories</div>';
+      return;
+    }
+    listEl.innerHTML = "";
+    for (const dir of data.dirs) {
+      const item = document.createElement("div");
+      item.className = "folder-browser-item";
+      item.textContent = dir.name;
+      item.dataset.path = dir.path;
+      item.addEventListener("click", () => {
+        document.querySelectorAll(".folder-browser-item.selected")
+          .forEach(el => el.classList.remove("selected"));
+        item.classList.add("selected");
+        _folderBrowserSelected = dir.path;
+      });
+      item.addEventListener("dblclick", () => {
+        folderBrowserNavigate(dir.path);
+      });
+      listEl.appendChild(item);
+    }
+  } catch (err) {
+    listEl.innerHTML = `<div class="hint">Error: ${err.message}</div>`;
+    debugError("folderBrowserNavigate", err);
+  }
+}
+
+function folderBrowserUp() {
+  if (!_folderBrowserPath) return;
+  const parts = _folderBrowserPath.split("/");
+  if (parts.length <= 2) {
+    folderBrowserNavigate("/");
+  } else {
+    parts.pop();
+    folderBrowserNavigate(parts.join("/"));
+  }
+}
+
+async function folderBrowserNewFolder() {
+  const name = prompt("New folder name:");
+  if (!name || !name.trim()) return;
+  const newPath = _folderBrowserPath + "/" + name.trim();
+  try {
+    const resp = await fetch("/api/settings/data-dir/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_path: newPath, action: "mkdir" }),
+    });
+    const data = await resp.json();
+    if (data.status === "ok") {
+      await folderBrowserNavigate(_folderBrowserPath);
+    }
+  } catch (err) {
+    debugError("folderBrowserNewFolder", err);
+  }
+}
+
+function folderBrowserSelectCurrent() {
+  const chosen = _folderBrowserSelected || _folderBrowserPath;
+  if (!chosen) return;
+  folderBrowserClose();
+
+  if (chosen === _dataDirCurrent) {
+    _dataDirOutput("Already using this folder.", "");
+    return;
+  }
+  dataDirShowActionDialog(chosen);
+}
+
+// ── Move / Copy / Fresh dialog ────────────────────────────────────────
+
+function dataDirShowActionDialog(newPath) {
+  const modal = document.getElementById("data-dir-action-modal");
+  const desc = document.getElementById("data-dir-action-desc");
+  const output = document.getElementById("data-dir-action-output");
+  if (output) { output.textContent = ""; output.className = "output"; }
+  if (desc) {
+    desc.innerHTML = `Changing data folder from<br><strong>${_dataDirCurrent}</strong><br>to<br><strong>${newPath}</strong>`;
+  }
+  if (modal) {
+    modal.dataset.newPath = newPath;
+    modal.style.display = "flex";
+  }
+}
+
+function dataDirActionClose() {
+  const modal = document.getElementById("data-dir-action-modal");
+  if (modal) modal.style.display = "none";
+}
+
+async function dataDirApply(action) {
+  const modal = document.getElementById("data-dir-action-modal");
+  const newPath = modal ? modal.dataset.newPath : "";
+  if (!newPath) return;
+
+  const output = document.getElementById("data-dir-action-output");
+  if (output) { output.textContent = "Working…"; output.className = "output"; }
+
+  // Disable buttons while working
+  const btns = document.querySelectorAll(".data-dir-action-buttons button");
+  btns.forEach(b => b.disabled = true);
+
+  try {
+    const resp = await fetch("/api/settings/data-dir/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_path: newPath, action }),
+    });
+    const data = await resp.json();
+    if (data.status === "ok") {
+      dataDirActionClose();
+      _dataDirCurrent = newPath;
+      const input = document.getElementById("data-dir-input");
+      if (input) input.value = newPath;
+      _dataDirOutput("Folder changed. All services now using the new location.", "success");
+    } else {
+      if (output) { output.textContent = data.message || "Failed"; output.className = "output error"; }
+    }
+  } catch (err) {
+    if (output) { output.textContent = "Error: " + err.message; output.className = "output error"; }
+    debugError("dataDirApply", err);
+  } finally {
+    btns.forEach(b => b.disabled = false);
+  }
 }
