@@ -246,6 +246,9 @@ class MeetingStore:
         for name in names:
             if not name.endswith(".json"):
                 continue
+            # Skip metadata files (manifest.json, README.md, etc.)
+            if name in ("manifest.json", "README.md"):
+                continue
             paths.append(os.path.join(self._meetings_dir, name))
         return sorted(paths)
 
@@ -1268,12 +1271,26 @@ class MeetingStore:
                 # #endregion
                 return False
             try:
+                # Read meeting to get audio_path before deleting
+                meeting = self._read_meeting_file(path)
+                audio_path = meeting.get("audio_path") if meeting else None
+                
+                # Delete the meeting JSON file
                 os.unlink(path)
+                
+                # Delete associated audio file if it exists
+                if audio_path and os.path.isfile(audio_path):
+                    try:
+                        os.unlink(audio_path)
+                        self._logger.info("Deleted audio file: %s", audio_path)
+                    except OSError as audio_exc:
+                        self._logger.warning("Failed to delete audio file: %s error=%s", audio_path, audio_exc)
+                
                 # #region agent log
                 _dbg_ndjson(
                     location="app/services/meeting_store.py:delete_meeting",
                     message="delete_meeting success",
-                    data={"meeting_id": meeting_id, "path_name": os.path.basename(path)},
+                    data={"meeting_id": meeting_id, "path_name": os.path.basename(path), "audio_deleted": bool(audio_path)},
                     run_id="pre-fix",
                     hypothesis_id="H1",
                 )
