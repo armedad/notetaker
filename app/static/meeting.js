@@ -632,6 +632,21 @@ function handleMeetingEvent(event) {
       updateTranscriptionControls();
       break;
     
+    case "finalization_complete":
+      // Finalization finished successfully
+      hideFinalizationStatus();
+      NotificationCenter.success(`Finalization complete: ${event.data?.meeting_title || "Meeting"}`);
+      refreshMeeting();
+      break;
+    
+    case "finalization_failed":
+      // Finalization had errors
+      hideFinalizationStatus();
+      const errorCount = event.data?.errors?.length || 1;
+      NotificationCenter.error(`Finalization failed: ${event.data?.meeting_title || "Meeting"} (${errorCount} error${errorCount > 1 ? "s" : ""})`);
+      refreshMeeting();
+      break;
+    
     case "transcription_error":
       // Transcription error - unified for both mic and file modes
       debugError("Transcription error event", event.data);
@@ -716,6 +731,199 @@ function hideFinalizationStatus() {
   if (container) container.style.display = "none";
 }
 
+// =============================================================================
+// Finalization Error Handling
+// =============================================================================
+
+function showFinalizationErrorAlert(failedStages) {
+  const alert = document.getElementById("finalization-error-alert");
+  const text = document.getElementById("finalization-error-text");
+  if (!alert) return;
+  
+  if (failedStages && failedStages.length > 0) {
+    alert.style.display = "flex";
+    text.textContent = `Finalization failed: ${failedStages.join(", ")}`;
+  } else {
+    alert.style.display = "none";
+  }
+}
+
+function hideFinalizationErrorAlert() {
+  const alert = document.getElementById("finalization-error-alert");
+  if (alert) alert.style.display = "none";
+}
+
+async function showErrorDetailsModal() {
+  const modal = document.getElementById("error-details-modal");
+  const errorList = document.getElementById("error-list");
+  const meetingJson = document.getElementById("meeting-json");
+  const autoFixSection = document.getElementById("auto-fix-section");
+  const autoFixContent = document.getElementById("auto-fix-content");
+  
+  if (!modal || !state.meetingId) return;
+  
+  // Reset auto-fix section
+  if (autoFixSection) autoFixSection.style.display = "none";
+  if (autoFixContent) autoFixContent.innerHTML = "";
+  
+  try {
+    const data = await fetchJson(`/api/meetings/${state.meetingId}/finalization-errors`);
+    
+    // Render error list
+    if (errorList) {
+      if (data.errors && Object.keys(data.errors).length > 0) {
+        errorList.innerHTML = Object.entries(data.errors)
+          .map(([stage, error]) => `
+            <div class="error-item">
+              <strong>${stage}:</strong>
+              <span class="error-message">${error || "No error message recorded"}</span>
+            </div>
+          `)
+          .join("");
+      } else {
+        errorList.innerHTML = "<p>No error details available.</p>";
+      }
+    }
+    
+    // Render meeting JSON
+    if (meetingJson && data.meeting_json) {
+      meetingJson.textContent = JSON.stringify(data.meeting_json, null, 2);
+    }
+    
+    modal.style.display = "flex";
+  } catch (error) {
+    setGlobalError(`Failed to load error details: ${error.message}`);
+  }
+}
+
+function hideErrorDetailsModal() {
+  const modal = document.getElementById("error-details-modal");
+  if (modal) modal.style.display = "none";
+}
+
+async function retryFinalization() {
+  if (!state.meetingId) return;
+  
+  const retryBtn = document.getElementById("retry-finalization-btn");
+  if (retryBtn) {
+    retryBtn.disabled = true;
+    retryBtn.textContent = "Retrying...";
+  }
+  
+  try {
+    const result = await fetchJson(`/api/meetings/${state.meetingId}/retry-finalization`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    
+    hideErrorDetailsModal();
+    hideFinalizationErrorAlert();
+    
+    // Refresh meeting to get updated state
+    await refreshMeeting();
+    
+    if (result.needs_finalization) {
+      showFinalizationStatus("Re-processing...");
+    }
+  } catch (error) {
+    setGlobalError(`Failed to retry finalization: ${error.message}`);
+  } finally {
+    if (retryBtn) {
+      retryBtn.disabled = false;
+      retryBtn.textContent = "Retry Failed Stages";
+    }
+  }
+}
+
+async function runAutoFix() {
+  if (!state.meetingId) return;
+  
+  const autoFixBtn = document.getElementById("auto-fix-btn");
+  const autoFixSection = document.getElementById("auto-fix-section");
+  const autoFixContent = document.getElementById("auto-fix-content");
+  
+  if (!autoFixSection || !autoFixContent) return;
+  
+  if (autoFixBtn) {
+    autoFixBtn.disabled = true;
+    autoFixBtn.textContent = "Analyzing...";
+  }
+  
+  autoFixSection.style.display = "block";
+  autoFixContent.innerHTML = "<p class='analyzing'>Analyzing errors with AI...</p>";
+  
+  try {
+    const response = await fetch(`/api/meetings/${state.meetingId}/auto-fix-finalization`, {
+      method: "POST",
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `Request failed: ${response.status}`);
+    }
+    
+    // Stream the response
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let content = "";
+    
+    autoFixContent.innerHTML = "";
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      content += decoder.decode(value, { stream: true });
+      // Simple markdown-like rendering
+      autoFixContent.innerHTML = content
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/\n/g, "<br>");
+    }
+  } catch (error) {
+    autoFixContent.innerHTML = `<p class="error">Failed to analyze: ${error.message}</p>`;
+  } finally {
+    if (autoFixBtn) {
+      autoFixBtn.disabled = false;
+      autoFixBtn.textContent = "Analyze with AI";
+    }
+  }
+}
+
+function initFinalizationErrorHandlers() {
+  // Show error details button
+  const showDetailsBtn = document.getElementById("show-error-details");
+  if (showDetailsBtn) {
+    showDetailsBtn.addEventListener("click", showErrorDetailsModal);
+  }
+  
+  // Modal close button
+  const modalClose = document.getElementById("error-modal-close");
+  if (modalClose) {
+    modalClose.addEventListener("click", hideErrorDetailsModal);
+  }
+  
+  // Click outside modal to close
+  const modal = document.getElementById("error-details-modal");
+  if (modal) {
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) hideErrorDetailsModal();
+    });
+  }
+  
+  // Retry button
+  const retryBtn = document.getElementById("retry-finalization-btn");
+  if (retryBtn) {
+    retryBtn.addEventListener("click", retryFinalization);
+  }
+  
+  // Auto-fix button
+  const autoFixBtn = document.getElementById("auto-fix-btn");
+  if (autoFixBtn) {
+    autoFixBtn.addEventListener("click", runAutoFix);
+  }
+}
+
 async function updateFinalizationStatusFromMeeting(meeting) {
   // Check the backend for whether finalization is actually running.
   // The SSE finalization_status events update the progress bar in real-time;
@@ -724,10 +932,19 @@ async function updateFinalizationStatusFromMeeting(meeting) {
     const resp = await fetchJson(`/api/transcribe/status/${meeting.id}`);
     if (resp.state === "finalizing") {
       showFinalizationStatus("Finalizing...");
+      hideFinalizationErrorAlert();
       return;
     }
   } catch (_) {}
   hideFinalizationStatus();
+  
+  // Check for failed stages and show error alert
+  const failedStages = meeting.failed_stages || [];
+  if (failedStages.length > 0) {
+    showFinalizationErrorAlert(failedStages);
+  } else {
+    hideFinalizationErrorAlert();
+  }
 }
 
 function setMeetingTitle(title) {
@@ -1189,14 +1406,14 @@ function setTranscriptOutput(segments) {
 function setTranscriptStatus(message) {
   const status = document.getElementById("transcript-status");
   if (status) {
-    status.textContent = message;
+  status.textContent = message;
   }
 }
 
 function setSummaryStatus(message) {
   const status = document.getElementById("summary-status");
   if (status) {
-    status.textContent = message;
+  status.textContent = message;
   }
 }
 
@@ -1407,7 +1624,7 @@ async function refreshMeeting() {
       setSummaryStatus(`${meetingStatus} • No summary yet.`);
       setSummaryOutput("No summary yet.");
     }
-    
+
     // Load manual notes
     const notesEl = document.getElementById("manual-notes");
     if (notesEl && notesEl.value !== (meeting?.manual_notes || "")) {
@@ -1428,13 +1645,13 @@ async function refreshMeeting() {
   // Start backend transcription (separate try/catch so meeting load errors don't block this)
   try {
     const response = await fetch("/api/transcribe/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        meeting_id: state.meetingId,
-      }),
-    });
-    
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      meeting_id: state.meetingId,
+    }),
+  });
+
     const result = await response.json();    
     // Handle various status responses gracefully
     if (result.status === "already_running") {
@@ -2431,6 +2648,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Initialize meeting chat UI
   initMeetingChat();
+  
+  // Initialize finalization error handlers
+  initFinalizationErrorHandlers();
 
   // #region agent log
   fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:DOMContentLoaded:post-initChat',message:'initMeetingChat done, calling refreshVersion',data:{hasChatInstance:!!state.meetingChat},timestamp:Date.now(),runId:'post-fix',hypothesisId:'INIT'})}).catch(()=>{});

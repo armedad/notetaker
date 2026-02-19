@@ -785,7 +785,9 @@ class TranscriptionPipeline:
                         0.2,
                     )
                     # Mark diarization as failed (not retried by background finalizer)
-                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "diarization")
+                    self._meeting_store.mark_finalization_stage_failed(
+                        meeting_id, "diarization", f"{type(exc).__name__}: {str(exc)}"
+                    )
                     # #region agent log
                     import traceback
                     try:
@@ -826,7 +828,9 @@ class TranscriptionPipeline:
                         0.4,
                     )
                     # Mark speaker names as failed
-                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "speaker_names")
+                    self._meeting_store.mark_finalization_stage_failed(
+                        meeting_id, "speaker_names", f"{type(exc).__name__}: {str(exc)}"
+                    )
             elif audio_path and self._diarization.is_enabled():
                 # Diarization ran but returned no segments - no speakers to identify
                 self._meeting_store.mark_finalization_stage(meeting_id, "speaker_names")
@@ -947,8 +951,11 @@ class TranscriptionPipeline:
                         0.7,
                     )
                     # Mark summary and title as failed (title depends on summary)
-                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary")
-                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "title")
+                    error_msg = f"{type(exc).__name__}: {str(exc)}"
+                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary", error_msg)
+                    self._meeting_store.mark_finalization_stage_failed(
+                        meeting_id, "title", "Summary generation failed (required for title)"
+                    )
                     # #region agent log
                     import traceback as _tb_sum
                     _dbg_step("SUMMARIZATION_ERROR", {"meeting_id": meeting_id, "error": str(exc)[:500], "traceback": _tb_sum.format_exc()[-1000:]})

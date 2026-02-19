@@ -271,7 +271,31 @@ def create_app() -> FastAPI:
         except Exception as inst_exc:
             _boot_log("app/main.py:create_app", "instrumentation_failed", {"error": str(inst_exc)[:300]}, "H2")
             raise
-        debug_router = create_test_debug_router(ctx, test_llm_logger, test_rag_metrics)
+        # Start background finalizer for meetings with incomplete finalization
+        background_finalizer = None
+        try:
+            diarization_config = config.get("diarization", {})
+            _, batch_diar_cfg = parse_diarization_config(diarization_config)
+            diarization_service = DiarizationService(batch_diar_cfg)
+            
+            background_finalizer = BackgroundFinalizer(
+                meeting_store=meeting_store,
+                summarization_service=summarization_service,
+                diarization_service=diarization_service,
+            )
+            background_finalizer.start()
+            app.state.background_finalizer = background_finalizer
+            logger.info("Boot: BackgroundFinalizer started")
+        except Exception as exc:
+            logger.warning("Boot: BackgroundFinalizer failed to start: %s", exc)
+            _boot_log(
+                "app/main.py:create_app",
+                "background_finalizer_failed",
+                {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+                "H6",
+            )
+        
+        debug_router = create_test_debug_router(ctx, test_llm_logger, test_rag_metrics, background_finalizer)
         app.include_router(debug_router)
         logger.info("Boot: test debug router mounted (LLM observability)")
         app.include_router(create_settings_router(ctx))
@@ -289,29 +313,6 @@ def create_app() -> FastAPI:
 
     app.include_router(create_testing_router(ctx))
     logger.info("Boot: testing router mounted")
-
-    # Start background finalizer for meetings with incomplete finalization
-    try:
-        diarization_config = config.get("diarization", {})
-        _, batch_diar_cfg = parse_diarization_config(diarization_config)
-        diarization_service = DiarizationService(batch_diar_cfg)
-        
-        background_finalizer = BackgroundFinalizer(
-            meeting_store=meeting_store,
-            summarization_service=summarization_service,
-            diarization_service=diarization_service,
-        )
-        background_finalizer.start()
-        app.state.background_finalizer = background_finalizer
-        logger.info("Boot: BackgroundFinalizer started")
-    except Exception as exc:
-        logger.warning("Boot: BackgroundFinalizer failed to start: %s", exc)
-        _boot_log(
-            "app/main.py:create_app",
-            "background_finalizer_failed",
-            {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
-            "H6",
-        )
 
     class NoCacheMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):

@@ -15,7 +15,26 @@
         <span id="version-badge" class="version-badge">v0.0.0.0</span>
         <div class="status error inline" id="global-error"></div>
         <div class="status inline" id="global-busy"></div>
-        <div class="header-actions"></div>
+        <div class="header-actions">
+          <div class="notification-center">
+            <button id="notification-toggle" class="notification-bell" title="Notifications">
+              🔔
+              <span id="notification-badge" class="notification-badge">0</span>
+            </button>
+            <div id="notification-panel" class="notification-panel" style="display: none;">
+              <div class="notification-panel-header">
+                <h3>Notifications</h3>
+                <div class="notification-panel-actions">
+                  <button id="mark-all-read">Mark all read</button>
+                  <button id="clear-notifications">Clear</button>
+                </div>
+              </div>
+              <div id="notification-list" class="notification-list">
+                <div class="notification-empty">No notifications</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -539,6 +558,28 @@
               </div>
 
               <div class="debug-subsection">
+                <h3>Background Finalization</h3>
+                <p class="hint">Process meetings with incomplete finalization stages (diarization, summary, title).</p>
+                <div class="debug-stats" style="margin-bottom: 12px;">
+                  <div class="debug-stat">
+                    <span class="debug-stat-label">Status</span>
+                    <span class="debug-stat-value" id="finalization-status-text">-</span>
+                  </div>
+                  <div class="debug-stat">
+                    <span class="debug-stat-label">Pending</span>
+                    <span class="debug-stat-value" id="finalization-pending-count">-</span>
+                  </div>
+                </div>
+                <div id="finalization-current-work" class="hint" style="margin-bottom: 12px; display: none;">
+                  Working on: <span id="finalization-current-meeting"></span> (<span id="finalization-current-stage"></span>)
+                </div>
+                <div class="actions">
+                  <button id="restart-finalization-btn" class="secondary">Restart Finalization</button>
+                  <button id="refresh-finalization-btn" class="secondary">Refresh</button>
+                </div>
+              </div>
+
+              <div class="debug-subsection">
                 <h3>LLM Logging</h3>
                 <p class="hint">Log full LLM inputs and outputs for debugging. Right-click the chat Send button to log individual requests.</p>
                 <div class="row">
@@ -570,7 +611,8 @@
       </div>
     </main>
 
+    <script src="/static/notifications.js"></script>
     <script src="/static/debug-flags.js"></script>
-    <script src="/static/settings.js?v=5"></script>
+    <script src="/static/settings.js?v=6"></script>
   </body>
 </html>

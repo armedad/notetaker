@@ -23,12 +23,14 @@ def create_test_debug_router(
     ctx,
     llm_logger: TestLLMLogger,
     rag_metrics: TestRAGMetrics,
+    background_finalizer=None,
 ) -> APIRouter:
     """Create the debug API router with endpoints for observability.
     
     Args:
         llm_logger: TestLLMLogger instance for log operations
         rag_metrics: TestRAGMetrics instance for metrics operations
+        background_finalizer: Optional BackgroundFinalizer instance for finalization controls
         
     Returns:
         FastAPI router with debug endpoints mounted
@@ -158,5 +160,61 @@ def create_test_debug_router(
             content = fh.read()
         
         return {"path": full_path, "filename": latest, "content": content}
+    
+    # -------------------------------------------------------------------------
+    # Background Finalization Endpoints
+    # -------------------------------------------------------------------------
+    
+    @router.get("/finalization-status")
+    def get_finalization_status() -> dict:
+        """Get the current status of the background finalization service.
+        
+        Returns:
+            Dict with:
+                - running: bool - whether the service is running
+                - active: bool - whether currently processing a meeting
+                - current_meeting_id: str or None
+                - current_stage: str or None
+                - pending_count: int - number of meetings waiting
+        """
+        if background_finalizer is None:
+            return {
+                "running": False,
+                "active": False,
+                "current_meeting_id": None,
+                "current_stage": None,
+                "pending_count": 0,
+                "error": "Background finalizer not available",
+            }
+        return background_finalizer.get_status()
+    
+    @router.post("/restart-finalization")
+    def restart_finalization() -> dict:
+        """Wake up the background finalizer to process pending meetings.
+        
+        Returns:
+            Dict with status and current pending count
+        """
+        if background_finalizer is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Background finalizer not available",
+            )
+        
+        status = background_finalizer.get_status()
+        if status.get("active"):
+            return {
+                "status": "already_active",
+                "message": "Finalization is already in progress",
+                "current_meeting_id": status.get("current_meeting_id"),
+                "current_stage": status.get("current_stage"),
+            }
+        
+        background_finalizer.wake()
+        return {
+            "status": "ok",
+            "message": "Finalization restarted",
+            "pending_count": status.get("pending_count", 0),
+        }
     
     return router

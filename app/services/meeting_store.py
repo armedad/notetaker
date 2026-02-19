@@ -1846,19 +1846,28 @@ class MeetingStore:
         """Default finalization tracking (all stages pending)."""
         return {
             "diarization": self.FINALIZATION_PENDING,
+            "diarization_error": None,
             "speaker_names": self.FINALIZATION_PENDING,
+            "speaker_names_error": None,
             "summary": self.FINALIZATION_PENDING,
+            "summary_error": None,
             "title": self.FINALIZATION_PENDING,
+            "title_error": None,
         }
 
     def _migrate_finalization_state(self, finalization: dict) -> dict:
         """Migrate old boolean format to new tri-state format.
         
         Old format: {"diarization_completed": true/false, ...}
-        New format: {"diarization": "pending"/"completed"/"failed", ...}
+        New format: {"diarization": "pending"/"completed"/"failed", "diarization_error": null, ...}
         """
         # Check if already in new format
         if "diarization" in finalization:
+            # Ensure error fields exist
+            for stage in self.FINALIZATION_STAGE_LABELS.keys():
+                error_key = f"{stage}_error"
+                if error_key not in finalization:
+                    finalization[error_key] = None
             return finalization
         
         # Migrate from old boolean format
@@ -1876,6 +1885,8 @@ class MeetingStore:
                 migrated[new_key] = self.FINALIZATION_COMPLETED
             else:
                 migrated[new_key] = self.FINALIZATION_PENDING
+            # Add error field
+            migrated[f"{new_key}_error"] = None
         
         return migrated
 
@@ -1918,17 +1929,21 @@ class MeetingStore:
             
             self._ensure_finalization_state(meeting)
             meeting["finalization"][stage] = self.FINALIZATION_COMPLETED
+            meeting["finalization"][f"{stage}_error"] = None  # Clear any previous error
             self._write_meeting_file(path, meeting)
             self._logger.debug("Marked finalization stage %s as completed for meeting %s", stage, meeting_id)
             return meeting
 
-    def mark_finalization_stage_failed(self, meeting_id: str, stage: str) -> Optional[dict]:
-        """Mark a finalization stage as failed.
+    def mark_finalization_stage_failed(
+        self, meeting_id: str, stage: str, error_message: Optional[str] = None
+    ) -> Optional[dict]:
+        """Mark a finalization stage as failed and store the error message.
         
         Args:
             meeting_id: The meeting ID
             stage: One of 'diarization', 'speaker_names', 'summary', 'title'
                    (also accepts old format like 'diarization_completed' for compatibility)
+            error_message: Optional error message describing what went wrong
                    
         Returns:
             Updated meeting dict, or None if not found
@@ -1946,8 +1961,12 @@ class MeetingStore:
             
             self._ensure_finalization_state(meeting)
             meeting["finalization"][stage] = self.FINALIZATION_FAILED
+            meeting["finalization"][f"{stage}_error"] = error_message
             self._write_meeting_file(path, meeting)
-            self._logger.warning("Marked finalization stage %s as FAILED for meeting %s", stage, meeting_id)
+            self._logger.warning(
+                "Marked finalization stage %s as FAILED for meeting %s: %s", 
+                stage, meeting_id, error_message[:200] if error_message else "No message"
+            )
             return meeting
 
     def clear_finalization_flags(self, meeting_id: str) -> Optional[dict]:
@@ -2008,6 +2027,61 @@ class MeetingStore:
                 failed.append(label)
         
         return failed
+
+    def get_finalization_errors(self, meeting: dict) -> dict[str, Optional[str]]:
+        """Get error messages for failed finalization stages.
+        
+        Args:
+            meeting: Meeting dict
+            
+        Returns:
+            Dict mapping stage label to error message (only includes failed stages)
+        """
+        finalization = meeting.get("finalization", {})
+        # Migrate if needed (for reading without writing)
+        finalization = self._migrate_finalization_state(finalization)
+        errors = {}
+        
+        for stage_key, label in self.FINALIZATION_STAGE_LABELS.items():
+            if finalization.get(stage_key) == self.FINALIZATION_FAILED:
+                error_key = f"{stage_key}_error"
+                errors[label] = finalization.get(error_key)
+        
+        return errors
+
+    def clear_failed_stages(self, meeting_id: str, stages: Optional[list[str]] = None) -> Optional[dict]:
+        """Clear failed stages to allow retry.
+        
+        Args:
+            meeting_id: The meeting ID
+            stages: List of stage keys to clear (e.g., ['diarization', 'summary']).
+                   If None, clears all failed stages.
+                   
+        Returns:
+            Updated meeting dict, or None if not found
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            
+            self._ensure_finalization_state(meeting)
+            finalization = meeting["finalization"]
+            
+            stages_to_clear = stages if stages else list(self.FINALIZATION_STAGE_LABELS.keys())
+            
+            for stage in stages_to_clear:
+                # Only clear if currently failed
+                if finalization.get(stage) == self.FINALIZATION_FAILED:
+                    finalization[stage] = self.FINALIZATION_PENDING
+                    finalization[f"{stage}_error"] = None
+                    self._logger.info("Cleared failed stage %s for meeting %s", stage, meeting_id)
+            
+            self._write_meeting_file(path, meeting)
+            return meeting
 
     def needs_finalization(self, meeting: dict) -> bool:
         """Check if a meeting needs background finalization.

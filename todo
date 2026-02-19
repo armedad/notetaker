@@ -8,6 +8,136 @@ when it's fully working, move it to a todo-done.md file
 
 ---
 
+
+
+# background finalization
+  - Type: new feature
+  - Size: large
+  - Status: implemented
+  - Implementation:
+    - `app/services/background_finalizer.py` - daemon thread that sweeps meetings needing finalization
+    - `app/services/meeting_store.py` - tri-state finalization flags (pending/completed/failed), error tracking
+    - `app/services/transcription_pipeline.py` - marks stages during live finalization
+    - `app/routers/meetings.py` - retry-finalization and auto-fix endpoints
+    - `app/static/app.js`, `app/static/meeting.js` - UI indicators and error handling
+  - Features implemented:
+    - Tri-state finalization flags: diarization, speaker_names, summary, title
+    - Background sweep service (30s between meetings, 5min idle check)
+    - Hourglass icon for pending meetings, warning icon for failed
+    - Error tracking with detailed messages per failed stage
+    - Retry failed stages functionality
+    - LLM auto-fix analysis for errors
+    - Notification system (bell icon, bubbles) for finalization events
+    - Debug controls in Settings > Debug to restart finalization
+
+sometimes meeting finalization gets interrupted.  during start of the server, perhaps there should be a slow process that sweeps through the meeting files and finalizes meetings that need finalization.   in order to do this, each meeting file needs to store which stages of finalization it has completed.  it should be a positive flag; ie, the flag should exist if that stage is completed.  absence of the flag means it needs to be done.  it also needs to store pointers to all the neede files to finalize (e.g. the original wave file).   i think the finalization stages are 1) batch higher quality diarization, 2) summarization, 3) title generation.  does #1 also include speaker name identification?    each of these should be marked in the json file if it was completed.  if it was not, then this slow background process should process each meeting file for each stage one by one.  it is important not to do these in parallel and consume all of the cpu of the system.   4) manifest.json updated.
+
+if a meeting is resumed, all of these finalization flags should get cleared.  they will need to run again.
+
+in the main meetings list, if a meeting file still needs to be finalized, it should have an hourglass icon on the right side of the row listing until it is indeed finalized.  if i hover over that icon, it should have a tooltip that tells me what finalization is still needed for that one.
+
+all the current files don't have these flags marked.  that will mean they are considered un-finalized.  that's ok. don't do anything special for them.  let the system re-finalize them and then mark it finalized in the json when it does.
+
+--
+
+# updating the meetings manifest.json
+  - Type: new feature
+  - Size: medium
+  - Status: not started
+  - Notes: depends on background finalization (now implemented)
+
+there is a manifest.json in the meetings folder that allows an llm to understand the contents.  this manifest.json needs to be updated whenever there is a CRUD event in the meetings folder.  here's how i'd like it to work:
+
+1) have an api (that includes restful api that an external service could call to update meeting manifest.json.  if it is called with a meeting id, it should update that meeting, regardless of whether it is marked as needing update or not.  if it's called without a meeting id, it should sweep through and update the manifest for all meetings that need updates.
+2) during the finalization phase of a meeting, it should update the manifest for that one meeting.  use api #1 above.   once it has done that, it should set the flag indicating the manifest.json has been updated.
+3) during boot, we ahve a background finalization pass that goes through each meeting to see what finalization is needed.  it does this serially slowly. that pass should include checking for needed manifest.json updates.
+
+for consistency, there should only be the above code that updates the manifest.json.  there should not be multiple. others that need updates should call this api.
+
+
+---
+
+# configurable folder
+  - Type: new feature
+  - Size: medium
+  - Status: implemented
+  - Implementation:
+    - `app/routers/settings.py` - browse-folders, data-dir endpoints
+    - `app/static/settings.js` - folder browser modal, move/copy/fresh actions
+    - `app/static/settings.html` - Data Folder section in General tab
+
+in the general section of the settings, allow the user to pick the folder where all the meetings should be saved.
+
+make it so that another llm could simultaneously read the save folder and understand it.  does this mean there needs to be an agents.md or README.md or some other file?  what do you recommend?  also, is there something that should be done to best enable another llm from another program to rag the conversations and understand it best?
+
+--- 
+
+# cleanup settings
+  - Type: enhancement
+  - Size: small
+  - Status: implemented
+  - Implementation:
+    - `app/static/settings.html` - tabbed layout with sidebar navigation
+    - `app/static/settings.js` - initSettingsTabs() function
+    - `app/static/styles.css` - .settings-tab, .settings-sidebar, .settings-content styles
+
+this is a visual cleanup only.  do not change functionality of the settings or any other functionality in the product
+
+group all the settings into tabs.  the tabs should be on the side similar to how cursor does settings.
+
+the 3 groups are:
+1) general
+2) models
+3) debug
+
+
+
+---
+
+# cleanup debug logs
+  - Type: enhancement
+  - Size: medium
+  - Status: implemented
+  - Implementation:
+    - `app/static/debug-flags.js` - NotetakerDebug module for flag management
+    - `app/static/settings.html` - Debug Flags subsection in Debug tab
+    - `app/static/settings.js` - initDebugFlagsUI(), loadDebugFlags(), renderDebugFlags()
+    - `app/routers/settings.py` - /api/settings/debug endpoints
+    - Server logs go to logs/server_*.log
+
+change the runtime debug logs to go to log/server_[datetime].log.  
+
+in settings, create a debug flags section that is similar to what you see in the cold-local-llm-server project.  there is one main switch to turn on/off debug flags.  when it is turned on, i can then choose specific flags to turn on/off.  group the notetaker flags to be appropriate for notetaker.  don't copy the flags in cold-local-llm-server.  just use that approach as a model.
+
+do not change the logical flow of the project itself.  only change the debug logging functionality.
+
+--- 
+
+# meetings search
+  - Type: new feature
+  - Size: small
+  - Status: implemented
+  - Implementation:
+    - `app/static/meeting.html` - search bars in each grid panel header
+    - `app/static/meeting.js` - search toggle and navigation for transcript, summary, chat, notes panels
+
+each panel in the meetings dialog is supposed to have a search icon implemented like the chat search.  ie, it should e in the banner.  selecting it toggles the search.  and it should have next/previous that searches through the content of that panel
+
+---
+
+# home page search
+  - Type: new feature
+  - Size: medium
+  - Status: implemented
+  - Implementation:
+    - `app/static/index.html` - search icon and search bar in header
+    - `app/static/app.js` - toggleSearch(), performSearch(), renderSearchResults()
+    - `app/routers/meetings.py` - /api/meetings/search endpoint
+
+in the home page there should be a search icon in the top bar.  put a search icon button to the right of the "notetaker" and version number.  when clicked, it should provide a search box in the top bar.  when the user types a search and hits enter, the main window should provide search results.  it should list all the results highlighting where it matches.  each search match should include the meeting name and the snippet of the match, whether it's title, transcript, summary, user notes,  attendees,  chat, etc...  anything in the meetings.json that is displayed to the user.
+
+---
+
 # user login
   - Type: new feature
   - Size: large (multi-step, open questions: auth provider, scopes, privacy, multi-user storage layout)

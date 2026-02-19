@@ -1651,10 +1651,111 @@ function testInitDebugSection() {
     logAllCheckbox.addEventListener("change", () => testToggleLogAll(logAllCheckbox.checked));
   }
   
+  // Finalization controls
+  const restartFinalizationBtn = document.getElementById("restart-finalization-btn");
+  const refreshFinalizationBtn = document.getElementById("refresh-finalization-btn");
+  if (restartFinalizationBtn) restartFinalizationBtn.addEventListener("click", restartFinalization);
+  if (refreshFinalizationBtn) refreshFinalizationBtn.addEventListener("click", loadFinalizationStatus);
+  
   // Initial load
   testLoadRagMetrics();
   testLoadLlmLogs();
   testLoadLogAllStatus();
+  loadFinalizationStatus();
+}
+
+// =============================================================================
+// Finalization Status Functions
+// =============================================================================
+
+async function loadFinalizationStatus() {
+  try {
+    const response = await fetch("/api/test/finalization-status");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    
+    // Update status text
+    const statusEl = document.getElementById("finalization-status-text");
+    if (statusEl) {
+      if (data.error) {
+        statusEl.textContent = "Unavailable";
+      } else if (data.active) {
+        statusEl.textContent = "Active";
+      } else if (data.running) {
+        statusEl.textContent = "Idle";
+      } else {
+        statusEl.textContent = "Stopped";
+      }
+    }
+    
+    // Update pending count
+    const pendingEl = document.getElementById("finalization-pending-count");
+    if (pendingEl) {
+      pendingEl.textContent = data.pending_count ?? 0;
+    }
+    
+    // Show/hide current work info
+    const currentWorkEl = document.getElementById("finalization-current-work");
+    const currentMeetingEl = document.getElementById("finalization-current-meeting");
+    const currentStageEl = document.getElementById("finalization-current-stage");
+    
+    if (currentWorkEl) {
+      if (data.active && data.current_meeting_id) {
+        currentWorkEl.style.display = "block";
+        if (currentMeetingEl) currentMeetingEl.textContent = data.current_meeting_id.slice(0, 8) + "...";
+        if (currentStageEl) currentStageEl.textContent = data.current_stage || "unknown";
+      } else {
+        currentWorkEl.style.display = "none";
+      }
+    }
+    
+    // Update restart button state
+    const restartBtn = document.getElementById("restart-finalization-btn");
+    if (restartBtn) {
+      restartBtn.disabled = data.active || data.error;
+      restartBtn.textContent = data.active ? "Finalization Running..." : "Restart Finalization";
+    }
+  } catch (error) {
+    debugError("Failed to load finalization status", error);
+    
+    const statusEl = document.getElementById("finalization-status-text");
+    if (statusEl) statusEl.textContent = "Error";
+    
+    const restartBtn = document.getElementById("restart-finalization-btn");
+    if (restartBtn) restartBtn.disabled = true;
+  }
+}
+
+async function restartFinalization() {
+  const restartBtn = document.getElementById("restart-finalization-btn");
+  if (restartBtn) {
+    restartBtn.disabled = true;
+    restartBtn.textContent = "Restarting...";
+  }
+  
+  try {
+    const response = await fetch("/api/test/restart-finalization", { method: "POST" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    
+    if (data.status === "ok") {
+      NotificationCenter.success("Finalization restarted");
+    } else if (data.status === "already_active") {
+      NotificationCenter.info("Finalization already in progress");
+    }
+    
+    // Refresh status after a short delay
+    setTimeout(loadFinalizationStatus, 1000);
+  } catch (error) {
+    debugError("Failed to restart finalization", error);
+    NotificationCenter.error(`Failed to restart finalization: ${error.message}`);
+  } finally {
+    if (restartBtn) {
+      restartBtn.textContent = "Restart Finalization";
+    }
+    // Refresh status to get accurate state
+    await loadFinalizationStatus();
+  }
 }
 
 // ── Data folder configuration ─────────────────────────────────────────
