@@ -582,6 +582,17 @@ function startMeetingsEventStream() {
       return;
     }
     debugLog("Meetings SSE event", payload);
+    
+    // Handle finalization events for notifications
+    if (payload.type === "finalization_complete") {
+      const title = payload.data?.meeting_title || "Meeting";
+      NotificationCenter.success(`Finalization complete: ${title}`);
+    } else if (payload.type === "finalization_failed") {
+      const title = payload.data?.meeting_title || "Meeting";
+      const errorCount = payload.data?.errors?.length || 1;
+      NotificationCenter.error(`Finalization failed: ${title} (${errorCount} error${errorCount > 1 ? "s" : ""})`);
+    }
+    
     refreshMeetings();
   };
   source.onerror = (error) => {

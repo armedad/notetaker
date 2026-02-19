@@ -18,6 +18,11 @@
           <div class="finalization-spinner small"></div>
           <span id="finalization-status-text">Processing...</span>
         </div>
+        <div id="finalization-error-alert" class="finalization-error-alert" style="display: none;">
+          <span class="alert-icon">⚠️</span>
+          <span id="finalization-error-text">Finalization failed</span>
+          <button id="show-error-details" class="secondary small">Details</button>
+        </div>
         <div class="status error inline" id="global-error"></div>
         <div class="status inline" id="global-busy"></div>
         <div class="header-actions">
@@ -26,6 +31,24 @@
           <button id="resume-transcription" class="secondary" style="display: none;">Resume</button>
           <button id="export-meeting" class="secondary">Export</button>
           <button id="delete-meeting" class="secondary">Delete</button>
+          <div class="notification-center">
+            <button id="notification-toggle" class="notification-bell" title="Notifications">
+              🔔
+              <span id="notification-badge" class="notification-badge">0</span>
+            </button>
+            <div id="notification-panel" class="notification-panel" style="display: none;">
+              <div class="notification-panel-header">
+                <h3>Notifications</h3>
+                <div class="notification-panel-actions">
+                  <button id="mark-all-read">Mark all read</button>
+                  <button id="clear-notifications">Clear</button>
+                </div>
+              </div>
+              <div id="notification-list" class="notification-list">
+                <div class="notification-empty">No notifications</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </header>
@@ -196,6 +219,31 @@
       </div>
     </div>
 
+    <!-- Finalization error details modal -->
+    <div id="error-details-modal" class="modal-overlay" style="display:none">
+      <div class="modal error-details-modal">
+        <div class="modal-header">
+          <h3>Finalization Errors</h3>
+          <button class="modal-close" id="error-modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="error-list" class="error-list"></div>
+          <div id="auto-fix-section" class="auto-fix-section" style="display:none">
+            <h4>AI Analysis</h4>
+            <div id="auto-fix-content" class="auto-fix-content"></div>
+          </div>
+          <details class="meeting-json-details">
+            <summary>Full Meeting JSON</summary>
+            <pre id="meeting-json" class="meeting-json-pre"></pre>
+          </details>
+        </div>
+        <div class="modal-footer">
+          <button id="retry-finalization-btn" class="primary">Retry Failed Stages</button>
+          <button id="auto-fix-btn" class="secondary">Analyze with AI</button>
+        </div>
+      </div>
+    </div>
+
     <script>
     // Diagnostic: catch ALL errors on this page
     window.addEventListener('error', function(e) {
@@ -204,11 +252,12 @@
     // Diagnostic: confirm inline scripts work
     fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.html:inline_script',message:'INLINE SCRIPT OK - about to load chat.js and meeting.js',data:{},timestamp:Date.now(),runId:'diag',hypothesisId:'DIAG'})}).catch(function(){});
     </script>
+    <script src="/static/notifications.js"></script>
     <script src="/static/components/chat/chat-ui.js?v=1"></script>
     <script>
     fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.html:after_chat_js',message:'AFTER chat.js loaded',data:{},timestamp:Date.now(),runId:'diag',hypothesisId:'DIAG'})}).catch(function(){});
     </script>
-    <script src="/static/meeting.js?v=181"></script>
+    <script src="/static/meeting.js?v=182"></script>
     <script>
     fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.html:after_meeting_js',message:'AFTER meeting.js loaded',data:{typeof_state:typeof state,typeof_refreshMeeting:typeof refreshMeeting},timestamp:Date.now(),runId:'diag',hypothesisId:'DIAG'})}).catch(function(){});
     </script>

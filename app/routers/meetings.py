@@ -386,4 +386,128 @@ If you cannot determine the name, respond with:
             raise HTTPException(status_code=500, detail="Failed to save draft")
         return {"status": "ok"}
 
+    # ---- Finalization error management ----
+
+    @router.get("/api/meetings/{meeting_id}/finalization-errors")
+    def get_finalization_errors(meeting_id: str) -> dict:
+        """Get finalization errors and full meeting JSON for debugging."""
+        meeting = meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        
+        errors = meeting_store.get_finalization_errors(meeting)
+        failed_stages = meeting_store.get_failed_finalization_stages(meeting)
+        
+        return {
+            "meeting_id": meeting_id,
+            "has_errors": len(errors) > 0,
+            "failed_stages": failed_stages,
+            "errors": errors,
+            "meeting_json": meeting,
+        }
+
+    class RetryFinalizationRequest(BaseModel):
+        stages: Optional[list[str]] = None  # None = retry all failed stages
+
+    @router.post("/api/meetings/{meeting_id}/retry-finalization")
+    def retry_finalization(meeting_id: str, payload: RetryFinalizationRequest = None) -> dict:
+        """Clear failed stages and re-queue meeting for background finalization."""
+        meeting = meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        
+        # Map human-readable labels back to stage keys
+        label_to_key = {v: k for k, v in meeting_store.FINALIZATION_STAGE_LABELS.items()}
+        
+        stages_to_clear = None
+        if payload and payload.stages:
+            stages_to_clear = []
+            for stage in payload.stages:
+                # Accept either the key or the label
+                if stage in label_to_key:
+                    stages_to_clear.append(label_to_key[stage])
+                elif stage in meeting_store.FINALIZATION_STAGE_LABELS:
+                    stages_to_clear.append(stage)
+                else:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Unknown stage: {stage}. Valid stages: {list(meeting_store.FINALIZATION_STAGE_LABELS.keys())}"
+                    )
+        
+        updated = meeting_store.clear_failed_stages(meeting_id, stages_to_clear)
+        if not updated:
+            raise HTTPException(status_code=500, detail="Failed to clear stages")
+        
+        # Get updated state
+        pending = meeting_store.get_pending_finalization_stages(updated)
+        failed = meeting_store.get_failed_finalization_stages(updated)
+        
+        logger.info(
+            "Retry finalization: meeting_id=%s stages_cleared=%s pending=%s",
+            meeting_id, stages_to_clear or "all", pending
+        )
+        
+        return {
+            "status": "ok",
+            "meeting_id": meeting_id,
+            "pending_stages": pending,
+            "failed_stages": failed,
+            "needs_finalization": meeting_store.needs_finalization(updated),
+        }
+
+    @router.post("/api/meetings/{meeting_id}/auto-fix-finalization")
+    def auto_fix_finalization(meeting_id: str) -> StreamingResponse:
+        """Use LLM to analyze finalization errors and suggest fixes (streaming)."""
+        meeting = meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        
+        errors = meeting_store.get_finalization_errors(meeting)
+        if not errors:
+            raise HTTPException(status_code=400, detail="No failed stages to analyze")
+        
+        # Build prompt
+        errors_text = "\n".join(
+            f"- **{stage}**: {error or 'No error message recorded'}"
+            for stage, error in errors.items()
+        )
+        
+        # Get schema from meeting_store
+        schema_doc = meeting_store._DATA_FOLDER_README if hasattr(meeting_store, '_DATA_FOLDER_README') else "Schema documentation not available"
+        
+        prompt = f"""You are debugging a meeting finalization error. Analyze the error and meeting data below.
+
+## Error Details
+{errors_text}
+
+## Meeting JSON
+```json
+{json.dumps(meeting, indent=2, default=str)}
+```
+
+## Expected Schema
+{schema_doc}
+
+Identify what went wrong and suggest a specific fix. If the error is:
+- Transient (network, timeout): Recommend clicking "Retry"
+- Data corruption: Suggest what JSON needs to be corrected
+- Missing dependencies (e.g., no audio file): Explain what's needed
+
+Respond with:
+1. **Root Cause Analysis**: What likely caused this error
+2. **Recommended Action**: What the user should do
+3. **Technical Details**: Any relevant technical information for debugging
+
+Keep your response concise and actionable."""
+
+        def generate():
+            try:
+                for token in summarization_service.prompt_stream(prompt):
+                    yield token
+            except Exception as exc:
+                logger.warning("Auto-fix LLM error: %s", exc)
+                yield f"\n\n**Error during analysis**: {type(exc).__name__}: {str(exc)}"
+
+        return StreamingResponse(generate(), media_type="text/plain")
+
     return router
