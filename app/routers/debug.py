@@ -24,6 +24,7 @@ def create_test_debug_router(
     llm_logger: TestLLMLogger,
     rag_metrics: TestRAGMetrics,
     background_finalizer=None,
+    meeting_store=None,
 ) -> APIRouter:
     """Create the debug API router with endpoints for observability.
     
@@ -31,6 +32,7 @@ def create_test_debug_router(
         llm_logger: TestLLMLogger instance for log operations
         rag_metrics: TestRAGMetrics instance for metrics operations
         background_finalizer: Optional BackgroundFinalizer instance for finalization controls
+        meeting_store: Optional MeetingStore instance for folder docs regeneration
         
     Returns:
         FastAPI router with debug endpoints mounted
@@ -216,5 +218,34 @@ def create_test_debug_router(
             "message": "Finalization restarted",
             "pending_count": status.get("pending_count", 0),
         }
+    
+    # -------------------------------------------------------------------------
+    # Folder Documentation Endpoints
+    # -------------------------------------------------------------------------
+    
+    @router.post("/regenerate-folder-docs")
+    def regenerate_folder_docs() -> dict:
+        """Regenerate README.md and manifest.json in the meetings folder.
+        
+        Returns:
+            Dict with status message
+        """
+        if meeting_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Meeting store not available",
+            )
+        
+        try:
+            meeting_store.regenerate_folder_docs()
+            return {
+                "status": "ok",
+                "message": "Folder documentation regenerated successfully",
+            }
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to regenerate folder docs: {exc}",
+            )
     
     return router
