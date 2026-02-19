@@ -1657,6 +1657,10 @@ function testInitDebugSection() {
   if (restartFinalizationBtn) restartFinalizationBtn.addEventListener("click", restartFinalization);
   if (refreshFinalizationBtn) refreshFinalizationBtn.addEventListener("click", loadFinalizationStatus);
   
+  // Folder docs controls
+  const regenerateFolderDocsBtn = document.getElementById("regenerate-folder-docs-btn");
+  if (regenerateFolderDocsBtn) regenerateFolderDocsBtn.addEventListener("click", regenerateFolderDocs);
+  
   // Initial load
   testLoadRagMetrics();
   testLoadLlmLogs();
@@ -1755,6 +1759,48 @@ async function restartFinalization() {
     }
     // Refresh status to get accurate state
     await loadFinalizationStatus();
+  }
+}
+
+// =============================================================================
+// Folder Documentation Regeneration
+// =============================================================================
+
+async function regenerateFolderDocs() {
+  const btn = document.getElementById("regenerate-folder-docs-btn");
+  const output = document.getElementById("folder-docs-output");
+  
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Regenerating...";
+  }
+  if (output) output.textContent = "";
+  
+  try {
+    const response = await fetch("/api/test/regenerate-folder-docs", { method: "POST" });
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.detail || `HTTP ${response.status}`);
+    }
+    
+    NotificationCenter.success("Folder docs regenerated");
+    if (output) {
+      output.textContent = "README.md and manifest.json regenerated successfully in meetings folder.";
+      output.className = "output success";
+    }
+  } catch (error) {
+    debugError("Failed to regenerate folder docs", error);
+    NotificationCenter.error(`Failed to regenerate folder docs: ${error.message}`);
+    if (output) {
+      output.textContent = `Error: ${error.message}`;
+      output.className = "output error";
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Regenerate Folder Docs";
+    }
   }
 }
 

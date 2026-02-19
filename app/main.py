@@ -295,7 +295,7 @@ def create_app() -> FastAPI:
                 "H6",
             )
         
-        debug_router = create_test_debug_router(ctx, test_llm_logger, test_rag_metrics, background_finalizer)
+        debug_router = create_test_debug_router(ctx, test_llm_logger, test_rag_metrics, background_finalizer, meeting_store)
         app.include_router(debug_router)
         logger.info("Boot: test debug router mounted (LLM observability)")
         app.include_router(create_settings_router(ctx))

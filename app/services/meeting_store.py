@@ -35,28 +35,20 @@ def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothe
 # #endregion
 
 
-_DATA_FOLDER_README = """\
-# Notetaker Data Folder
+_MEETINGS_FOLDER_README = """\
+# Notetaker Meetings
 
-This directory contains all meeting data managed by [Notetaker](https://github.com/your-org/notetaker).
+This directory contains all meeting JSON files managed by [Notetaker](https://github.com/your-org/notetaker).
 
-## Folder Structure
+## Files
 
-```
-.
-├── README.md          ← This file
-├── manifest.json      ← Machine-readable index of all meetings
-├── meetings/          ← One JSON file per meeting
-│   └── 20260213T140000-0800__<uuid>.json
-├── recordings/        ← Audio recordings (WAV)
-│   └── <uuid>.wav
-└── uploads/           ← Uploaded audio files + converted WAVs
-    └── <uuid>.wav
-```
+- `README.md` - This file
+- `manifest.json` - Machine-readable index of all meetings
+- `*.json` - Individual meeting files (one per meeting)
 
 ## Meeting JSON Schema
 
-Each file in `meetings/` is a JSON object with these top-level fields:
+Each meeting file is a JSON object with these top-level fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -113,7 +105,7 @@ To find meetings programmatically:
 
 1. Read `manifest.json` for a quick overview
 2. Filter by date, title, or attendee count
-3. Read individual meeting JSON files from `meetings/` for full content
+3. Read individual meeting JSON files for full content
 """
 
 
@@ -177,28 +169,25 @@ class MeetingStore:
         manifest = {
             "version": 1,
             "generated_at": datetime.utcnow().isoformat(),
-            "meetings_dir": "meetings/",
-            "recordings_dir": "recordings/",
-            "uploads_dir": "uploads/",
             "meeting_count": 0,
             "meetings": [],
         }
         entries = self._build_manifest_entries()
         manifest["meeting_count"] = len(entries)
         manifest["meetings"] = entries
-        manifest_path = os.path.join(self.data_dir, "manifest.json")
+        manifest_path = os.path.join(self._meetings_dir, "manifest.json")
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     def _write_readme(self) -> None:
-        readme_path = os.path.join(self.data_dir, "README.md")
-        content = _DATA_FOLDER_README
+        readme_path = os.path.join(self._meetings_dir, "README.md")
+        content = _MEETINGS_FOLDER_README
         with open(readme_path, "w", encoding="utf-8") as f:
             f.write(content)
 
     def update_manifest_entry(self, meeting_id: str) -> None:
         """Update a single meeting's entry in manifest.json without full regeneration."""
-        manifest_path = os.path.join(self.data_dir, "manifest.json")
+        manifest_path = os.path.join(self._meetings_dir, "manifest.json")
         try:
             if os.path.exists(manifest_path):
                 with open(manifest_path, "r", encoding="utf-8") as f:
