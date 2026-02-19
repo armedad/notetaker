@@ -58,6 +58,12 @@ class BackgroundFinalizer:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
+        
+        # Track current work for status reporting
+        self._current_meeting_id: Optional[str] = None
+        self._current_stage: Optional[str] = None
+        self._lock = threading.Lock()
     
     def start(self) -> None:
         """Start the background finalizer thread."""
@@ -82,9 +88,40 @@ class BackgroundFinalizer:
         
         self._running = False
         self._stop_event.set()
+        self._wake_event.set()
         if self._thread:
             self._thread.join(timeout=5.0)
         _logger.info("BackgroundFinalizer stopped")
+    
+    def wake(self) -> None:
+        """Wake the finalizer to process pending meetings immediately."""
+        self._wake_event.set()
+    
+    def get_status(self) -> dict:
+        """Get current status of the background finalizer.
+        
+        Returns:
+            Dict with:
+                - running: bool - whether the service is running
+                - active: bool - whether currently processing a meeting
+                - current_meeting_id: str or None
+                - current_stage: str or None
+                - pending_count: int - number of meetings waiting to be finalized
+        """
+        with self._lock:
+            pending = []
+            try:
+                pending = self._meeting_store.list_meetings_needing_finalization()
+            except Exception:
+                pass
+            
+            return {
+                "running": self._running,
+                "active": self._current_meeting_id is not None,
+                "current_meeting_id": self._current_meeting_id,
+                "current_stage": self._current_stage,
+                "pending_count": len(pending),
+            }
     
     def _sweep_loop(self) -> None:
         """Main loop that sweeps for and processes incomplete meetings."""
@@ -107,8 +144,11 @@ class BackgroundFinalizer:
                         "BackgroundFinalizer completed meeting: %s",
                         meeting_id,
                     )
-                    # Wait before processing next meeting
-                    self._stop_event.wait(self._delay_between_meetings)
+                    # Wait before processing next meeting (but can be woken)
+                    self._wake_event.clear()
+                    self._wake_event.wait(self._delay_between_meetings)
+                    if self._stop_event.is_set():
+                        break
                 else:
                     # No meetings need finalization, wait and check again
                     _logger.debug(
@@ -116,14 +156,18 @@ class BackgroundFinalizer:
                         "sleeping %ds",
                         self._idle_check_interval,
                     )
-                    self._stop_event.wait(self._idle_check_interval)
+                    self._wake_event.clear()
+                    self._wake_event.wait(self._idle_check_interval)
+                    if self._stop_event.is_set():
+                        break
             except Exception as exc:
                 _logger.exception(
                     "BackgroundFinalizer sweep loop error: %s",
                     exc,
                 )
                 # Wait before retrying on error
-                self._stop_event.wait(60.0)
+                self._wake_event.clear()
+                self._wake_event.wait(60.0)
     
     def _find_next_incomplete(self) -> Optional[dict]:
         """Find the oldest meeting that needs finalization.
@@ -142,6 +186,12 @@ class BackgroundFinalizer:
             )
         return None
     
+    def _set_current_work(self, meeting_id: Optional[str], stage: Optional[str]) -> None:
+        """Update current work tracking."""
+        with self._lock:
+            self._current_meeting_id = meeting_id
+            self._current_stage = stage
+    
     def _finalize_meeting(self, meeting: dict) -> None:
         """Run finalization for a single meeting.
         
@@ -157,34 +207,37 @@ class BackgroundFinalizer:
         if not meeting_id:
             return
         
-        audio_path = meeting.get("audio_path")
-        finalization = meeting.get("finalization", {})
-        # Migrate old format if needed
-        finalization = self._meeting_store._migrate_finalization_state(finalization)
-        
-        # Get transcript segments
-        transcript = meeting.get("transcript", {})
-        segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
-        
-        # Check which stages need to run (only pending, not failed)
-        needs_diarization = finalization.get("diarization") == MeetingStore.FINALIZATION_PENDING
-        needs_speaker_names = finalization.get("speaker_names") == MeetingStore.FINALIZATION_PENDING
-        needs_summary = finalization.get("summary") == MeetingStore.FINALIZATION_PENDING
-        needs_title = finalization.get("title") == MeetingStore.FINALIZATION_PENDING
-        
-        pending_stages = self._meeting_store.get_pending_finalization_stages(meeting)
-        failed_stages = self._meeting_store.get_failed_finalization_stages(meeting)
-        _logger.info(
-            "BackgroundFinalizer: meeting %s - pending: %s, failed: %s",
-            meeting_id,
-            pending_stages,
-            failed_stages,
-        )
+        self._set_current_work(meeting_id, "starting")
+        errors_occurred = []
         
         try:
+            audio_path = meeting.get("audio_path")
+            finalization = meeting.get("finalization", {})
+            # Migrate old format if needed
+            finalization = self._meeting_store._migrate_finalization_state(finalization)
+            
+            # Get transcript segments
+            transcript = meeting.get("transcript", {})
+            segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
+            
+            # Check which stages need to run (only pending, not failed)
+            needs_diarization = finalization.get("diarization") == MeetingStore.FINALIZATION_PENDING
+            needs_speaker_names = finalization.get("speaker_names") == MeetingStore.FINALIZATION_PENDING
+            needs_summary = finalization.get("summary") == MeetingStore.FINALIZATION_PENDING
+            needs_title = finalization.get("title") == MeetingStore.FINALIZATION_PENDING
+            
+            pending_stages = self._meeting_store.get_pending_finalization_stages(meeting)
+            failed_stages = self._meeting_store.get_failed_finalization_stages(meeting)
+            _logger.info(
+                "BackgroundFinalizer: meeting %s - pending: %s, failed: %s",
+                meeting_id,
+                pending_stages,
+                failed_stages,
+            )
             # Stage 1: Diarization
             diarization_segments = []
             if needs_diarization and audio_path and self._diarization.is_enabled():
+                self._set_current_work(meeting_id, "diarization")
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Analyzing speakers...", 0.1
                 )
@@ -204,13 +257,17 @@ class BackgroundFinalizer:
                         meeting_id, exc,
                     )
                     # Mark as failed so it won't be retried
-                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "diarization")
+                    self._meeting_store.mark_finalization_stage_failed(
+                        meeting_id, "diarization", f"{type(exc).__name__}: {str(exc)}"
+                    )
+                    errors_occurred.append(("diarization", str(exc)))
             elif needs_diarization:
                 # No audio or diarization disabled, mark as done
                 self._meeting_store.mark_finalization_stage(meeting_id, "diarization")
             
             # Stage 2: Speaker name identification
             if needs_speaker_names and diarization_segments:
+                self._set_current_work(meeting_id, "speaker_names")
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Identifying speaker names...", 0.3
                 )
@@ -222,13 +279,17 @@ class BackgroundFinalizer:
                         "BackgroundFinalizer: speaker identification failed for %s: %s",
                         meeting_id, exc,
                     )
-                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "speaker_names")
+                    self._meeting_store.mark_finalization_stage_failed(
+                        meeting_id, "speaker_names", f"{type(exc).__name__}: {str(exc)}"
+                    )
+                    errors_occurred.append(("speaker_names", str(exc)))
             elif needs_speaker_names:
                 # No diarization segments to identify, mark as done
                 self._meeting_store.mark_finalization_stage(meeting_id, "speaker_names")
             
             # Stage 3: Summary generation
             if needs_summary:
+                self._set_current_work(meeting_id, "summary")
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Generating summary...", 0.6
                 )
@@ -285,13 +346,17 @@ class BackgroundFinalizer:
                                 "BackgroundFinalizer: summary generation failed for %s: %s",
                                 meeting_id, exc,
                             )
-                            self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary")
+                            self._meeting_store.mark_finalization_stage_failed(
+                                meeting_id, "summary", f"{type(exc).__name__}: {str(exc)}"
+                            )
+                            errors_occurred.append(("summary", str(exc)))
                     else:
                         # No transcript text, mark as complete (nothing to summarize)
                         self._meeting_store.mark_finalization_stage(meeting_id, "summary")
             
             # Stage 4: Title generation
             if needs_title:
+                self._set_current_work(meeting_id, "title")
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Generating title...", 0.9
                 )
@@ -317,7 +382,10 @@ class BackgroundFinalizer:
                                 "BackgroundFinalizer: title generation failed for %s: %s",
                                 meeting_id, exc,
                             )
-                            self._meeting_store.mark_finalization_stage_failed(meeting_id, "title")
+                            self._meeting_store.mark_finalization_stage_failed(
+                                meeting_id, "title", f"{type(exc).__name__}: {str(exc)}"
+                            )
+                            errors_occurred.append(("title", str(exc)))
                     else:
                         # No summary text, mark as complete (can't generate title without summary)
                         self._meeting_store.mark_finalization_stage(meeting_id, "title")
@@ -335,6 +403,32 @@ class BackgroundFinalizer:
                 meeting_id,
                 exc,
             )
+            errors_occurred.append(("unknown", str(exc)))
+        finally:
+            # Publish completion or failure event
+            self._set_current_work(None, None)
+            
+            # Get meeting title for notification
+            meeting = self._meeting_store.get_meeting(meeting_id)
+            meeting_title = "Unknown meeting"
+            if meeting:
+                meeting_title = meeting.get("title") or meeting_id[:8]
+            
+            if errors_occurred:
+                self._meeting_store.publish_event(
+                    "finalization_failed",
+                    meeting_id,
+                    {
+                        "meeting_title": meeting_title,
+                        "errors": [{"stage": s, "error": e} for s, e in errors_occurred],
+                    },
+                )
+            else:
+                self._meeting_store.publish_event(
+                    "finalization_complete",
+                    meeting_id,
+                    {"meeting_title": meeting_title},
+                )
     
     def _identify_speaker_names(self, meeting_id: str, segments: list[dict]) -> None:
         """Use LLM to identify speaker names from transcript context.
