@@ -35,6 +35,7 @@ from app.services.llm.base import LLMProviderError
 from app.services.transcription_pipeline import TranscriptionPipeline, apply_diarization
 from app.services.realtime_diarization import RealtimeDiarizationService
 from app.services.debug_logging import dbg
+from app.services.debug import debug_log
 from app.services.ndjson_debug import dbg as nd_dbg
 
 # #region agent log
@@ -159,7 +160,13 @@ def create_transcription_router(
 
     def get_provider(model_size: str, device: str, compute_type: str) -> FasterWhisperProvider:
         key = (model_size, device, compute_type)
+        # #region agent log
+        _dbg_logger.debug("GET_PROVIDER: key=%s cached=%s", key, key in provider_cache)
+        # #endregion
         if key not in provider_cache:
+            # #region agent log
+            _dbg_logger.debug("GET_PROVIDER_CREATE: creating new FasterWhisperProvider for %s", key)
+            # #endregion
             provider_cache[key] = FasterWhisperProvider(
                 WhisperConfig(
                     model_size=model_size,
@@ -168,11 +175,20 @@ def create_transcription_router(
                 ),
                 diarization_service,
             )
+            # #region agent log
+            _dbg_logger.debug("GET_PROVIDER_CREATED: %s", key)
+            # #endregion
         return provider_cache[key]
 
     def get_pipeline(model_size: str, device: str, compute_type: str) -> TranscriptionPipeline:
         """Get a transcription pipeline with the specified provider configuration."""
+        # #region agent log
+        _dbg_logger.debug("GET_PIPELINE_START: model=%s device=%s compute=%s", model_size, device, compute_type)
+        # #endregion
         provider = get_provider(model_size, device, compute_type)
+        # #region agent log
+        _dbg_logger.debug("GET_PIPELINE_GOT_PROVIDER: model=%s", model_size)
+        # #endregion
         return TranscriptionPipeline(
             provider=provider,
             diarization_service=diarization_service,
@@ -395,6 +411,10 @@ def create_transcription_router(
                     if disk_segments:
                         # Re-transcribe with final model if configured and different
                         final_model = final_default_size
+                        # #region agent log
+                        _dbg_logger.debug("RETRANSCRIBE_CHECK: meeting_id=%s final_model=%s live_model=%s audio_path=%s audio_exists=%s",
+                                         meeting_id, final_model, model_size, audio_path, os.path.isfile(audio_path) if audio_path else False)
+                        # #endregion
                         if (
                             final_model
                             and final_model != "none"
@@ -407,21 +427,58 @@ def create_transcription_router(
                                 f"Re-transcribing with {final_model} model...",
                                 0.05,
                             )
+                            meeting_store.publish_status_log(
+                                meeting_id, "retranscription", "started",
+                                {"live_model": model_size, "final_model": final_model, "audio_path": audio_path},
+                            )
+                            debug_log('TRANSCRIPTION', 'Re-transcription started: meeting=%s live_model=%s final_model=%s wav=%s',
+                                      meeting_id, model_size, final_model, audio_path)
                             logger.info(
                                 "Re-transcribing: meeting_id=%s live_model=%s final_model=%s wav=%s",
                                 meeting_id, model_size, final_model, audio_path,
                             )
                             try:
+                                debug_log('TRANSCRIPTION', 'Loading pipeline: model=%s device=%s compute=%s',
+                                          final_model, final_device, final_compute)
+                                meeting_store.publish_status_log(
+                                    meeting_id, "retranscription", "progress",
+                                    {"step": "loading_model", "model": final_model, "device": final_device, "compute_type": final_compute},
+                                )
                                 final_pipeline = get_pipeline(final_model, final_device, final_compute)
+
+                                debug_log('TRANSCRIPTION', 'Pipeline loaded, starting transcribe_and_format on %s', audio_path)
+                                meeting_store.publish_status_log(
+                                    meeting_id, "retranscription", "progress",
+                                    {"step": "transcribing", "audio_path": audio_path},
+                                )
+                                retrans_start = time.time()
                                 new_segments, new_language = final_pipeline.transcribe_and_format(audio_path)
+                                retrans_elapsed = round(time.time() - retrans_start, 2)
+
+                                debug_log('TRANSCRIPTION', 'Re-transcription finished: segments=%d language=%s elapsed=%.2fs',
+                                          len(new_segments) if new_segments else 0, new_language, retrans_elapsed)
                                 if new_segments:
                                     disk_segments = new_segments
                                     meeting_store.replace_transcript_segments(meeting_id, disk_segments, new_language)
                                     logger.info(
-                                        "Re-transcription complete: meeting_id=%s segments=%d",
-                                        meeting_id, len(disk_segments),
+                                        "Re-transcription complete: meeting_id=%s segments=%d elapsed=%.2fs",
+                                        meeting_id, len(disk_segments), retrans_elapsed,
                                     )
+                                    meeting_store.publish_status_log(
+                                        meeting_id, "retranscription", "output",
+                                        {"segments_count": len(disk_segments), "language": new_language, "elapsed_seconds": retrans_elapsed},
+                                    )
+                                else:
+                                    debug_log('TRANSCRIPTION', 'Re-transcription returned no segments, keeping live transcript')
+                                    meeting_store.publish_status_log(
+                                        meeting_id, "retranscription", "output",
+                                        {"segments_count": 0, "note": "No segments returned, keeping live transcript", "elapsed_seconds": retrans_elapsed},
+                                    )
+                                meeting_store.publish_status_log(
+                                    meeting_id, "retranscription", "completed",
+                                )
                             except Exception as exc:
+                                debug_log('TRANSCRIPTION', 'Re-transcription failed: %s: %s', type(exc).__name__, str(exc)[:500])
                                 logger.warning(
                                     "Re-transcription failed, using live segments: meeting_id=%s error=%s",
                                     meeting_id, exc,
@@ -431,7 +488,23 @@ def create_transcription_router(
                                     f"Re-transcription failed: {type(exc).__name__}. Using live transcript.",
                                     0.08,
                                 )
+                                meeting_store.publish_status_log(
+                                    meeting_id, "retranscription", "failed",
+                                    {"error": f"{type(exc).__name__}: {str(exc)[:200]}"},
+                                )
+                        else:
+                            if final_model and final_model != "none" and final_model != model_size:
+                                debug_log('TRANSCRIPTION', 'Re-transcription skipped: audio_path=%s exists=%s',
+                                          audio_path, os.path.isfile(audio_path) if audio_path else False)
+                                meeting_store.publish_status_log(
+                                    meeting_id, "retranscription", "skipped",
+                                    {"reason": "Audio file not available", "audio_path": audio_path},
+                                )
 
+                        # #region agent log
+                        _dbg_logger.debug("FINAL_PIPELINE_GET: meeting_id=%s model=%s device=%s compute=%s",
+                                         meeting_id, final_model if final_model != "none" else model_size, final_device, final_compute)
+                        # #endregion
                         final_pipeline = get_pipeline(
                             final_model if final_model != "none" else model_size,
                             final_device, final_compute,

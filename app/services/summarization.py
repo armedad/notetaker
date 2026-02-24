@@ -289,11 +289,19 @@ class SummarizationService:
         Yields:
             Token strings as they arrive from the LLM
         """
+        # #region agent log
+        _dbg_logger = logging.getLogger("notetaker.debug")
+        _dbg_logger.debug("SUMMARIZE_STREAM_ENTER: transcript_len=%d notes_count=%d",
+                        len(transcript), len(user_notes) if user_notes else 0)
+        # #endregion
         if not transcript.strip():
             raise LLMProviderError("Transcript is empty")
         
         provider = self._get_provider(provider_override)
         self._logger.info("Streaming summarization using provider=%s", provider.__class__.__name__)
+        # #region agent log
+        _dbg_logger.debug("SUMMARIZE_STREAM_GOT_PROVIDER: provider=%s", provider.__class__.__name__)
+        # #endregion
 
         prompt_path = os.path.join(self._prompts_dir, "summary_prompt.txt")
         try:
@@ -307,6 +315,9 @@ class SummarizationService:
         
         prompt = template.replace("{{transcript}}", transcript)
         prompt = prompt.replace("{{user_notes_section}}", user_notes_section)
+        # #region agent log
+        _dbg_logger.debug("SUMMARIZE_STREAM_CALLING_LLM: prompt_len=%d", len(prompt))
+        # #endregion
         yield from provider.prompt_stream(prompt)
 
     def identify_speaker_name(

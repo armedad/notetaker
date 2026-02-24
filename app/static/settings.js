@@ -785,6 +785,59 @@ async function testDiarizationAccess() {
   }
 }
 
+async function testWhisperModel(type) {
+  const selectId = type === "live" ? "live-model-size" : "final-model-size";
+  const statusId = type === "live" ? "live-model-status" : "final-model-status";
+  const buttonId = type === "live" ? "test-live-model" : "test-final-model";
+
+  const modelSize = document.getElementById(selectId).value;
+  const statusEl = document.getElementById(statusId);
+  const buttonEl = document.getElementById(buttonId);
+
+  if (modelSize === "none") {
+    statusEl.textContent = "Skipped";
+    statusEl.className = "status-pill neutral";
+    return;
+  }
+
+  statusEl.textContent = "Loading...";
+  statusEl.className = "status-pill pending";
+  buttonEl.disabled = true;
+  setGlobalBusy(`Testing ${modelSize} model...`);
+
+  try {
+    const result = await fetchJson("/api/settings/transcription/test-model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_size: modelSize }),
+    });
+
+    if (result.status === "ok") {
+      statusEl.textContent = result.message || "OK";
+      statusEl.className = "status-pill success";
+    } else {
+      statusEl.textContent = result.message || "Failed";
+      statusEl.className = "status-pill error";
+      setTranscriptionOutput(result.message || result.error || "Model test failed");
+    }
+  } catch (error) {
+    statusEl.textContent = "Error";
+    statusEl.className = "status-pill error";
+    setTranscriptionOutput(`Test failed: ${error.message}`);
+  } finally {
+    buttonEl.disabled = false;
+    setGlobalBusy("");
+  }
+}
+
+function setTranscriptionOutput(msg) {
+  const el = document.getElementById("transcription-output");
+  if (el) {
+    el.textContent = msg;
+    el.style.display = msg ? "block" : "none";
+  }
+}
+
 async function saveSummarizationSettings() {
   syncConfigFromModelChoice();
   const payload = {
@@ -962,6 +1015,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   document
     .getElementById("final-model-size")
     .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
+  document
+    .getElementById("test-live-model")
+    .addEventListener("click", () => testWhisperModel("live"));
+  document
+    .getElementById("test-final-model")
+    .addEventListener("click", () => testWhisperModel("final"));
   document
     .getElementById("live-transcribe")
     .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));

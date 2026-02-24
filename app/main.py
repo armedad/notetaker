@@ -5,6 +5,11 @@ import sys
 # This MUST be set before importing any libraries that use huggingface_hub
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
+# Default to offline mode for HuggingFace — no auto-downloads at import time.
+# This MUST be set before huggingface_hub is imported (it reads env at import).
+# The config.json setting can clear this at boot if auto-download is enabled.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
 import json
 import logging
 import time
@@ -66,9 +71,8 @@ def create_app() -> FastAPI:
     logger.info("Boot: starting create_app")
     enable_crash_logging()
 
-    # Default to offline mode for HuggingFace — no auto-downloads.
-    # The global setting in config.json can override this at boot.
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    # HF_HUB_OFFLINE is set at module import time (top of file) to ensure
+    # huggingface_hub sees it before it's imported. Log the current value.
     logger.info("Boot: HF_HUB_OFFLINE=%s (initial)", os.environ.get("HF_HUB_OFFLINE"))
 
     base_dir = os.path.dirname(__file__)
@@ -142,6 +146,12 @@ def create_app() -> FastAPI:
     # Honour the persisted auto-download preference
     if config.get("hf_models", {}).get("auto_download", False):
         os.environ.pop("HF_HUB_OFFLINE", None)
+        # Reload huggingface_hub constants to pick up the env change
+        try:
+            import huggingface_hub.constants
+            huggingface_hub.constants.HF_HUB_OFFLINE = False
+        except Exception:
+            pass
         logger.info("Boot: HF auto-download ON — HF_HUB_OFFLINE cleared")
     else:
         logger.info("Boot: HF auto-download OFF — HF_HUB_OFFLINE=1")

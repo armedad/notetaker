@@ -170,6 +170,9 @@ class WhisperConfig:
     compute_type: str = "int8"
 
 
+_dbg_logger = logging.getLogger("notetaker.debug")
+
+
 class FasterWhisperProvider(TranscriptionProvider):
     def __init__(self, config: WhisperConfig, diarization: DiarizationService) -> None:
         self._config = config
@@ -185,11 +188,27 @@ class FasterWhisperProvider(TranscriptionProvider):
                 self._config.device,
                 self._config.compute_type,
             )
+            # #region agent log
+            _dbg_logger.debug("WHISPER_MODEL_LOAD_START: size=%s device=%s compute_type=%s",
+                            self._config.model_size, self._config.device, self._config.compute_type)
+            _load_start = time.perf_counter()
+            # #endregion
+            # Check if we should only use local files (HF_HUB_OFFLINE mode)
+            local_only = os.environ.get("HF_HUB_OFFLINE", "0") == "1"
             self._model = WhisperModel(
                 self._config.model_size,
                 device=self._config.device,
                 compute_type=self._config.compute_type,
+                local_files_only=local_only,
             )
+            # #region agent log
+            _load_elapsed = time.perf_counter() - _load_start
+            _dbg_logger.debug("WHISPER_MODEL_LOAD_DONE: size=%s elapsed_sec=%.2f", self._config.model_size, _load_elapsed)
+            # #endregion
+        else:
+            # #region agent log
+            _dbg_logger.debug("WHISPER_MODEL_CACHED: size=%s", self._config.model_size)
+            # #endregion
         return self._model
 
     def transcribe(self, audio_path: str) -> TranscriptionResult:
@@ -238,10 +257,25 @@ class FasterWhisperProvider(TranscriptionProvider):
         if not os.path.exists(audio_path):
             raise TranscriptionProviderError("Audio file not found")
 
+        # #region agent log
+        _dbg_logger.debug("WHISPER_STREAM_START: audio_path=%s", audio_path)
+        # #endregion
         model = self._get_model()
+        # #region agent log
+        _dbg_logger.debug("WHISPER_STREAM_GOT_MODEL: audio_path=%s calling transcribe", audio_path)
+        _transcribe_start = time.perf_counter()
+        # #endregion
         try:
-            return model.transcribe(audio_path)
+            result = model.transcribe(audio_path)
+            # #region agent log
+            _transcribe_elapsed = time.perf_counter() - _transcribe_start
+            _dbg_logger.debug("WHISPER_STREAM_TRANSCRIBE_RETURNED: audio_path=%s elapsed_sec=%.2f", audio_path, _transcribe_elapsed)
+            # #endregion
+            return result
         except Exception as exc:
+            # #region agent log
+            _dbg_logger.debug("WHISPER_STREAM_ERROR: audio_path=%s exc_type=%s exc=%s", audio_path, type(exc).__name__, str(exc)[:500])
+            # #endregion
             self._logger.exception("Transcription stream failed: %s", exc)
             raise TranscriptionProviderError("Transcription failed") from exc
 

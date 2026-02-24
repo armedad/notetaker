@@ -106,14 +106,33 @@ class TranscriptionPipeline:
         Returns:
             Tuple of (formatted segments, detected language)
         """
+        # #region agent log
+        _dbg_logger.debug("TRANSCRIBE_FORMAT_START: audio_path=%s provider=%s", audio_path, type(self._provider).__name__)
+        # #endregion
         segments_iter, info = self._provider.stream_segments(audio_path)
+        # #region agent log
+        _dbg_logger.debug("TRANSCRIBE_FORMAT_GOT_ITER: audio_path=%s info_type=%s", audio_path, type(info).__name__)
+        # #endregion
         language = getattr(info, "language", None)
         
         segments: list[dict] = []
+        seg_count = 0
+        # #region agent log
+        _dbg_logger.debug("TRANSCRIBE_FORMAT_ITERATING_SEGMENTS: audio_path=%s starting segment iteration", audio_path)
+        # #endregion
         for segment in segments_iter:
+            seg_count += 1
+            # #region agent log
+            if seg_count <= 3 or seg_count % 10 == 0:
+                _dbg_logger.debug("TRANSCRIBE_FORMAT_SEG: seg_count=%d start=%.2f end=%.2f text_len=%d",
+                                 seg_count, segment.start, segment.end, len(segment.text.strip()))
+            # #endregion
             # Check for cancellation after each segment
             if cancel_event and cancel_event.is_set():
                 self._logger.info("Transcription cancelled during processing")
+                # #region agent log
+                _dbg_logger.debug("TRANSCRIBE_FORMAT_CANCELLED: audio_path=%s seg_count=%d", audio_path, seg_count)
+                # #endregion
                 break
             segments.append({
                 "type": "segment",
@@ -122,6 +141,9 @@ class TranscriptionPipeline:
                 "text": segment.text.strip(),
                 "speaker": None,
             })
+        # #region agent log
+        _dbg_logger.debug("TRANSCRIBE_FORMAT_DONE: audio_path=%s segments=%d language=%s", audio_path, len(segments), language)
+        # #endregion
         
         return segments, language
     
@@ -668,26 +690,31 @@ class TranscriptionPipeline:
                         meeting_id, "diarization", "completed"
                     )
                 except Exception as exc:
+                    import traceback
+                    tb_str = traceback.format_exc()
                     self._logger.warning(
-                        "Diarization failed, continuing without: meeting_id=%s error=%s",
-                        meeting_id, exc
+                        "Diarization failed, continuing without: meeting_id=%s error=%s\n%s",
+                        meeting_id, exc, tb_str
                     )
+                    error_detail = f"{type(exc).__name__}: {str(exc)}"
                     self._meeting_store.publish_finalization_status(
                         meeting_id,
-                        f"Diarization failed: {type(exc).__name__}: {str(exc)[:120]}. Continuing without speaker labels.",
+                        f"Diarization failed: {error_detail[:100]}. Continuing without speaker labels.",
                         0.2,
                     )
                     # Mark diarization as failed (not retried by background finalizer)
                     self._meeting_store.mark_finalization_stage_failed(
-                        meeting_id, "diarization", f"{type(exc).__name__}: {str(exc)}"
+                        meeting_id, "diarization", error_detail
                     )
                     self._meeting_store.publish_status_log(
                         meeting_id, "diarization", "failed",
-                        {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+                        {
+                            "error": error_detail,
+                            "traceback": tb_str,
+                        }
                     )
                     # #region agent log
-                    import traceback
-                    _dbg_logger.debug("batch_diarization_error: meeting_id=%s error=%s", meeting_id, str(exc)[:500])
+                    _dbg_logger.debug("batch_diarization_error: meeting_id=%s error=%s traceback=%s", meeting_id, str(exc)[:500], tb_str[:1000])
                     # #endregion
             
             # Step 4-6: Identify speaker names using LLM
@@ -710,10 +737,13 @@ class TranscriptionPipeline:
                         meeting_id, "speaker_names", "completed"
                     )
                 except Exception as exc:
+                    import traceback
+                    tb_str = traceback.format_exc()
                     self._logger.warning(
-                        "Speaker name identification failed: meeting_id=%s error=%s",
-                        meeting_id, exc
+                        "Speaker name identification failed: meeting_id=%s error=%s\n%s",
+                        meeting_id, exc, tb_str
                     )
+                    error_detail = f"{type(exc).__name__}: {str(exc)}"
                     self._meeting_store.publish_finalization_status(
                         meeting_id,
                         f"Speaker Names failed: {str(exc)[:100]}. Continuing with generic names.",
@@ -721,11 +751,14 @@ class TranscriptionPipeline:
                     )
                     # Mark speaker names as failed
                     self._meeting_store.mark_finalization_stage_failed(
-                        meeting_id, "speaker_names", f"{type(exc).__name__}: {str(exc)}"
+                        meeting_id, "speaker_names", error_detail
                     )
                     self._meeting_store.publish_status_log(
                         meeting_id, "speaker_names", "failed",
-                        {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+                        {
+                            "error": error_detail,
+                            "traceback": tb_str,
+                        }
                     )
             elif audio_path and self._diarization.is_enabled():
                 # Diarization ran but returned no segments - no speakers to identify
@@ -787,7 +820,6 @@ class TranscriptionPipeline:
                             _f.write(_json.dumps({"location":"transcription_pipeline.py:finalize","message":msg,"data":data or {},"timestamp":int(_time.time()*1000),"hypothesisId":"STREAM"})+"\n")
                     _dbg("summary_stream_start", {"meeting_id": meeting_id})
                     # #endregion
-                    _dbg_step("LLM_SUMMARIZE_STREAM_START", {"meeting_id": meeting_id})
                     for token in self._summarization.summarize_stream(summary_text, user_notes=user_notes):
                         accumulated_summary += token
                         token_count += 1
@@ -888,32 +920,38 @@ class TranscriptionPipeline:
                     _dbg_logger.debug("TITLE_GEN_DONE: meeting_id=%s", meeting_id)
                     # #endregion
                 except Exception as exc:
-                    self._logger.warning(
-                        "Summarization failed: meeting_id=%s error=%s",
-                        meeting_id, exc
+                    import traceback
+                    tb_str = traceback.format_exc()
+                    self._logger.error(
+                        "Summarization failed: meeting_id=%s error=%s\n%s",
+                        meeting_id, exc, tb_str
                     )
+                    # Include traceback in user-visible error for debugging
+                    error_detail = f"{type(exc).__name__}: {str(exc)}"
                     self._meeting_store.publish_finalization_status(
                         meeting_id,
-                        f"Summary failed: {type(exc).__name__}: {str(exc)[:120]}",
+                        f"Summary failed: {error_detail[:120]}",
                         0.7,
                     )
                     # Mark summary and title as failed (title depends on summary)
-                    error_msg = f"{type(exc).__name__}: {str(exc)}"
-                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary", error_msg)
+                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary", error_detail)
                     self._meeting_store.mark_finalization_stage_failed(
                         meeting_id, "title", "Summary generation failed (required for title)"
                     )
+                    # Include full traceback in status log for debugging
                     self._meeting_store.publish_status_log(
                         meeting_id, "summary", "failed",
-                        {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+                        {
+                            "error": error_detail,
+                            "traceback": tb_str,
+                        }
                     )
                     self._meeting_store.publish_status_log(
                         meeting_id, "title", "failed",
                         {"error": "Summary generation failed (required for title)"}
                     )
                     # #region agent log
-                    import traceback as _tb_sum
-                    _dbg_logger.debug("SUMMARIZATION_ERROR: meeting_id=%s error=%s", meeting_id, str(exc)[:500])
+                    _dbg_logger.debug("SUMMARIZATION_ERROR: meeting_id=%s error=%s traceback=%s", meeting_id, str(exc)[:500], tb_str[:1000])
                     # #endregion
             
             # Step 10: Ensure attendees are created from speaker labels
@@ -945,17 +983,40 @@ class TranscriptionPipeline:
             return result
             
         except Exception as exc:
+            import traceback
+            tb_str = traceback.format_exc()
             # #region agent log
-            _dbg_logger.debug("FINALIZATION_CRASH: meeting_id=%s error=%s", meeting_id, str(exc)[:500])
+            _dbg_logger.debug("FINALIZATION_CRASH: meeting_id=%s error=%s traceback=%s", meeting_id, str(exc)[:500], tb_str[:1000])
             # #endregion
             self._logger.exception(
                 "finalize_meeting_with_diarization failed: meeting_id=%s error=%s",
                 meeting_id, exc
             )
+            error_detail = f"{type(exc).__name__}: {str(exc)}"
             self._meeting_store.publish_finalization_status(
                 meeting_id,
-                f"Finalization failed: {type(exc).__name__}: {str(exc)[:120]}",
+                f"Finalization failed: {error_detail[:120]}",
                 0.0,
+            )
+            # Publish traceback to status log for debugging
+            self._meeting_store.publish_status_log(
+                meeting_id, "finalization", "failed",
+                {
+                    "error": error_detail,
+                    "traceback": tb_str,
+                }
+            )
+            # Publish finalization_failed event for notification system
+            meeting = self._meeting_store.get_meeting(meeting_id)
+            meeting_title = meeting.get("title") if meeting else meeting_id[:8]
+            self._meeting_store.publish_event(
+                "finalization_failed",
+                meeting_id,
+                {
+                    "meeting_title": meeting_title,
+                    "errors": [{"stage": "finalization", "error": error_detail}],
+                    "traceback": tb_str,
+                },
             )
             # Make sure to mark completed on error
             self._meeting_store.update_status(meeting_id, "completed")

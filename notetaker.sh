@@ -54,6 +54,8 @@ fi
 log "Ensuring no stray notetaker processes are running"
 # Kill only notetaker's uvicorn process (specific port) - avoid killing other projects' run.py
 pkill -f "uvicorn run:app.*--port 6684" >/dev/null 2>&1 || true
+# Clear stale HuggingFace lock files that can cause model loading deadlocks
+rm -f ~/.cache/huggingface/hub/.locks/models--Systran--faster-whisper-*/*.lock 2>/dev/null || true
 
 if [[ ! -f "requirements.txt" ]]; then
   log "Missing requirements.txt in ${PROJECT_DIR}"
@@ -132,6 +134,8 @@ terminate_server() {
     fi
   fi
   pkill -f "uvicorn run:app" >/dev/null 2>&1 || true
+  # Clear stale HuggingFace lock files that can cause model loading deadlocks
+  rm -f ~/.cache/huggingface/hub/.locks/models--Systran--faster-whisper-*/*.lock 2>/dev/null || true
 }
 
 handle_interrupt() {

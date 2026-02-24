@@ -848,21 +848,37 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
+  min-width: 20px;
   height: 20px;
+  padding: 0 8px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 700;
   color: #fff;
   background: transparent;
+  white-space: nowrap;
 }
 
-.status-pill.ok {
+.status-pill:empty {
+  display: none;
+}
+
+.status-pill.ok,
+.status-pill.success {
   background: var(--color-success);
 }
 
 .status-pill.error {
   background: var(--color-error);
+}
+
+.status-pill.pending {
+  background: var(--color-warning, #f59e0b);
+  color: #000;
+}
+
+.status-pill.neutral {
+  background: var(--text-muted);
 }
 
 .hint {
