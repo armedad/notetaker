@@ -159,3 +159,22 @@ change the file storage to be structured for multiple users and load the meeting
 end-to-end test harness for automated testing of in-progress features.
 trigger via URL: /test?suite=<id> or /test?all=true
 outputs detailed logs to logs/test_*.log
+
+---
+
+# server-side debug flag system
+  - Type: enhancement
+  - Size: medium
+  - Status: not started
+
+Add a server-side debug flag system for Python backend logs. Currently:
+- Frontend debug flags control browser console + `[CLIENT INFO]` server logs
+- Backend Python `print()` statements (e.g., `[Chat]`, `[RouterService]`) are unconditional
+
+Implement a Python-side debug flag system that:
+1. Reads debug flag settings (shared with frontend or separate config)
+2. Provides a `debug_log(flag, message)` function for Python code
+3. Only prints when the flag is enabled
+4. Allows runtime toggling without server restart
+
+Reference: Cold's frontend debug flag system in `app/static/js/debug-flags.js`

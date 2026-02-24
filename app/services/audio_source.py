@@ -7,15 +7,13 @@ allowing the transcription pipeline to process audio identically regardless of o
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import logging
 from typing import TYPE_CHECKING, Optional
-import os
-import threading
-import uuid
-
-import soundfile as sf
 
 if TYPE_CHECKING:
     from app.services.audio_capture import AudioCaptureService
+
+_dbg_logger = logging.getLogger("notetaker.debug")
 
 
 @dataclass
@@ -56,21 +54,39 @@ class AudioDataSource(ABC):
         pass
     
     @abstractmethod
+    def is_stopped(self) -> bool:
+        """Return True if stop has been signaled (but audio may still be buffered)."""
+        pass
+    
+    @abstractmethod
     def is_complete(self) -> bool:
-        """Return True if all audio has been delivered."""
+        """Return True if all audio has been delivered (stopped AND buffer empty)."""
         pass
     
     @abstractmethod
     def stop(self) -> None:
         """Signal that processing should stop."""
         pass
-
-
-class MicAudioSource(AudioDataSource):
-    """
-    Audio source that reads from a live microphone via AudioCaptureService.
     
-    Chunks are delivered in real-time as they are captured.
+    def drain_remaining(self) -> bytes:
+        """Drain any remaining buffered audio.
+        
+        Call this after is_complete() returns True to retrieve any audio
+        that was buffered but not yet consumed via get_chunk().
+        
+        Returns:
+            Concatenated remaining audio bytes, or empty bytes if none.
+        """
+        return b""
+
+
+class LiveAudioSource(AudioDataSource):
+    """
+    Audio source that reads from AudioCaptureService's live queue.
+
+    Source-agnostic: works identically for both microphone capture and
+    file playback, since both modes feed the same _audio_callback and
+    _live_queue inside AudioCaptureService.
     """
     
     def __init__(self, audio_service: "AudioCaptureService", session_id: str):
@@ -91,10 +107,17 @@ class MicAudioSource(AudioDataSource):
         Get the next audio chunk from the live microphone queue.
         
         Blocks until audio is available or timeout expires.
+        Always tries to get from queue, even after capture stops,
+        to ensure all buffered audio is consumed.
         """
-        if self._stopped or self._audio_service.is_capture_stopped():
-            return None
-        return self._audio_service.get_live_chunk(timeout=timeout_sec)
+        # Always try to get from queue - don't early-exit when stopped
+        # The queue may still have buffered audio to process
+        chunk = self._audio_service.get_live_chunk(timeout=timeout_sec)
+        # #region agent log
+        _dbg_logger.debug("GET_CHUNK_RESULT: chunk_len=%d chunk_is_none=%s stopped=%s capture_stopped=%s", 
+                         len(chunk) if chunk else 0, chunk is None, self._stopped, self._audio_service.is_capture_stopped())
+        # #endregion
+        return chunk
     
     def get_metadata(self) -> AudioMetadata:
         """Return audio metadata from the capture service."""
@@ -107,9 +130,36 @@ class MicAudioSource(AudioDataSource):
             )
         return self._metadata
     
-    def is_complete(self) -> bool:
-        """Check if microphone capture has stopped."""
+    def is_stopped(self) -> bool:
+        """Check if recording has been stopped (user pressed stop or capture ended).
+        
+        This returns True as soon as the stop signal is received, regardless of
+        whether there's still buffered audio to process. Use this for UI status
+        updates or to know when to stop accepting new audio.
+        
+        For the transcription loop, use is_complete() instead.
+        """
         return self._stopped or self._audio_service.is_capture_stopped()
+    
+    def is_complete(self) -> bool:
+        """Check if all audio has been delivered.
+        
+        Returns True only when:
+        1. Recording has stopped (user hit stop OR capture finished), AND
+        2. The audio queue is empty (all buffered audio has been consumed)
+        
+        This ensures the transcription loop processes all audio, even if
+        recording stopped before the loop started (e.g., during model loading).
+        
+        Use is_stopped() if you only need to know whether the user pressed stop.
+        """
+        stopped = self.is_stopped()
+        has_buffered = self._audio_service.has_buffered_audio()
+        result = stopped and not has_buffered
+        # #region agent log
+        _dbg_logger.debug("IS_COMPLETE: stopped=%s has_buffered=%s result=%s", stopped, has_buffered, result)
+        # #endregion
+        return result
     
     def stop(self) -> None:
         """Signal capture to stop and stop the recording device."""
@@ -120,125 +170,21 @@ class MicAudioSource(AudioDataSource):
             self._audio_service.stop_recording()
         except Exception:
             pass  # Recording may have already stopped
-
-
-class FileAudioSource(AudioDataSource):
-    """
-    Audio source that reads from an audio file.
     
-    Supports configurable playback speed to control how quickly chunks are delivered:
-    - 0 = no delay (as fast as possible)
-    - 100 = real-time (wait full chunk duration between chunks)
-    - 300 = 3x faster (wait 1/3 of chunk duration) [DEFAULT]
-    """
-    
-    def __init__(
-        self,
-        file_path: str,
-        chunk_duration_sec: float = 5.0,
-        speed_percent: int = 300,
-    ):
+    def drain_remaining(self) -> bytes:
+        """Drain any remaining audio from the live queue.
+        
+        This is critical for handling the case where the transcription thread
+        starts after recording has already stopped. Audio may have accumulated
+        in the queue during model loading and initialization.
+        
+        Returns:
+            Concatenated remaining audio bytes.
         """
-        Initialize file audio source.
-        
-        Args:
-            file_path: Path to the audio file.
-            chunk_duration_sec: Duration of each chunk in seconds.
-            speed_percent: Playback speed percentage. 0 = no delay, 100 = real-time,
-                          300 = 3x faster (default).
-        """
-        self._file_path = file_path
-        self._chunk_duration = chunk_duration_sec
-        self._speed_percent = speed_percent
-        self._session_id = str(uuid.uuid4())
-        self._stopped = False
-        self._complete = False
-        self._cancel_event = threading.Event()
-        
-        # Load file metadata
-        info = sf.info(file_path)
-        self._samplerate = info.samplerate
-        self._channels = info.channels
-        self._chunk_samples = int(self._samplerate * chunk_duration_sec)
-        
-        # Create chunk generator
-        self._chunk_gen = self._read_chunks()
-    
-    def _read_chunks(self):
-        """Generator that yields audio chunks from the file.
-        
-        Reads as int16 to match MicAudioSource format (which provides int16 from RawInputStream).
-        The transcription pipeline expects 16-bit PCM audio data.
-        """
+        remaining = self._audio_service.drain_live_queue()
         # #region agent log
-        import json
-        def _dbg(msg, data):
-            try:
-                with open(os.path.join(os.getcwd(), "logs", "debug.log"), "a") as f:
-                    f.write(json.dumps({"location": "audio_source.py:_read_chunks", "message": msg, "data": data, "timestamp": __import__("time").time() * 1000, "runId": "post-fix", "hypothesisId": "H1"}) + "\n")
-            except: pass
+        _dbg_logger.debug("DRAINED: bytes=%d", len(remaining))
         # #endregion
-        chunk_num = 0
-        with sf.SoundFile(self._file_path) as f:
-            # #region agent log
-            _dbg("file_opened", {"path": self._file_path, "samplerate": f.samplerate, "channels": f.channels, "frames": f.frames, "format": f.format, "subtype": f.subtype})
-            # #endregion
-            while not self._stopped:
-                # Read as int16 to match MicAudioSource format (16-bit PCM)
-                data = f.read(self._chunk_samples, dtype='int16')
-                if len(data) == 0:
-                    break
-                chunk_bytes = data.tobytes()
-                chunk_num += 1
-                # #region agent log
-                if chunk_num <= 3:
-                    _dbg("chunk_read", {"chunk_num": chunk_num, "data_shape": list(data.shape) if hasattr(data, 'shape') else len(data), "data_dtype": str(data.dtype), "bytes_len": len(chunk_bytes), "samples_in_chunk": len(data), "expected_samples": self._chunk_samples})
-                # #endregion
-                yield chunk_bytes
-    
-    def get_chunk(self, timeout_sec: float = 0.5) -> Optional[bytes]:
-        """
-        Get the next audio chunk from the file.
-        
-        Applies speed delay if configured. A speed_percent of 0 returns chunks
-        as fast as possible; higher values introduce proportional delays.
-        """
-        if self._stopped or self._complete:
-            return None
-        
-        try:
-            chunk = next(self._chunk_gen)
-            
-            # Apply speed delay if configured (speed_percent > 0)
-            if self._speed_percent > 0:
-                # At 100%, delay = chunk_duration (real-time)
-                # At 300%, delay = chunk_duration / 3
-                delay = self._chunk_duration / (self._speed_percent / 100.0)
-                if delay > 0:
-                    # Use cancel_event.wait() so stop() can interrupt the delay
-                    self._cancel_event.wait(timeout=delay)
-                    if self._cancel_event.is_set():
-                        # stop() was called during delay
-                        return None
-            
-            return chunk
-        except StopIteration:
-            self._complete = True
-            return None
-    
-    def get_metadata(self) -> AudioMetadata:
-        """Return audio metadata from the file."""
-        return AudioMetadata(
-            samplerate=self._samplerate,
-            channels=self._channels,
-            session_id=self._session_id,
-        )
-    
-    def is_complete(self) -> bool:
-        """Check if all file audio has been read."""
-        return self._complete or self._stopped
-    
-    def stop(self) -> None:
-        """Signal that processing should stop."""
-        self._stopped = True
-        self._cancel_event.set()  # Interrupt any active delay
+        return remaining
+
+

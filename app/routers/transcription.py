@@ -10,13 +10,14 @@ import json
 import tempfile
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+
 from pydantic import BaseModel, Field
 from datetime import datetime
 
 from app.services.audio_capture import AudioCaptureService
-from app.services.audio_source import AudioDataSource, FileAudioSource, MicAudioSource, AudioMetadata
+from app.services.audio_source import AudioDataSource, LiveAudioSource, AudioMetadata
 from app.services.meeting_store import MeetingStore
+from app.services.active_meeting_tracker import get_tracker, MeetingState
 from app.services.diarization import DiarizationService
 from app.services.diarization.providers.base import (
     DiarizationConfig,
@@ -31,90 +32,21 @@ from app.services.transcription import (
 )
 from app.services.summarization import SummarizationService
 from app.services.llm.base import LLMProviderError
-from app.services.transcription_pipeline import TranscriptionPipeline, apply_diarization, convert_to_wav
+from app.services.transcription_pipeline import TranscriptionPipeline, apply_diarization
 from app.services.realtime_diarization import RealtimeDiarizationService
-from app.services.live_transcription import LiveTranscriptionService
 from app.services.debug_logging import dbg
 from app.services.ndjson_debug import dbg as nd_dbg
 
 # #region agent log
-_DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
-
-
-def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
-    """Write one NDJSON debug line for this session. Best-effort only."""
-    try:
-        payload = {
-            "id": f"log_{int(time.time() * 1000)}_{meeting_id_safe()}",
-            "timestamp": int(time.time() * 1000),
-            "location": location,
-            "message": message,
-            "data": data,
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-        }
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        return
-
-
-def meeting_id_safe() -> str:
-    try:
-        return os.urandom(4).hex()
-    except Exception:
-        return "xxxx"
-
-
-# #region agent log - concurrent stream counter
-import itertools
-_live_stream_counter = itertools.count(1)
-_live_stream_active: dict[str, list[int]] = {}  # meeting_id -> list of stream_ids
-_live_stream_lock = threading.Lock()
-
-
-def _register_live_stream(meeting_id: str) -> int:
-    """Register a new live stream for a meeting, return stream_id."""
-    stream_id = next(_live_stream_counter)
-    with _live_stream_lock:
-        if meeting_id not in _live_stream_active:
-            _live_stream_active[meeting_id] = []
-        _live_stream_active[meeting_id].append(stream_id)
-        concurrent = len(_live_stream_active[meeting_id])
-    return stream_id, concurrent
-
-
-def _unregister_live_stream(meeting_id: str, stream_id: int) -> int:
-    """Unregister a live stream, return remaining count."""
-    with _live_stream_lock:
-        if meeting_id in _live_stream_active:
-            if stream_id in _live_stream_active[meeting_id]:
-                _live_stream_active[meeting_id].remove(stream_id)
-            remaining = len(_live_stream_active[meeting_id])
-            if remaining == 0:
-                del _live_stream_active[meeting_id]
-            return remaining
-        return 0
+_dbg_logger = logging.getLogger("notetaker.debug")
 # #endregion
-
-
-# #endregion
-
-class TranscribeRequest(BaseModel):
-    audio_path: str = Field(..., description="Absolute path to audio file")
-    model_size: Optional[str] = Field(
-        None, description="Override model size for this request"
-    )
-    meeting_id: Optional[str] = Field(
-        None, description="Meeting id (optional)"
-    )
-    simulate_live: bool = Field(
-        False, description="Simulate live recording flow when transcribing file"
-    )
-
 
 class SimulateTranscribeRequest(BaseModel):
-    audio_path: str = Field(..., description="Absolute path to audio file")
+    source: str = Field("file", description="Audio source: 'mic' or 'file'")
+    audio_path: Optional[str] = Field(None, description="Absolute path to audio file (file mode)")
+    device_index: Optional[int] = Field(None, description="Audio device index (mic mode)")
+    samplerate: int = Field(48000, description="Sample rate")
+    channels: int = Field(2, description="Channel count")
     model_size: Optional[str] = Field(
         None, description="Override model size for this request"
     )
@@ -123,24 +55,9 @@ class SimulateTranscribeRequest(BaseModel):
     )
     speed_percent: int = Field(
         300,
-        description="Playback speed percentage. 0 = no delay (as fast as possible), "
+        description="Playback speed percentage (file mode). 0 = no delay, "
                     "100 = real-time, 300 = 3x faster (default).",
         ge=0,
-    )
-
-
-class TranscribeResponse(BaseModel):
-    language: Optional[str]
-    duration: float
-    segments: list[dict]
-
-
-class LiveTranscribeRequest(BaseModel):
-    model_size: Optional[str] = Field(
-        None, description="Override model size for live transcription"
-    )
-    meeting_id: Optional[str] = Field(
-        None, description="Meeting id for live transcript storage"
     )
 
 
@@ -185,16 +102,13 @@ def create_transcription_router(
     router = APIRouter()
     logger = logging.getLogger("notetaker.api.transcription")
     
-    # Unified job registry for both file and mic transcription
-    # Each job contains: meeting_id, audio_source, audio_path
+    # Get the global active meeting tracker (replaces local transcription_jobs and finalizing_meetings)
+    active_tracker = get_tracker()
+    
+    # Legacy job registry kept for backwards compatibility with audio_source references
+    # The tracker handles state, but we still need to store audio_source objects
     transcription_jobs: dict[str, dict] = {}
     transcription_jobs_lock = threading.Lock()
-    
-    # Meetings currently running finalization (diarization + summarization).
-    # Tracked separately so the frontend can distinguish "finalizing" from
-    # "stale/stuck" without scanning every meeting file on boot.
-    finalizing_meetings: set[str] = set()
-    finalizing_lock = threading.Lock()
     
     trace_logger = logging.getLogger("notetaker.trace")
 
@@ -239,7 +153,7 @@ def create_transcription_router(
     final_device = transcription_config.get("final_device", "cpu")
     final_compute = transcription_config.get("final_compute_type", "int8")
     live_default_size = transcription_config.get("live_model_size", "base")
-    final_default_size = transcription_config.get("final_model_size", "small")
+    final_default_size = transcription_config.get("final_model_size", "medium")
 
     provider_cache: dict[tuple[str, str, str], FasterWhisperProvider] = {}
 
@@ -266,150 +180,6 @@ def create_transcription_router(
             summarization_service=summarization_service,
         )
 
-    @router.post("/api/transcribe", response_model=TranscribeResponse)
-    def transcribe(payload: TranscribeRequest) -> TranscribeResponse:
-        # #region agent log
-        logger.warning("LEGACY ENDPOINT CALLED: POST /api/transcribe (non-streaming). Caller should use /api/transcribe/simulate instead.")
-        import json as _json_leg; import traceback as _tb_leg
-        try:
-            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
-                _f.write(_json_leg.dumps({"location":"transcription.py:transcribe","message":"LEGACY_ENDPOINT_HIT","data":{"endpoint":"/api/transcribe","audio_path":payload.audio_path,"stack":_tb_leg.format_stack()[-3:]},"timestamp":int(time.time()*1000),"hypothesisId":"LEGACY"})+"\n")
-        except Exception: pass
-        # #endregion
-        start_time = time.perf_counter()
-        logger.debug("transcribe received: %s", payload.model_dump())
-
-        audio_path = payload.audio_path
-        if not os.path.isabs(audio_path):
-            raise HTTPException(status_code=400, detail="audio_path must be absolute")
-
-        model_size = payload.model_size or final_default_size
-        pipeline = get_pipeline(model_size, final_device, final_compute)
-        
-        try:
-            segments, language = pipeline.process_audio_file(
-                audio_path,
-                meeting_id=payload.meeting_id,
-                apply_diarization=True,
-                update_meeting_live=False,
-            )
-        except TranscriptionProviderError as exc:
-            logger.warning("transcribe failed: %s", exc)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:
-            logger.exception("transcribe error: %s", exc)
-            raise HTTPException(status_code=500, detail="Internal Server Error") from exc
-
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        logger.info("transcribe completed in %.2f ms", duration_ms)
-
-        return TranscribeResponse(
-            language=language,
-            duration=duration_ms / 1000.0,
-            segments=segments,
-        )
-
-    @router.post("/api/transcribe/stream")
-    def transcribe_stream(payload: TranscribeRequest) -> StreamingResponse:
-        """Streaming file transcription using the unified pipeline."""
-        # #region agent log
-        logger.warning("LEGACY ENDPOINT CALLED: POST /api/transcribe/stream. Caller should use /api/transcribe/simulate instead.")
-        import json as _json_leg2; import traceback as _tb_leg2
-        try:
-            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
-                _f.write(_json_leg2.dumps({"location":"transcription.py:transcribe_stream","message":"LEGACY_ENDPOINT_HIT","data":{"endpoint":"/api/transcribe/stream","audio_path":payload.audio_path,"simulate_live":payload.simulate_live,"stack":_tb_leg2.format_stack()[-3:]},"timestamp":int(time.time()*1000),"hypothesisId":"LEGACY"})+"\n")
-        except Exception: pass
-        # #endregion
-        logger.debug("transcribe_stream received: %s", payload.model_dump())
-        original_audio_path = payload.audio_path
-        if not os.path.isabs(original_audio_path):
-            raise HTTPException(status_code=400, detail="audio_path must be absolute")
-
-        def event_stream():
-            nonlocal original_audio_path
-            try:
-                model_size = payload.model_size or final_default_size
-                pipeline = get_pipeline(model_size, final_device, final_compute)
-                meeting_id = payload.meeting_id
-                wav_path = original_audio_path  # Will be updated if we convert
-                
-                if payload.simulate_live and not meeting_id:
-                    # Convert audio to WAV first (same format as mic recording)
-                    # This ensures the pipeline is identical after ingestion
-                    try:
-                        wav_path, samplerate, channels = convert_to_wav(
-                            original_audio_path,
-                            ctx.recordings_dir,
-                        )
-                        logger.info(
-                            "Audio converted for stream transcription: original=%s wav=%s",
-                            original_audio_path,
-                            wav_path,
-                        )
-                    except Exception as exc:
-                        logger.exception("Failed to convert audio file: %s", exc)
-                        yield f"data: {json.dumps({'type': 'error', 'message': f'Failed to convert audio: {exc}'})}\n\n"
-                        return
-                    
-                    meeting = meeting_store.create_file_meeting(wav_path, samplerate, channels)
-                    meeting_id = meeting.get("id")
-                    logger.info(
-                        "Streaming transcription started: meeting_id=%s wav=%s original=%s",
-                        meeting_id,
-                        wav_path,
-                        original_audio_path,
-                    )
-                
-                # Use pipeline for transcription (use converted WAV path)
-                segments, language = pipeline.transcribe_and_format(wav_path)
-                
-                # Stream metadata
-                meta = {"type": "meta", "language": language}
-                if meeting_id and payload.simulate_live:
-                    meeting_store.append_live_meta(meeting_id, language)
-                yield f"data: {json.dumps(meta)}\n\n"
-                
-                # Stream segments
-                for segment in segments:
-                    if meeting_id and payload.simulate_live:
-                        meeting_store.append_live_segment(meeting_id, segment, language)
-                    yield f"data: {json.dumps(segment)}\n\n"
-                
-                # Shared post-audio pipeline after streaming.
-                # Same flow as mic/file: read from disk and finalize
-                if meeting_id and payload.simulate_live:
-                    # Read segments back from disk (they were stored via append_live_segment above)
-                    meeting = meeting_store.get_meeting(meeting_id)
-                    if meeting:
-                        transcript = meeting.get("transcript") or {}
-                        disk_segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
-                        audio_path_from_meeting = meeting.get("audio_path") or wav_path
-                        
-                        if disk_segments:
-                            pipeline.finalize_meeting_with_diarization(
-                                meeting_id, disk_segments, audio_path_from_meeting
-                            )
-                        else:
-                            meeting_store.update_status(meeting_id, "completed")
-                    else:
-                        meeting_store.update_status(meeting_id, "completed")
-                else:
-                    # No meeting context: just produce final speakers and persist transcript.
-                    # Use wav_path for consistency (though this path doesn't create a meeting)
-                    segments = pipeline.run_diarization(wav_path, segments)
-                    meeting_store.add_transcript(wav_path, language, segments)
-                
-                yield "data: {\"type\":\"done\"}\n\n"
-                
-            except TranscriptionProviderError as exc:
-                logger.warning("transcribe_stream failed: %s", exc)
-                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
-            except Exception as exc:
-                logger.exception("transcribe_stream error: %s", exc)
-                yield "data: {\"type\":\"error\",\"message\":\"Internal Server Error\"}\n\n"
-
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
-
     def _run_transcription(
         meeting_id: str,
         audio_source: AudioDataSource,
@@ -426,7 +196,7 @@ def create_transcription_router(
         segments: list[dict] = []
         language = None
         # #region agent log
-        _dbg_ndjson(location="transcription.py:_run_transcription", message="THREAD_ENTER", data={"meeting_id": meeting_id, "model_size": model_size, "audio_source_type": type(audio_source).__name__}, run_id="start-debug", hypothesis_id="H4")
+        _dbg_logger.debug("THREAD_ENTER: meeting_id=%s model_size=%s audio_source_type=%s", meeting_id, model_size, type(audio_source).__name__)
         # #endregion
         
         try:
@@ -440,7 +210,8 @@ def create_transcription_router(
             
             pipeline = get_pipeline(model_size, live_device, live_compute)
             # #region agent log
-            _dbg_ndjson(location="transcription.py:_run_transcription", message="pipeline_created", data={"meeting_id": meeting_id, "samplerate": samplerate, "channels": channels, "bytes_per_second": bytes_per_second, "chunk_seconds": chunk_seconds, "live_device": live_device, "live_compute": live_compute}, run_id="start-debug", hypothesis_id="H4")
+            _dbg_logger.debug("pipeline_created: meeting_id=%s samplerate=%d channels=%d bytes_per_second=%d chunk_seconds=%f", 
+                             meeting_id, samplerate, channels, bytes_per_second, chunk_seconds)
             # #endregion
             
             # Create per-session real-time diarization
@@ -459,26 +230,28 @@ def create_transcription_router(
             offset_seconds = 0.0
             
             # #region agent log
-            import json as _json
-            def _dbg_trans(msg, data):
-                try:
-                    with open(os.path.join(os.getcwd(), "logs", "debug.log"), "a") as f:
-                        f.write(_json.dumps({"location": "transcription.py:_run_transcription", "message": msg, "data": data, "timestamp": __import__("time").time() * 1000, "runId": "gaps-debug", "hypothesisId": "H1-H4"}) + "\n")
-                except: pass
-            _dbg_trans("transcription_started", {"meeting_id": meeting_id, "samplerate": samplerate, "channels": channels, "bytes_per_second": bytes_per_second, "chunk_seconds": chunk_seconds, "buffer_threshold": bytes_per_second * chunk_seconds})
+            _dbg_logger.debug("transcription_started: meeting_id=%s samplerate=%d channels=%d bytes_per_second=%d chunk_seconds=%f buffer_threshold=%f", 
+                             meeting_id, samplerate, channels, bytes_per_second, chunk_seconds, bytes_per_second * chunk_seconds)
             chunk_count = 0
             process_count = 0
             last_segment_end = 0.0
+            loop_iter = 0
+            _dbg_logger.debug("LOOP_ENTER: meeting_id=%s is_complete_before=%s", meeting_id, audio_source.is_complete())
             # #endregion
-            
             while not audio_source.is_complete():
+                # #region agent log
+                loop_iter += 1
+                if loop_iter <= 10 or loop_iter % 50 == 0:
+                    _dbg_logger.debug("LOOP_ITER: iter=%d is_complete=%s buffer_len=%d", loop_iter, audio_source.is_complete(), len(buffer))
+                # #endregion
                 chunk = audio_source.get_chunk(timeout_sec=0.5)
                 if chunk:
                     buffer.extend(chunk)
                     # #region agent log
                     chunk_count += 1
                     if chunk_count <= 5:
-                        _dbg_trans("chunk_received", {"chunk_count": chunk_count, "chunk_len": len(chunk), "buffer_len": len(buffer), "threshold": bytes_per_second * chunk_seconds})
+                        _dbg_logger.debug("CHUNK_RECEIVED: chunk_count=%d chunk_len=%d buffer_len=%d threshold=%f", 
+                                         chunk_count, len(chunk), len(buffer), bytes_per_second * chunk_seconds)
                     # #endregion
                 
                 # Process when we have enough audio
@@ -488,7 +261,8 @@ def create_transcription_router(
                     try:
                         temp_path, temp_duration = _write_temp_wav(audio_bytes, samplerate, channels)
                         # #region agent log
-                        _dbg_trans("processing_chunk", {"buffer_len": len(audio_bytes), "offset_seconds": offset_seconds, "temp_duration": temp_duration, "expected_duration": len(audio_bytes) / bytes_per_second})
+                        _dbg_logger.debug("processing_chunk: buffer_len=%d offset_seconds=%f temp_duration=%f expected_duration=%f", 
+                                         len(audio_bytes), offset_seconds, temp_duration, len(audio_bytes) / bytes_per_second)
                         # #endregion
                         
                         # Transcribe chunk
@@ -497,24 +271,13 @@ def create_transcription_router(
                         )
                         # #region agent log
                         process_count += 1
-                        # Find first and last segment timestamps
                         first_seg_start = chunk_segments[0].get("start") if chunk_segments else None
                         last_seg_end_in_chunk = max((s.get("end", 0) for s in chunk_segments), default=0) if chunk_segments else 0
                         gap_from_previous = first_seg_start - last_segment_end if (first_seg_start is not None and last_segment_end > 0) else 0
                         actual_chunk_duration = len(audio_bytes) / bytes_per_second
-                        _dbg_trans("chunk_transcribed", {
-                            "process_count": process_count,
-                            "offset_seconds": offset_seconds,
-                            "chunk_duration_from_whisper": chunk_duration,
-                            "actual_chunk_duration": actual_chunk_duration,
-                            "num_segments": len(chunk_segments),
-                            "first_seg_start": first_seg_start,
-                            "last_seg_end": last_seg_end_in_chunk,
-                            "gap_from_previous": gap_from_previous,
-                            "last_segment_end_prev": last_segment_end,
-                            "segments_preview": [{"start": s.get("start"), "end": s.get("end"), "text": s.get("text", "")[:50]} for s in chunk_segments[:3]]
-                        })
-                        # Update for next iteration
+                        _dbg_logger.debug("chunk_transcribed: process_count=%d offset=%f whisper_dur=%f actual_dur=%f num_segs=%d first_start=%s last_end=%f gap=%f",
+                                         process_count, offset_seconds, chunk_duration, actual_chunk_duration, len(chunk_segments),
+                                         first_seg_start, last_seg_end_in_chunk, gap_from_previous)
                         if chunk_segments:
                             last_segment_end = last_seg_end_in_chunk
                         # #endregion
@@ -534,12 +297,8 @@ def create_transcription_router(
                             if rt_diarization_active and session_rt_diarization.is_active():
                                 speaker = session_rt_diarization.get_speaker_at(segment["start"])
                                 # #region agent log
-                                _dbg_trans("get_speaker_at_result", {
-                                    "segment_start": segment["start"],
-                                    "segment_end": segment["end"],
-                                    "speaker_returned": speaker,
-                                    "rt_active": session_rt_diarization.is_active(),
-                                })
+                                _dbg_logger.debug("get_speaker_at_result: seg_start=%f seg_end=%f speaker=%s rt_active=%s",
+                                                 segment["start"], segment["end"], speaker, session_rt_diarization.is_active())
                                 # #endregion
                                 if speaker:
                                     segment["speaker"] = speaker
@@ -609,24 +368,83 @@ def create_transcription_router(
                 transcription_jobs.pop(meeting_id, None)
             logger.info("Transcription active phase done, starting finalization: meeting_id=%s", meeting_id)
             
-            # Register as finalizing so the frontend can query real state
-            with finalizing_lock:
-                finalizing_meetings.add(meeting_id)
+            # Transition to finalizing state in the tracker
+            active_tracker.transition(meeting_id, MeetingState.FINALIZING)
+            # #region agent log
+            _dbg_logger.debug("POST_LOOP_FINALIZING: meeting_id=%s", meeting_id)
+            # #endregion
             
             try:
-                # Finalize meeting (same path as file mode)
                 meeting = meeting_store.get_meeting(meeting_id)
+                # #region agent log
+                _dbg_logger.debug("GOT_MEETING: meeting_id=%s has_meeting=%s", meeting_id, bool(meeting))
+                import time as _t_fin; import json as _j_fin
+                try:
+                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_fin:
+                        _f_fin.write(_j_fin.dumps({"location":"transcription.py:_run_transcription","message":"FINALIZATION_PHASE_ENTERED","data":{"meeting_id":meeting_id,"has_meeting":bool(meeting),"has_segments":bool(meeting and (meeting.get("transcript") or {}).get("segments"))},"timestamp":int(_t_fin.time()*1000),"hypothesisId":"H4"})+"\n")
+                except Exception: pass
+                # #endregion
                 if meeting:
                     transcript = meeting.get("transcript") or {}
                     disk_segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
                     audio_path = meeting.get("audio_path")
+                    # #region agent log
+                    _dbg_logger.debug("MEETING_DATA: meeting_id=%s num_segments=%d has_audio_path=%s", meeting_id, len(disk_segments), bool(audio_path))
+                    # #endregion
                     
                     if disk_segments:
-                        # Use final device/compute for quality finalization
-                        final_pipeline = get_pipeline(model_size, final_device, final_compute)
+                        # Re-transcribe with final model if configured and different
+                        final_model = final_default_size
+                        if (
+                            final_model
+                            and final_model != "none"
+                            and final_model != model_size
+                            and audio_path
+                            and os.path.isfile(audio_path)
+                        ):
+                            meeting_store.publish_finalization_status(
+                                meeting_id,
+                                f"Re-transcribing with {final_model} model...",
+                                0.05,
+                            )
+                            logger.info(
+                                "Re-transcribing: meeting_id=%s live_model=%s final_model=%s wav=%s",
+                                meeting_id, model_size, final_model, audio_path,
+                            )
+                            try:
+                                final_pipeline = get_pipeline(final_model, final_device, final_compute)
+                                new_segments, new_language = final_pipeline.transcribe_and_format(audio_path)
+                                if new_segments:
+                                    disk_segments = new_segments
+                                    meeting_store.replace_transcript_segments(meeting_id, disk_segments, new_language)
+                                    logger.info(
+                                        "Re-transcription complete: meeting_id=%s segments=%d",
+                                        meeting_id, len(disk_segments),
+                                    )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Re-transcription failed, using live segments: meeting_id=%s error=%s",
+                                    meeting_id, exc,
+                                )
+                                meeting_store.publish_finalization_status(
+                                    meeting_id,
+                                    f"Re-transcription failed: {type(exc).__name__}. Using live transcript.",
+                                    0.08,
+                                )
+
+                        final_pipeline = get_pipeline(
+                            final_model if final_model != "none" else model_size,
+                            final_device, final_compute,
+                        )
+                        # #region agent log
+                        _dbg_logger.debug("FINALIZE_START: meeting_id=%s num_segments=%d has_audio_path=%s", meeting_id, len(disk_segments), bool(audio_path))
+                        # #endregion
                         final_pipeline.finalize_meeting_with_diarization(
                             meeting_id, disk_segments, audio_path
                         )
+                        # #region agent log
+                        _dbg_logger.debug("FINALIZE_COMPLETE: meeting_id=%s", meeting_id)
+                        # #endregion
                         logger.info("Meeting finalized: meeting_id=%s segments=%d", meeting_id, len(disk_segments))
                     else:
                         meeting_store.update_status(meeting_id, "completed")
@@ -634,14 +452,13 @@ def create_transcription_router(
                 else:
                     meeting_store.update_status(meeting_id, "completed")
             finally:
-                with finalizing_lock:
-                    finalizing_meetings.discard(meeting_id)
+                active_tracker.unregister(meeting_id)
                 
         except Exception as exc:
             logger.exception("Transcription error: meeting_id=%s error=%s", meeting_id, exc)
             # #region agent log
             import traceback as _tb_run
-            _dbg_ndjson(location="transcription.py:_run_transcription", message="THREAD_CRASH", data={"meeting_id": meeting_id, "exc_type": type(exc).__name__, "exc_str": str(exc)[:1000], "traceback": _tb_run.format_exc()[-2000:]}, run_id="start-debug", hypothesis_id="H4")
+            _dbg_logger.debug("THREAD_CRASH: meeting_id=%s exc_type=%s exc_str=%s", meeting_id, type(exc).__name__, str(exc)[:500])
             # #endregion
             # Publish error event for frontend notification
             try:
@@ -660,83 +477,92 @@ def create_transcription_router(
             # the early cleanup above runs.  pop() is idempotent.
             with transcription_jobs_lock:
                 transcription_jobs.pop(meeting_id, None)
+            # Also ensure tracker is cleaned up
+            active_tracker.unregister(meeting_id)
             logger.info("Transcription thread finished: meeting_id=%s segments=%d", meeting_id, len(segments))
 
     @router.post("/api/transcribe/simulate")
     def simulate_transcribe(payload: SimulateTranscribeRequest) -> dict:
-        # #region agent log
-        _dbg_ndjson(location="transcription.py:simulate_transcribe", message="ENTER", data={"audio_path": payload.audio_path, "meeting_id": payload.meeting_id, "speed_percent": payload.speed_percent}, run_id="start-debug", hypothesis_id="H3")
-        # #endregion
-        original_audio_path = payload.audio_path
-        if not os.path.isabs(original_audio_path):
-            raise HTTPException(status_code=400, detail="audio_path must be absolute")
-        existing = next(
-            (job for job in transcription_jobs.values() if job.get("original_audio_path") == original_audio_path),
-            None,
-        )
-        if existing:
-            return {"status": "running", "meeting_id": existing.get("meeting_id")}
-        
-        meeting = None
-        wav_path = None
-        samplerate = None
-        channels = None
-        audio_source: Optional[FileAudioSource] = None
-        
-        if payload.meeting_id:
-            # Resuming an existing meeting - use the provided meeting_id
-            meeting = meeting_store.get_meeting(payload.meeting_id)
-            if not meeting:
-                raise HTTPException(status_code=404, detail="Meeting not found")
-            # Meeting already has converted audio_path
-            wav_path = meeting.get("audio_path")
-            samplerate = meeting.get("samplerate")
-            channels = meeting.get("channels")
-            # Create FileAudioSource for resumed meeting
-            audio_source = FileAudioSource(
-                wav_path,
-                chunk_duration_sec=5.0,
-                speed_percent=payload.speed_percent,
-            )
-        else:
-            # Starting fresh - convert audio to WAV first (same format as mic recording)
-            # This ensures the pipeline is identical after ingestion
+        """Start transcription from either a microphone or a file.
+
+        Both modes use the same downstream pipeline: AudioCaptureService
+        feeds _audio_callback -> queues -> _writer_loop (WAV) + _live_queue
+        (LiveAudioSource) -> _run_transcription thread.
+        """
+        source = payload.source
+
+        # --- Start audio capture (only branch between mic and file) ---
+        if source == "mic":
+            if payload.device_index is None:
+                raise HTTPException(status_code=400, detail="device_index required for mic mode")
             try:
-                wav_path, samplerate, channels = convert_to_wav(
-                    original_audio_path,
-                    ctx.recordings_dir,
-                )
-                logger.info(
-                    "Audio converted for file transcription: original=%s wav=%s sr=%d ch=%d",
-                    original_audio_path,
-                    wav_path,
-                    samplerate,
-                    channels,
+                result = audio_service.start_recording(
+                    device_index=payload.device_index,
+                    samplerate=payload.samplerate,
+                    channels=payload.channels,
                 )
             except Exception as exc:
-                logger.exception("Failed to convert audio file: %s", exc)
-                raise HTTPException(status_code=400, detail=f"Failed to convert audio: {exc}")
-            
-            # Create FileAudioSource with user-specified speed
-            audio_source = FileAudioSource(
-                wav_path,
-                chunk_duration_sec=5.0,
-                speed_percent=payload.speed_percent,
+                logger.exception("Failed to start mic recording: %s", exc)
+                raise HTTPException(status_code=400, detail=f"Failed to start recording: {exc}")
+            audio_service.enable_live_tap()
+            original_audio_path = None
+        elif source == "file":
+            original_audio_path = payload.audio_path
+            if not original_audio_path or not os.path.isabs(original_audio_path):
+                raise HTTPException(status_code=400, detail="audio_path must be an absolute path")
+            # Dedup: check if this file is already being transcribed
+            existing = next(
+                (job for job in transcription_jobs.values() if job.get("original_audio_path") == original_audio_path),
+                None,
             )
-            
-            # Create meeting with converted WAV path and session_id from audio source
+            if existing:
+                return {"status": "running", "meeting_id": existing.get("meeting_id")}
+            try:
+                result = audio_service.start_file_playback(
+                    original_audio_path,
+                    speed_percent=payload.speed_percent,
+                )
+            except Exception as exc:
+                logger.exception("Failed to start file playback: %s", exc)
+                raise HTTPException(status_code=400, detail=f"Failed to start file playback: {exc}")
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid source: {source}. Must be 'mic' or 'file'.")
+
+        # --- Everything below is identical for both modes ---
+        recording_id = result["recording_id"]
+        wav_path = result["file_path"]
+        samplerate = result["samplerate"]
+        channels = result["channels"]
+
+        if payload.meeting_id:
+            meeting = meeting_store.get_meeting(payload.meeting_id)
+            if not meeting:
+                audio_service.stop_recording()
+                raise HTTPException(status_code=404, detail="Meeting not found")
+        else:
             meeting = meeting_store.create_file_meeting(
                 wav_path, samplerate, channels,
-                session_id=audio_source.get_metadata().session_id,
+                session_id=recording_id,
             )
-        
+
         meeting_id = meeting.get("id")
         if not meeting_id:
+            audio_service.stop_recording()
             raise HTTPException(status_code=500, detail="Failed to create meeting")
         meeting_store.update_status(meeting_id, "in_progress")
-        model_size = payload.model_size or final_default_size
-        
-        # Use unified transcription function with AudioDataSource
+        model_size = payload.model_size or live_default_size
+
+        if not active_tracker.register(
+            meeting_id,
+            MeetingState.RECORDING,
+            audio_source=source,
+            audio_path=wav_path,
+        ):
+            audio_service.stop_recording()
+            return {"status": "already_active", "meeting_id": meeting_id}
+
+        audio_source = LiveAudioSource(audio_service, recording_id)
+
         thread = threading.Thread(
             target=_run_transcription,
             args=(meeting_id, audio_source, model_size),
@@ -746,17 +572,14 @@ def create_transcription_router(
             "meeting_id": meeting_id,
             "audio_source": audio_source,
             "audio_path": wav_path,
-            "original_audio_path": original_audio_path,  # For deduplication
+            "original_audio_path": original_audio_path,
         }
         logger.info(
-            "File transcription started: meeting_id=%s wav=%s original=%s speed=%d%%",
-            meeting_id,
-            wav_path,
-            original_audio_path,
-            payload.speed_percent,
+            "Transcription started: source=%s meeting_id=%s wav=%s",
+            source, meeting_id, wav_path,
         )
         thread.start()
-        return {"status": "started", "meeting_id": meeting_id, "speed_percent": payload.speed_percent}
+        return {"status": "started", "meeting_id": meeting_id}
 
     @router.post("/api/transcribe/simulate/stop")
     def simulate_stop(audio_path: str) -> dict:
@@ -780,78 +603,6 @@ def create_transcription_router(
             return stop_transcription_by_meeting(meeting_id)
         return {"status": "idle"}
 
-    class StartLiveTranscriptionRequest(BaseModel):
-        """Request to start live transcription for an active recording."""
-        meeting_id: str
-        model_size: Optional[str] = None
-
-    @router.post("/api/transcribe/start")
-    def start_live_transcription(payload: StartLiveTranscriptionRequest) -> dict:
-        """Start live transcription for an active recording.
-        
-        This starts a background thread that:
-        1. Reads audio from the microphone via AudioCaptureService
-        2. Transcribes chunks and saves segments (publishes events)
-        3. All subscribers to /api/meetings/events receive transcript_segment events
-        
-        Unlike the legacy /api/transcribe/live SSE endpoint, this:
-        - Runs transcription in background (not tied to SSE connection)
-        - Supports multiple frontend windows viewing the same meeting
-        - Uses the same event publishing as file transcription
-        """
-        meeting_id = payload.meeting_id
-        # #region agent log
-        _dbg_ndjson(location="transcription.py:start_live_transcription", message="ENTER", data={"meeting_id": meeting_id, "model_size": payload.model_size}, run_id="start-debug", hypothesis_id="H2")
-        # #endregion
-        
-        # Check if already running
-        with transcription_jobs_lock:
-            if meeting_id in transcription_jobs:
-                # #region agent log
-                _dbg_ndjson(location="transcription.py:start_live_transcription", message="ALREADY_RUNNING", data={"meeting_id": meeting_id}, run_id="start-debug", hypothesis_id="H2")
-                # #endregion
-                return {"status": "already_running", "meeting_id": meeting_id}
-        
-        # Verify recording is active for this meeting
-        # If no active recording, return gracefully (file mode uses /api/transcribe/simulate instead)
-        status = audio_service.current_status()
-        # #region agent log
-        _dbg_ndjson(location="transcription.py:start_live_transcription", message="recording_status_check", data={"meeting_id": meeting_id, "recording": status.get("recording"), "recording_id": status.get("recording_id"), "id_match": status.get("recording_id") == meeting_id, "capture_stopped": status.get("capture_stopped")}, run_id="start-debug", hypothesis_id="H2")
-        # #endregion
-        if not status.get("recording") or status.get("recording_id") != meeting_id:
-            return {"status": "not_applicable", "meeting_id": meeting_id, "reason": "no_active_recording"}
-        
-        # Create MicAudioSource
-        session_id = status.get("recording_id") or meeting_id
-        mic_audio_source = MicAudioSource(audio_service, session_id)
-        audio_service.enable_live_tap()
-        
-        # Determine model size
-        model_size = payload.model_size or transcription_config.get("model_size", "medium")
-        
-        # Register job
-        with transcription_jobs_lock:
-            transcription_jobs[meeting_id] = {
-                "meeting_id": meeting_id,
-                "audio_source": mic_audio_source,
-                "audio_path": status.get("file_path"),
-            }
-        
-        # Start transcription thread
-        thread = threading.Thread(
-            target=_run_transcription,
-            args=(meeting_id, mic_audio_source, model_size),
-            daemon=True,
-        )
-        thread.start()
-        
-        logger.info("Live transcription started: meeting_id=%s model=%s", meeting_id, model_size)
-        return {
-            "status": "started",
-            "meeting_id": meeting_id,
-            "model_size": model_size,
-        }
-
     @router.get("/api/transcribe/active")
     def get_active_transcription() -> dict:
         """Get currently active transcription job, if any."""
@@ -870,17 +621,33 @@ def create_transcription_router(
         """Get the real-time transcription/finalization state for a meeting.
 
         Returns one of:
-          transcribing  – actively processing audio
-          finalizing    – diarization / summarization running
-          idle          – nothing running for this meeting
+          recording             – actively processing audio (mic or file)
+          finalizing            – live diarization / summarization running
+          background_finalizing – background sweep processing
+          idle                  – nothing running for this meeting
         """
-        with transcription_jobs_lock:
-            if meeting_id in transcription_jobs:
-                return {"meeting_id": meeting_id, "state": "transcribing"}
-        with finalizing_lock:
-            if meeting_id in finalizing_meetings:
-                return {"meeting_id": meeting_id, "state": "finalizing"}
+        active = active_tracker.get_state(meeting_id)
+        if active:
+            return {
+                "meeting_id": meeting_id,
+                "state": active.state.value,
+                "stage": active.stage,
+                "started_at": active.started_at.isoformat(),
+            }
         return {"meeting_id": meeting_id, "state": "idle"}
+
+    @router.get("/api/transcribe/finalizing")
+    def get_finalizing_meetings_list() -> dict:
+        """Return IDs and start times of all meetings currently in finalization."""
+        all_active = active_tracker.get_all_active()
+        meetings = {}
+        for mid, am in all_active.items():
+            if am.state in (MeetingState.FINALIZING, MeetingState.BACKGROUND_FINALIZING):
+                meetings[mid] = {
+                    "started_at": am.started_at.isoformat(),
+                    "stage": am.stage,
+                }
+        return {"meeting_ids": list(meetings.keys()), "meetings": meetings}
 
     @router.post("/api/transcribe/stop/{meeting_id}")
     def stop_transcription_by_meeting(meeting_id: str) -> dict:
@@ -894,13 +661,7 @@ def create_transcription_router(
         Returns immediately with status='stopping'.
         """
         # #region agent log
-        _dbg_ndjson(
-            location="app/routers/transcription.py:stop_transcription_by_meeting",
-            message="stop called",
-            data={"meeting_id": meeting_id, "transcription_jobs": len(transcription_jobs)},
-            run_id="pre-fix",
-            hypothesis_id="STOP500",
-        )
+        _dbg_logger.debug("stop called: meeting_id=%s transcription_jobs=%d", meeting_id, len(transcription_jobs))
         # #endregion
         
         # Unified job lookup from registry
@@ -911,23 +672,12 @@ def create_transcription_router(
             audio_source = job.get("audio_source")
             
             # Unified stop: audio_source.stop() handles everything for both modes
-            # - For MicAudioSource: signals capture stopped AND stops recording device
-            # - For FileAudioSource: sets stopped flag and interrupts any delays
             if audio_source:
                 audio_source.stop()
                 logger.info("AudioDataSource.stop() called: meeting_id=%s", meeting_id)
             
             # #region agent log
-            _dbg_ndjson(
-                location="app/routers/transcription.py:stop_transcription_by_meeting",
-                message="unified stop completed",
-                data={
-                    "meeting_id": meeting_id,
-                    "had_audio_source": audio_source is not None,
-                },
-                run_id="pre-fix",
-                hypothesis_id="STOP500",
-            )
+            _dbg_logger.debug("unified stop completed: meeting_id=%s had_audio_source=%s", meeting_id, audio_source is not None)
             # #endregion
             
             logger.info("Stopped transcription: meeting_id=%s", meeting_id)
@@ -942,8 +692,9 @@ def create_transcription_router(
     @router.post("/api/transcribe/resume/{meeting_id}")
     def resume_transcription(meeting_id: str) -> dict:
         """Resume transcription for a meeting that was stopped."""
-        # Check if any transcription is already running
-        if transcription_jobs:
+        # Check if any transcription is already running (use tracker)
+        recording = active_tracker.get_by_state(MeetingState.RECORDING)
+        if recording:
             raise HTTPException(
                 status_code=409,
                 detail="Another transcription is already in progress"
@@ -968,14 +719,33 @@ def create_transcription_router(
         # Clear finalization flags since transcript will change
         meeting_store.clear_finalization_flags(meeting_id)
         
-        # Create FileAudioSource for resumed meeting
-        audio_source = FileAudioSource(
-            audio_path,
-            chunk_duration_sec=5.0,
-            speed_percent=0,  # No delay for resume - process as fast as possible
-        )
-        
-        # Start transcription using unified function
+        # Stream through the shared AudioCaptureService pipeline (same as mic)
+        try:
+            result = audio_service.start_file_playback(
+                audio_path,
+                speed_percent=0,  # No delay for resume - process as fast as possible
+            )
+        except Exception as exc:
+            logger.exception("Failed to start file playback for resume: %s", exc)
+            raise HTTPException(status_code=400, detail=f"Failed to start file playback: {exc}")
+
+        recording_id = result["recording_id"]
+        new_wav_path = result["file_path"]
+
+        # Register with active tracker
+        if not active_tracker.register(
+            meeting_id,
+            MeetingState.RECORDING,
+            audio_source="file",
+            audio_path=new_wav_path,
+        ):
+            audio_service.stop_recording()
+            raise HTTPException(
+                status_code=409,
+                detail="Meeting is already being processed"
+            )
+
+        audio_source = LiveAudioSource(audio_service, recording_id)
         model_size = transcription_config.get("model_size", "medium")
         thread = threading.Thread(
             target=_run_transcription,
@@ -985,503 +755,11 @@ def create_transcription_router(
         transcription_jobs[meeting_id] = {
             "meeting_id": meeting_id,
             "audio_source": audio_source,
-            "audio_path": audio_path,
+            "audio_path": new_wav_path,
         }
         logger.info("Resumed transcription: meeting_id=%s audio=%s", meeting_id, audio_path)
         thread.start()
         return {"status": "resumed", "meeting_id": meeting_id}
-
-    # Track active live transcription services by meeting_id
-    live_transcription_services: dict[str, LiveTranscriptionService] = {}
-
-    @router.post("/api/transcribe/live")
-    def transcribe_live(payload: LiveTranscribeRequest) -> StreamingResponse:
-        """DEPRECATED: Use POST /api/transcribe/start instead.
-        
-        This legacy SSE endpoint is maintained for backwards compatibility but
-        should not be used for new code. The new /api/transcribe/start endpoint:
-        - Runs transcription in a background thread (not tied to SSE connection)
-        - Supports multiple browser windows viewing the same meeting
-        - Uses unified meeting events SSE for all transcript updates
-        
-        This endpoint will be removed in a future version.
-        """
-        logger.warning(
-            "DEPRECATED: /api/transcribe/live called for meeting_id=%s. Use /api/transcribe/start instead.",
-            payload.meeting_id
-        )
-        # #region agent log
-        import json as _json_leg3; import traceback as _tb_leg3
-        try:
-            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
-                _f.write(_json_leg3.dumps({"location":"transcription.py:transcribe_live","message":"LEGACY_ENDPOINT_HIT","data":{"endpoint":"/api/transcribe/live","meeting_id":payload.meeting_id,"stack":_tb_leg3.format_stack()[-3:]},"timestamp":int(time.time()*1000),"hypothesisId":"LEGACY"})+"\n")
-        except Exception: pass
-        # #endregion
-        logger.debug("transcribe_live received: %s", payload.model_dump())
-        # #region agent log
-        stream_id, concurrent_streams = _register_live_stream(payload.meeting_id or "unknown")
-        _dbg_ndjson(
-            location="app/routers/transcription.py:transcribe_live",
-            message="transcribe_live received",
-            data={
-                "meeting_id": payload.meeting_id,
-                "model_size": payload.model_size,
-                "stream_id": stream_id,
-                "concurrent_streams": concurrent_streams,
-            },
-            run_id="pre-fix",
-            hypothesis_id="H1-DUAL-STREAM",
-        )
-        if concurrent_streams > 1:
-            _dbg_ndjson(
-                location="app/routers/transcription.py:transcribe_live",
-                message="WARNING: multiple concurrent streams detected!",
-                data={
-                    "meeting_id": payload.meeting_id,
-                    "stream_id": stream_id,
-                    "concurrent_streams": concurrent_streams,
-                    "all_active": list(_live_stream_active.get(payload.meeting_id or "unknown", [])),
-                },
-                run_id="pre-fix",
-                hypothesis_id="H1-DUAL-STREAM",
-            )
-        # #endregion
-        model_size = payload.model_size or live_default_size
-        pipeline = get_pipeline(model_size, live_device, live_compute)
-        
-        # Use model-specific chunk size instead of fixed 5 seconds
-        chunk_seconds = pipeline.get_chunk_size()
-        logger.info("Using model-specific chunk size: %.1f seconds", chunk_seconds)
-
-        def process_audio_chunk(
-            temp_path: str,
-            offset_seconds: float,
-            meeting_id: Optional[str],
-            last_language: Optional[str],
-            audio_bytes: bytes,
-            samplerate: int,
-            channels: int,
-            rt_diarization: Optional[RealtimeDiarizationService] = None,
-        ):
-            """Process a single audio chunk through the pipeline with real-time diarization.
-            
-            Args:
-                rt_diarization: Per-session real-time diarization instance (or None if disabled)
-            """
-            t0 = time.perf_counter()
-            trace(
-                "whisper_start",
-                meeting_id=meeting_id,
-                offset_seconds=offset_seconds,
-                audio_bytes=len(audio_bytes),
-                samplerate=samplerate,
-                channels=channels,
-            )
-            segments, language, chunk_duration = pipeline.transcribe_chunk(temp_path, offset_seconds)
-            trace(
-                "whisper_end",
-                meeting_id=meeting_id,
-                offset_seconds=offset_seconds,
-                elapsed_s=round(time.perf_counter() - t0, 3),
-                segments=len(segments),
-                language=language,
-                chunk_duration_s=round(chunk_duration, 3),
-            )
-            
-            # Feed audio to real-time diarization if active
-            if rt_diarization and rt_diarization.is_active():
-                rt_diarization.feed_audio(audio_bytes)
-            
-                for seg_idx, segment in enumerate(segments):
-                    # Try to get speaker from real-time diarization
-                    if rt_diarization.is_active():
-                        speaker = rt_diarization.get_speaker_at(segment["start"])
-                        if speaker:
-                            segment["speaker"] = speaker
-                        if seg_idx == 0:
-                            dbg_rt(
-                                "app/routers/transcription.py:process_audio_chunk",
-                                "rt_assign_first_segment",
-                                {
-                                    "rt_active": True,
-                                    "segment_start": segment.get("start"),
-                                    "speaker_found": bool(speaker),
-                                    "speaker": speaker or None,
-                                    "segments_in_chunk": len(segments),
-                                },
-                                run_id="pre-fix",
-                                hypothesis_id="H5",
-                            )
-                            nd_dbg(
-                                "app/routers/transcription.py:process_audio_chunk",
-                                "rt_assign_first_segment",
-                                {
-                                    "rt_active": True,
-                                    "segment_start": segment.get("start"),
-                                    "speaker_found": bool(speaker),
-                                    "speaker": speaker or None,
-                                    "segments_in_chunk": len(segments),
-                                },
-                                run_id="pre-fix",
-                                hypothesis_id="H4",
-                            )
-                    
-                    if meeting_id:
-                        trace(
-                            "meeting_append_segment",
-                            meeting_id=meeting_id,
-                            segment_start=segment.get("start"),
-                            segment_end=segment.get("end"),
-                            text_len=len(segment.get("text", "") or ""),
-                        )
-                        meeting_store.append_live_segment(meeting_id, segment, language or last_language)
-                    
-                    # #region agent log
-                    nd_dbg(
-                        "app/routers/transcription.py:process_audio_chunk",
-                        "sse_segment_yield",
-                        {
-                            "meeting_id": meeting_id,
-                            "seg_idx": seg_idx,
-                            "segment_start": segment.get("start"),
-                            "segment_end": segment.get("end"),
-                            "text_len": len(segment.get("text", "") or ""),
-                            "text_preview": (segment.get("text", "") or "")[:50],
-                        },
-                        run_id="bugs-debug",
-                        hypothesis_id="H3a",
-                    )
-                    # #endregion
-                    yield f"data: {json.dumps(segment)}\n\n"
-            
-            if language:
-                yield f"data: {json.dumps({'type': 'meta', 'language': language})}\n\n"
-            
-            return offset_seconds + chunk_duration, language or last_language
-
-        def event_stream():
-            status = audio_service.current_status()
-            if not status.get("recording"):
-                yield "data: {\"type\":\"error\",\"message\":\"Not recording\"}\n\n"
-                return
-
-            samplerate = status.get("samplerate") or 48000
-            channels = status.get("channels") or 1
-            bytes_per_second = int(samplerate * channels * 2)
-            buffer = bytearray()
-            offset_seconds = 0.0
-            last_language = None
-            audio_service.enable_live_tap()
-            
-            # Create MicAudioSource for unified stop mechanism
-            session_id = status.get("recording_id") or payload.meeting_id or str(uuid.uuid4())
-            mic_audio_source = MicAudioSource(audio_service, session_id)
-            
-            # Register job in unified registry for stop mechanism
-            if payload.meeting_id:
-                with transcription_jobs_lock:
-                    transcription_jobs[payload.meeting_id] = {
-                        "meeting_id": payload.meeting_id,
-                        "audio_source": mic_audio_source,
-                        "audio_path": status.get("file_path"),
-                    }
-            
-            # Create per-session real-time diarization instance to prevent state corruption
-            # when multiple live transcription sessions run concurrently
-            session_rt_diarization = RealtimeDiarizationService(realtime_diar_cfg)
-            
-            # Start real-time diarization if enabled
-            rt_diarization_active = session_rt_diarization.start(samplerate, channels)
-            dbg_rt(
-                "app/routers/transcription.py:event_stream",
-                "rt_start_result",
-                {
-                    "rt_started": bool(rt_diarization_active),
-                    "samplerate": samplerate,
-                    "channels": channels,
-                    "chunk_seconds": chunk_seconds,
-                    "meeting_id_present": bool(payload.meeting_id),
-                    "per_session_instance": True,
-                },
-                run_id="pre-fix",
-                hypothesis_id="H1",
-            )
-            nd_dbg(
-                "app/routers/transcription.py:event_stream",
-                "rt_start_result",
-                {
-                    "rt_started": bool(rt_diarization_active),
-                    "samplerate": samplerate,
-                    "channels": channels,
-                    "chunk_seconds": chunk_seconds,
-                    "meeting_id_present": bool(payload.meeting_id),
-                    "per_session_instance": True,
-                },
-                run_id="pre-fix",
-                hypothesis_id="H1",
-            )
-            
-            logger.info(
-                "Live transcription started: samplerate=%s channels=%s chunk_seconds=%.2f realtime_diarization=%s",
-                samplerate,
-                channels,
-                chunk_seconds,
-                rt_diarization_active,
-            )
-
-            # #region agent log
-            loop_count = 0
-            chunks_received = 0
-            # #endregion
-            try:
-                meta = {"type": "meta", "language": None, "realtime_diarization": rt_diarization_active, "chunk_seconds": chunk_seconds}
-                yield f"data: {json.dumps(meta)}\n\n"
-                trace(
-                    "live_transcription_started",
-                    meeting_id=payload.meeting_id,
-                    samplerate=samplerate,
-                    channels=channels,
-                    bytes_per_second=bytes_per_second,
-                    chunk_seconds=chunk_seconds,
-                    rt_diarization=rt_diarization_active,
-                )
-                # Manual summarization mode: no periodic summary ticks.
-                
-                while True:
-                    loop_count += 1
-                    # Check if capture was stopped (responsive stop)
-                    if audio_service.is_capture_stopped():
-                        logger.info("Capture stopped signal received, draining remaining audio")
-                        # #region agent log
-                        _dbg_ndjson(
-                            location="app/routers/transcription.py:event_stream",
-                            message="capture_stopped_signal",
-                            data={
-                                "meeting_id": payload.meeting_id,
-                                "stream_id": stream_id,
-                                "loop_count": loop_count,
-                                "chunks_received": chunks_received,
-                                "buffer_len": len(buffer),
-                            },
-                            run_id="pre-fix",
-                            hypothesis_id="H1-DUAL-STREAM",
-                        )
-                        # #endregion
-                        # Drain any remaining audio from the queue
-                        remaining = audio_service.drain_live_queue()
-                        if remaining:
-                            buffer.extend(remaining)
-                        break
-                    
-                    # Normal check - recording ended
-                    if not audio_service.is_recording() and not buffer:
-                        # #region agent log
-                        _dbg_ndjson(
-                            location="app/routers/transcription.py:event_stream",
-                            message="not_recording_exit",
-                            data={
-                                "meeting_id": payload.meeting_id,
-                                "stream_id": stream_id,
-                                "loop_count": loop_count,
-                                "chunks_received": chunks_received,
-                            },
-                            run_id="pre-fix",
-                            hypothesis_id="H1-DUAL-STREAM",
-                        )
-                        # #endregion
-                        break
-
-                    chunk = audio_service.get_live_chunk(timeout=0.5)
-                    if chunk:
-                        chunks_received += 1
-                        buffer.extend(chunk)
-                        # #region agent log - log every 20 chunks to avoid spam
-                        if chunks_received % 20 == 1:
-                            _dbg_ndjson(
-                                location="app/routers/transcription.py:event_stream",
-                                message="chunk_received",
-                                data={
-                                    "meeting_id": payload.meeting_id,
-                                    "stream_id": stream_id,
-                                    "chunks_received": chunks_received,
-                                    "chunk_len": len(chunk),
-                                    "buffer_len": len(buffer),
-                                },
-                                run_id="pre-fix",
-                                hypothesis_id="H1-DUAL-STREAM",
-                            )
-                        # #endregion
-
-                    if len(buffer) >= bytes_per_second * chunk_seconds:
-                        temp_path = None
-                        audio_bytes = bytes(buffer)
-                        try:
-                            trace(
-                                "live_audio_chunk_ready",
-                                meeting_id=payload.meeting_id,
-                                buffer_bytes=len(buffer),
-                                buffer_seconds=round(len(buffer) / bytes_per_second, 3),
-                                offset_seconds=round(offset_seconds, 3),
-                            )
-                            temp_path, _ = _write_temp_wav(audio_bytes, samplerate, channels)
-                            
-                            # Use pipeline for chunk processing with per-session real-time diarization
-                            for event in process_audio_chunk(
-                                temp_path, offset_seconds, payload.meeting_id, 
-                                last_language, audio_bytes, samplerate, channels,
-                                rt_diarization=session_rt_diarization,
-                            ):
-                                yield event
-                            
-                            # Update offset (approximation based on buffer size)
-                            offset_seconds += len(buffer) / bytes_per_second
-                            
-                            # Manual summarization mode: no periodic summary tick.
-                        except TranscriptionProviderError as exc:
-                            logger.warning("live transcription failed: %s", exc)
-                            # #region agent log
-                            nd_dbg(
-                                "app/routers/transcription.py:event_stream",
-                                "live_transcription_provider_error",
-                                {"exc_type": type(exc).__name__, "exc_str": str(exc)[:800], "offset_seconds": offset_seconds},
-                                run_id="pre-fix",
-                                hypothesis_id="E1",
-                            )
-                            # #endregion
-                            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
-                            break
-                        except Exception as exc:
-                            logger.exception("live transcription error: %s", exc)
-                            # #region agent log
-                            import traceback
-                            nd_dbg(
-                                "app/routers/transcription.py:event_stream",
-                                "live_transcription_internal_error",
-                                {
-                                    "exc_type": type(exc).__name__,
-                                    "exc_str": str(exc)[:800],
-                                    "traceback": traceback.format_exc()[-2000:],
-                                    "offset_seconds": offset_seconds,
-                                },
-                                run_id="pre-fix",
-                                hypothesis_id="E1",
-                            )
-                            # #endregion
-                            yield "data: {\"type\":\"error\",\"message\":\"Internal Server Error\"}\n\n"
-                            break
-                        finally:
-                            if temp_path and os.path.exists(temp_path):
-                                os.unlink(temp_path)
-                        buffer.clear()
-
-                # Process remaining buffer (including any drained audio after stop)
-                if buffer:
-                    logger.info("Processing final buffer: %.2f seconds", len(buffer) / bytes_per_second)
-                    temp_path = None
-                    audio_bytes = bytes(buffer)
-                    try:
-                        trace(
-                            "live_final_buffer_ready",
-                            meeting_id=payload.meeting_id,
-                            buffer_bytes=len(buffer),
-                            buffer_seconds=round(len(buffer) / bytes_per_second, 3),
-                            offset_seconds=round(offset_seconds, 3),
-                        )
-                        temp_path, _ = _write_temp_wav(audio_bytes, samplerate, channels)
-                        
-                        for event in process_audio_chunk(
-                            temp_path, offset_seconds, payload.meeting_id,
-                            last_language, audio_bytes, samplerate, channels,
-                            rt_diarization=session_rt_diarization,
-                        ):
-                            yield event
-                            
-                        # Manual summarization mode: no final-buffer summary tick.
-                    except Exception as exc:
-                        logger.exception("final live transcription error: %s", exc)
-                        # #region agent log
-                        import traceback
-                        nd_dbg(
-                            "app/routers/transcription.py:event_stream",
-                            "live_final_buffer_error",
-                            {
-                                "exc_type": type(exc).__name__,
-                                "exc_str": str(exc)[:800],
-                                "traceback": traceback.format_exc()[-2000:],
-                                "offset_seconds": offset_seconds,
-                            },
-                            run_id="pre-fix",
-                            hypothesis_id="E1",
-                        )
-                        # #endregion
-                    finally:
-                        if temp_path and os.path.exists(temp_path):
-                            os.unlink(temp_path)
-
-                yield "data: {\"type\":\"done\"}\n\n"
-            finally:
-                # #region agent log
-                _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
-                import json as _json_dbg
-                import time as _time_dbg
-                def _dbg_finally(msg, data=None):
-                    try:
-                        with open(_log_path, "a") as _f:
-                            _f.write(_json_dbg.dumps({"location":"transcription.py:live_finally","message":msg,"data":data or {},"timestamp":int(_time_dbg.time()*1000),"hypothesisId":"H1,H4"})+"\n")
-                    except Exception:
-                        pass
-                remaining_streams = _unregister_live_stream(payload.meeting_id or "unknown", stream_id)
-                _dbg_finally("finally_block_entered", {
-                    "meeting_id": payload.meeting_id if payload else None,
-                    "stream_id": stream_id,
-                    "remaining_streams": remaining_streams,
-                    "chunks_received": chunks_received,
-                    "loop_count": loop_count,
-                })
-                # #endregion
-                
-                # Stop per-session real-time diarization
-                if session_rt_diarization.is_active():
-                    final_annotations = session_rt_diarization.stop()
-                    logger.info("Real-time diarization final: %s annotations", len(final_annotations))
-                
-                audio_service.disable_live_tap()
-                
-                # Unregister job from unified registry
-                if payload.meeting_id:
-                    with transcription_jobs_lock:
-                        transcription_jobs.pop(payload.meeting_id, None)
-                
-                trace("live_transcription_ended", meeting_id=payload.meeting_id)
-                logger.info("Live transcription ended (deprecated SSE endpoint)")
-                
-                # NOTE: Finalization is NOT done here in the deprecated endpoint.
-                # The new /api/transcribe/start flow handles finalization in _run_transcription().
-                # If this deprecated endpoint is used, the meeting will need manual finalization
-                # or the user should use the new endpoint instead.
-                _dbg_finally("deprecated_endpoint_no_finalize", {
-                    "meeting_id": payload.meeting_id,
-                    "note": "Use /api/transcribe/start instead for automatic finalization"
-                })
-
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-    @router.get("/api/transcribe/live/status/{meeting_id}")
-    def get_live_transcription_status(meeting_id: str) -> dict:
-        """Get status of live transcription for a meeting.
-        
-        Returns:
-            Status dict with capture_stopped and transcription_pending flags
-        """
-        service = live_transcription_services.get(meeting_id)
-        if not service:
-            return {
-                "status": "not_found",
-                "capture_stopped": True,
-                "transcription_complete": True,
-                "chunks_pending": 0,
-            }
-        return service.get_status()
 
     @router.post("/api/diarization/settings")
     def update_diarization_settings(payload: DiarizationSettingsRequest) -> dict:

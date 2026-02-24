@@ -21,7 +21,52 @@ const state = {
   recordingStopped: false,  // True after user clicks Stop (notes become post-meeting immediately)
   // Panel search state
   panelSearch: {},         // Per-panel search state: { panelId: { matches: [], index: -1 } }
+  // Status log state (for rich status panel)
+  statusLog: [],           // Array of status log entries from SSE events
+  activeTranscriptTab: "transcript", // "transcript" or "status"
 };
+
+/**
+ * Get the resolved meeting state for display.
+ * Uses resolved_state from API (tracker-based), falls back to status.
+ * @returns {string} One of: "recording", "finalizing", "background_finalizing", 
+ *                           "pending_finalization", "completed", "in_progress"
+ */
+function getMeetingResolvedState() {
+  if (!state.meeting) return "completed";
+  return state.meeting.resolved_state || state.meeting.status || "completed";
+}
+
+/**
+ * Get a user-friendly label for the meeting state.
+ * @returns {string} Human-readable status label
+ */
+function getMeetingStatusLabel() {
+  const resolvedState = getMeetingResolvedState();
+  switch (resolvedState) {
+    case "recording":
+      return "Recording";
+    case "finalizing":
+    case "background_finalizing":
+      return "Finalizing";
+    case "pending_finalization":
+      return "Pending finalization";
+    case "in_progress":
+      return "In progress";
+    default:
+      return "Completed";
+  }
+}
+
+/**
+ * Check if the meeting is currently active (recording or processing).
+ * @returns {boolean}
+ */
+function isMeetingActive() {
+  const resolvedState = getMeetingResolvedState();
+  return resolvedState === "recording" || resolvedState === "finalizing" || 
+         resolvedState === "in_progress" || resolvedState === "processing";
+}
 
 // =============================================================================
 // Panel Search Utility
@@ -485,6 +530,11 @@ function subscribeToMeetingEvents() {
   state.eventsSource.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
+      // #region agent log
+      if (data.type === 'status_log' || data.type === 'finalization_status') {
+        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:SSE:onmessage',message:'SSE event before filter',data:{type:data.type,eventMeetingId:data.meeting_id,stateMeetingId:state.meetingId,matches:data.meeting_id===state.meetingId},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+      }
+      // #endregion
       
       // Only handle events for this meeting
       if (data.meeting_id !== state.meetingId) return;      
@@ -553,20 +603,24 @@ function handleMeetingEvent(event) {
       break;
     
     case "status_updated":
-      // Meeting status changed (in_progress, completed, etc.)
+      // Meeting status changed (recording, finalizing, completed, etc.)
       if (event.data?.status) {
         if (state.meeting) {
           state.meeting.status = event.data.status;
+          // Also update resolved_state if provided
+          if (event.data.resolved_state) {
+            state.meeting.resolved_state = event.data.resolved_state;
+          }
           state.meeting.ended_at = event.data.ended_at;
         }
         updateTranscriptionControls();
-        // Update UI status displays
-        const meetingStatus = event.data.status === "in_progress" ? "In progress" : "Completed";
+        // Update UI status displays using resolved state
+        const statusLabel = getMeetingStatusLabel();
         const transcriptCount = state.meeting?.transcript?.segments?.length || 0;
         if (transcriptCount > 0) {
-          setTranscriptStatus(`${meetingStatus} • Transcript (${transcriptCount} segments)`);
+          setTranscriptStatus(`${statusLabel} • Transcript (${transcriptCount} segments)`);
         } else {
-          setTranscriptStatus(`${meetingStatus} • No transcript yet.`);
+          setTranscriptStatus(`${statusLabel} • No transcript yet.`);
         }
       }
       break;
@@ -606,8 +660,8 @@ function handleMeetingEvent(event) {
         setTranscriptOutput(state.meeting.transcript.segments);
         // Also update the debug panel transcript
         updateSummaryDebugPanel(state.meeting);
-        const meetingStatus = state.meeting.status === "in_progress" ? "In progress" : "Completed";
-        setTranscriptStatus(`${meetingStatus} • Transcript (${state.meeting.transcript.segments.length} segments)`);
+        const statusLabel = getMeetingStatusLabel();
+        setTranscriptStatus(`${statusLabel} • Transcript (${state.meeting.transcript.segments.length} segments)`);
       }
       break;
     
@@ -621,8 +675,8 @@ function handleMeetingEvent(event) {
         state.lastTranscriptSegments = event.data.segments;
         // Always update display
         setTranscriptOutput(event.data.segments);
-        const meetingStatus = state.meeting.status === "in_progress" ? "In progress" : "Completed";
-        setTranscriptStatus(`${meetingStatus} • Transcript (${event.data.segments.length} segments)`);
+        const statusLabel = getMeetingStatusLabel();
+        setTranscriptStatus(`${statusLabel} • Transcript (${event.data.segments.length} segments)`);
       }
       break;
     
@@ -660,6 +714,14 @@ function handleMeetingEvent(event) {
     case "meeting_updated":
       // General meeting update - do a full refresh
       refreshMeeting();
+      break;
+    
+    case "status_log":
+      // Rich status log entry for the status panel
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleMeetingEvent:status_log',message:'status_log received',data:{stage:event.stage,phase:event.phase,meetingId:event.meeting_id,stateMeetingId:state.meetingId,statusLogLen:state.statusLog.length},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
+      appendStatusLog(event);
       break;
   }
 }
@@ -1403,6 +1465,158 @@ function setTranscriptOutput(segments) {
   output.textContent = text;
 }
 
+// =============================================================================
+// Transcript/Status Tab Switching
+// =============================================================================
+
+function initTranscriptPanelTabs() {
+  const tabs = document.querySelectorAll(".transcript-panel .panel-tab");
+  tabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+      const tabName = tab.dataset.tab;
+      switchTranscriptTab(tabName);
+    });
+  });
+}
+
+function switchTranscriptTab(tabName) {
+  state.activeTranscriptTab = tabName;
+  
+  // Update tab buttons
+  const tabs = document.querySelectorAll(".transcript-panel .panel-tab");
+  tabs.forEach(tab => {
+    if (tab.dataset.tab === tabName) {
+      tab.classList.add("active");
+    } else {
+      tab.classList.remove("active");
+    }
+  });
+  
+  // Update content panels
+  const contents = document.querySelectorAll(".transcript-panel .panel-tab-content");
+  contents.forEach(content => {
+    if (content.dataset.tabContent === tabName) {
+      content.classList.add("active");
+    } else {
+      content.classList.remove("active");
+    }
+  });
+  
+  // Hide search bar when switching to status tab
+  const searchBar = document.getElementById("transcript-search-bar");
+  const searchToggle = document.getElementById("transcript-search-toggle");
+  if (tabName === "status") {
+    if (searchBar) searchBar.style.display = "none";
+    if (searchToggle) searchToggle.style.display = "none";
+  } else {
+    if (searchToggle) searchToggle.style.display = "";
+  }
+}
+
+// =============================================================================
+// Status Log Rendering
+// =============================================================================
+
+function appendStatusLog(event) {
+  const entry = {
+    timestamp: event.timestamp || new Date().toISOString(),
+    stage: event.stage,
+    phase: event.phase,
+    data: event.data,
+  };
+  state.statusLog.push(entry);
+  
+  // Render if status tab is active
+  if (state.activeTranscriptTab === "status") {
+    renderStatusLog();
+  }
+}
+
+function renderStatusLog() {
+  const output = document.getElementById("status-log-output");
+  if (!output) return;
+  
+  if (state.statusLog.length === 0) {
+    output.innerHTML = '<div class="status-log-empty">No status logs yet. Start a recording to see processing status.</div>';
+    return;
+  }
+  
+  const html = state.statusLog.map((entry, index) => {
+    const time = new Date(entry.timestamp).toLocaleTimeString();
+    const stageLabel = formatStageLabel(entry.stage);
+    const phaseClass = getPhaseClass(entry.phase);
+    const phaseLabel = formatPhaseLabel(entry.phase);
+    
+    let dataHtml = "";
+    if (entry.data) {
+      const dataId = `status-log-data-${index}`;
+      dataHtml = `
+        <details class="status-log-data">
+          <summary>Show details</summary>
+          <pre id="${dataId}">${escapeHtml(JSON.stringify(entry.data, null, 2))}</pre>
+        </details>
+      `;
+    }
+    
+    return `
+      <div class="status-log-entry">
+        <span class="status-log-time">${time}</span>
+        <span class="status-log-stage">${stageLabel}</span>
+        <span class="status-log-phase ${phaseClass}">${phaseLabel}</span>
+        ${dataHtml}
+      </div>
+    `;
+  }).join("");
+  
+  output.innerHTML = html;
+  
+  // Auto-scroll to bottom
+  output.scrollTop = output.scrollHeight;
+}
+
+function formatStageLabel(stage) {
+  const labels = {
+    diarization: "Diarization",
+    speaker_names: "Speaker Names",
+    summary: "Summary",
+    title: "Title",
+  };
+  return labels[stage] || stage;
+}
+
+function formatPhaseLabel(phase) {
+  const labels = {
+    started: "Started",
+    input: "Input",
+    output: "Output",
+    completed: "Completed",
+    failed: "Failed",
+  };
+  return labels[phase] || phase;
+}
+
+function getPhaseClass(phase) {
+  const classes = {
+    started: "phase-started",
+    input: "phase-input",
+    output: "phase-output",
+    completed: "phase-completed",
+    failed: "phase-failed",
+  };
+  return classes[phase] || "";
+}
+
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function clearStatusLog() {
+  state.statusLog = [];
+  renderStatusLog();
+}
+
 function setTranscriptStatus(message) {
   const status = document.getElementById("transcript-status");
   if (status) {
@@ -1588,8 +1802,7 @@ async function refreshMeeting() {
     state.meeting = meeting;
     
     // Set transcriptStartTime for active meetings (only on first load, not every refresh)
-    const isActiveMeeting = meeting.status === "in_progress" || meeting.status === "processing";
-    if (isActiveMeeting && !state.transcriptStartTime) {
+    if (isMeetingActive() && !state.transcriptStartTime) {
       state.transcriptStartTime = Date.now();
     }
     
@@ -1597,18 +1810,18 @@ async function refreshMeeting() {
     setAttendeeEditor(meeting.attendees || []);
     
     updateFinalizationStatusFromMeeting(meeting);
-    const meetingStatus = meeting.status === "in_progress" ? "In progress" : "Completed";
+    const statusLabel = getMeetingStatusLabel();
     
     if (meeting.transcript?.segments?.length) {
       state.lastTranscriptSegments = meeting.transcript.segments;
       setTranscriptStatus(
-        `${meetingStatus} • Transcript (${meeting.transcript.segments.length} segments)`
+        `${statusLabel} • Transcript (${meeting.transcript.segments.length} segments)`
       );
       if (!state.liveStreaming) {
         setTranscriptOutput(meeting.transcript.segments);
       }
     } else {
-      setTranscriptStatus(`${meetingStatus} • No transcript yet.`);
+      setTranscriptStatus(`${statusLabel} • No transcript yet.`);
       if (!state.liveStreaming) {
         setTranscriptOutput([]);
       }
@@ -1618,10 +1831,10 @@ async function refreshMeeting() {
       const summaryUpdated = meeting.summary?.updated_at
         ? `Last updated ${meeting.summary.updated_at}`
         : "Summary ready";
-      setSummaryStatus(`${meetingStatus} • ${summaryUpdated}`);
+      setSummaryStatus(`${statusLabel} • ${summaryUpdated}`);
       setSummaryOutput(meeting.summary.text);
     } else {
-      setSummaryStatus(`${meetingStatus} • No summary yet.`);
+      setSummaryStatus(`${statusLabel} • No summary yet.`);
       setSummaryOutput("No summary yet.");
     }
 
@@ -1640,39 +1853,6 @@ async function refreshMeeting() {
     setGlobalError(`Failed to load meeting: ${error.message}`);
   } finally {
     setGlobalBusy("");
-  }
-
-  // Start backend transcription (separate try/catch so meeting load errors don't block this)
-  try {
-    const response = await fetch("/api/transcribe/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      meeting_id: state.meetingId,
-    }),
-  });
-
-    const result = await response.json();    
-    // Handle various status responses gracefully
-    if (result.status === "already_running") {
-      debugLog("Backend transcription already running");
-    } else if (result.status === "not_applicable") {
-      // File transcription or no active recording - this is fine
-      debugLog("Backend transcription not applicable", result.reason);
-    } else if (!response.ok) {
-      throw new Error(result.detail || `Failed to start transcription: ${response.status}`);
-    } else {
-      debugLog("Backend transcription started", result);
-      setTranscriptStatus("In progress • Live transcript");
-    }
-    
-    // Transcript segments will arrive via meeting events SSE
-    // No need to maintain a separate SSE connection
-    
-  } catch (error) {
-    debugError("Failed to start backend transcription", error);
-    // Don't show error to user - meeting events will still work
-    // and transcription may already be running
   }
 
   // #region agent log
@@ -1793,7 +1973,8 @@ function getCurrentRecordingTime() {
   if (!state.meeting) return null;
   
   // If meeting is completed OR recording was stopped, notes are post-meeting
-  if (state.meeting.status === "completed" || state.recordingStopped) {
+  const resolvedState = getMeetingResolvedState();
+  if (resolvedState === "completed" || state.recordingStopped) {
     // #region agent log
     fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:getCurrentRecordingTime:completed',message:'Meeting completed or stopped - returning null',data:{status:state.meeting.status,recordingStopped:state.recordingStopped},timestamp:Date.now(),runId:'ts-fix',hypothesisId:'H_COMPLETED'})}).catch(()=>{});
     // #endregion
@@ -1841,7 +2022,8 @@ function updateNotesTimestampDisplay() {
   if (!badge || !text) return;
   
   const hasContent = input && input.value.trim().length > 0;
-  const isPostMeeting = state.meeting?.status === "completed" || state.recordingStopped;
+  const resolvedState = getMeetingResolvedState();
+  const isPostMeeting = resolvedState === "completed" || state.recordingStopped;
   
   if (state.noteTimestamp !== null) {
     // During meeting with timestamp
@@ -1940,7 +2122,8 @@ async function submitNote() {
   if (!text) return;
   
   const timestamp = state.noteTimestamp;
-  const isPostMeeting = state.meeting?.status === "completed" || state.recordingStopped;
+  const resolvedState = getMeetingResolvedState();
+  const isPostMeeting = resolvedState === "completed" || state.recordingStopped;
   
   try {
     const note = await fetchJson(`/api/meetings/${state.meetingId}/notes`, {
@@ -2360,11 +2543,14 @@ async function updateTranscriptionControls() {
   }
   
   // Query the backend for the authoritative real-time state of this meeting.
-  // Returns: "transcribing", "finalizing", or "idle".
+  // Returns: "recording", "finalizing", "background_finalizing", or "idle".
   let liveState = "idle";
   try {
     const statusResp = await fetchJson(`/api/transcribe/status/${state.meetingId}`);
     liveState = statusResp.state || "idle";
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:updateTranscriptionControls',message:'STATUS_RESPONSE',data:{meetingId:state.meetingId,liveState,statusResp},timestamp:Date.now(),hypothesisId:'H1,H3'})}).catch(()=>{});
+    // #endregion
   } catch (_) {}
 
   const active = await getActiveTranscription();
@@ -2380,11 +2566,12 @@ async function updateTranscriptionControls() {
   });
   
   // Show controls based on the real backend state
-  if (liveState === "transcribing") {
-    logToServer("showing stop (transcribing)");
+  // liveState can be: "recording", "finalizing", "background_finalizing", or "idle"
+  if (liveState === "recording") {
+    logToServer("showing stop (recording)");
     stopBtn.style.display = "inline-block";
     resumeBtn.style.display = "none";
-    statusBadge.textContent = "Transcribing";
+    statusBadge.textContent = "Recording";
     statusBadge.className = "status-badge in-progress";
   } else if (liveState === "finalizing") {
     // Finalization is actively running in the backend thread.
@@ -2625,6 +2812,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   
   // Debug section maximize buttons
   initDebugMaximize();
+  
+  // Initialize transcript/status tab switching
+  initTranscriptPanelTabs();
   
   // Initialize user notes panel
   initNotesPanel();

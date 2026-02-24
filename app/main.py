@@ -18,35 +18,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 print(f"[boot] app.main module import cwd={os.getcwd()} pid={os.getpid()}", file=sys.stderr)
 
 # #region agent log
-_DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
-
-
-def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
-    """Write one NDJSON debug line for this session. Best-effort only."""
-    try:
-        payload = {
-            "id": f"log_{int(time.time() * 1000)}_{os.getpid()}",
-            "timestamp": int(time.time() * 1000),
-            "location": location,
-            "message": message,
-            "data": data,
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-        }
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        return
+_boot_dbg_logger = logging.getLogger("notetaker.boot.debug")
 
 
 def _boot_log(location: str, message: str, data: dict, hypothesis_id: str) -> None:
-    _dbg_ndjson(
-        location=location,
-        message=message,
-        data=data,
-        run_id="boot-debug",
-        hypothesis_id=hypothesis_id,
-    )
+    """Write boot debug log to server log."""
+    _boot_dbg_logger.debug("%s: %s data=%s", location, message, data)
 # #endregion
 
 from app.context import AppContext
@@ -237,7 +214,7 @@ def create_app() -> FastAPI:
         raise
     try:
         app.include_router(
-            create_recording_router(audio_service, meeting_store, summarization_service, ctx)
+            create_recording_router(audio_service, meeting_store, summarization_service, ctx.config_path)
         )
         logger.info("Boot: recording router mounted")
         app.include_router(create_logs_router(ctx))

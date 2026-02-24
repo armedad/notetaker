@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.services.audio_capture import AudioCaptureService
 from app.services.meeting_store import MeetingStore
+from app.services.active_meeting_tracker import get_tracker, MeetingState
 
 
 class StartRecordingRequest(BaseModel):
@@ -31,19 +32,19 @@ def create_recording_router(
     audio_service: AudioCaptureService,
     meeting_store: MeetingStore,
     summarization_service,
-    ctx,
+    config_path: str,
 ) -> APIRouter:
     router = APIRouter()
     logger = logging.getLogger("notetaker.api.recording")
 
     def load_config() -> dict:
-        if not os.path.exists(ctx.config_path):
+        if not os.path.exists(config_path):
             return {}
-        with open(ctx.config_path, "r", encoding="utf-8") as config_file:
+        with open(config_path, "r", encoding="utf-8") as config_file:
             return json.load(config_file)
 
     def save_config(data: dict) -> None:
-        with open(ctx.config_path, "w", encoding="utf-8") as config_file:
+        with open(config_path, "w", encoding="utf-8") as config_file:
             json.dump(data, config_file, indent=2)
 
     @router.get("/api/audio/devices")
@@ -58,6 +59,7 @@ def create_recording_router(
     def start_recording(payload: StartRecordingRequest) -> dict:
         start_time = time.perf_counter()
         logger.debug("start_recording received: %s", payload.model_dump())
+        active_tracker = get_tracker()
         try:
             result = audio_service.start_recording(
                 device_index=payload.device_index,
@@ -65,6 +67,16 @@ def create_recording_router(
                 channels=payload.channels,
             )
             meeting_store.create_from_recording(result, status="in_progress")
+            meeting_id = result.get("recording_id")
+            audio_path = result.get("file_path")
+            # Register with active_tracker so status endpoint returns correct state
+            if meeting_id:
+                active_tracker.register(
+                    meeting_id,
+                    MeetingState.RECORDING,
+                    audio_source="microphone",
+                    audio_path=audio_path,
+                )
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.info("start_recording completed in %.2f ms", duration_ms)
             return result
@@ -81,9 +93,14 @@ def create_recording_router(
     def stop_recording() -> dict:
         start_time = time.perf_counter()
         logger.debug("stop_recording received")
+        active_tracker = get_tracker()
         try:
             result = audio_service.stop_recording()
             meeting = meeting_store.create_from_recording(result, status="completed")
+            # Unregister from active tracker
+            meeting_id = result.get("recording_id")
+            if meeting_id:
+                active_tracker.unregister(meeting_id)
             if meeting:
                 meeting_id = meeting.get("id")
                 summary = meeting.get("summary", {})

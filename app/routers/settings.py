@@ -78,8 +78,6 @@ class ProviderSettingsRequest(BaseModel):
 class TranscriptionSettingsRequest(BaseModel):
     live_model_size: str
     final_model_size: str
-    auto_transcribe: bool
-    stream_transcribe: bool
     live_transcribe: bool
     consolidation_max_duration: float = 15.0
     consolidation_max_gap: float = 2.0
@@ -525,6 +523,35 @@ def create_settings_router(ctx) -> APIRouter:
             data = json.load(config_file)
         return data.get("transcription", {})
 
+    @router.get("/api/settings/transcription/models")
+    def get_transcription_models() -> dict:
+        """Return available Whisper models for transcription with metadata."""
+        from app.services.transcription import get_available_whisper_models, get_whisper_model_info
+        
+        models = get_available_whisper_models()
+        model_info = get_whisper_model_info()
+        
+        # Build model list with info, falling back for unknown models
+        def build_model_entry(model_id: str) -> dict:
+            info = model_info.get(model_id, {})
+            return {
+                "id": model_id,
+                "name": info.get("name", model_id),
+                "params": info.get("params", ""),
+                "speed": info.get("speed", ""),
+                "description": info.get("description", ""),
+            }
+        
+        live_models = [build_model_entry(m) for m in models]
+        final_models = [
+            {"id": "none", "name": "None", "params": "", "speed": "", "description": "Skip final transcription pass. Use live transcription as-is."}
+        ] + live_models
+        
+        return {
+            "live_models": live_models,
+            "final_models": final_models,
+        }
+
     @router.post("/api/settings/transcription")
     def update_transcription_settings(payload: TranscriptionSettingsRequest) -> dict:
         data = {}
@@ -534,8 +561,6 @@ def create_settings_router(ctx) -> APIRouter:
         transcription = data.get("transcription", {})
         transcription["live_model_size"] = payload.live_model_size
         transcription["final_model_size"] = payload.final_model_size
-        transcription["auto_transcribe"] = payload.auto_transcribe
-        transcription["stream_transcribe"] = payload.stream_transcribe
         transcription["live_transcribe"] = payload.live_transcribe
         transcription["consolidation_max_duration"] = payload.consolidation_max_duration
         transcription["consolidation_max_gap"] = payload.consolidation_max_gap

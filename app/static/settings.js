@@ -446,8 +446,61 @@ async function loadAudioSettings() {
   }
 }
 
+async function loadTranscriptionModels() {
+  try {
+    const data = await fetchJson("/api/settings/transcription/models");
+    if (!data) return;
+
+    const liveSelect = document.getElementById("live-model-size");
+    const finalSelect = document.getElementById("final-model-size");
+
+    // Clear existing options
+    liveSelect.innerHTML = "";
+    finalSelect.innerHTML = "";
+
+    // Populate live models
+    for (const model of data.live_models || []) {
+      const opt = document.createElement("option");
+      opt.value = model.id;
+      opt.textContent = formatModelLabel(model);
+      opt.title = model.description || "";
+      if (model.id === "base") opt.selected = true;
+      liveSelect.appendChild(opt);
+    }
+
+    // Populate final models (includes "none")
+    for (const model of data.final_models || []) {
+      const opt = document.createElement("option");
+      opt.value = model.id;
+      opt.textContent = formatModelLabel(model);
+      opt.title = model.description || "";
+      if (model.id === "medium") opt.selected = true;
+      finalSelect.appendChild(opt);
+    }
+  } catch (error) {
+    console.error("Failed to load transcription models:", error);
+  }
+}
+
+function formatModelLabel(model) {
+  if (model.id === "none") {
+    return "none (skip final pass)";
+  }
+  let label = model.name || model.id;
+  if (model.params) {
+    label += ` (${model.params})`;
+  }
+  if (model.speed) {
+    label += ` — ${model.speed}`;
+  }
+  return label;
+}
+
 async function loadTranscriptionSettings() {
   try {
+    // Load available models first
+    await loadTranscriptionModels();
+
     const data = await fetchJson("/api/settings/transcription");
     if (!data || Object.keys(data).length === 0) {
       setDiarizationDeviceState(false);
@@ -460,10 +513,6 @@ async function loadTranscriptionSettings() {
     if (data.final_model_size) {
       document.getElementById("final-model-size").value = data.final_model_size;
     }
-    document.getElementById("auto-transcribe").checked =
-      data.auto_transcribe ?? true;
-    document.getElementById("stream-transcribe").checked =
-      data.stream_transcribe ?? true;
     document.getElementById("live-transcribe").checked =
       data.live_transcribe ?? true;
     document.getElementById("consolidation-max-duration").value =
@@ -567,8 +616,6 @@ async function saveTranscriptionSettings() {
   const payload = {
     live_model_size: document.getElementById("live-model-size").value,
     final_model_size: document.getElementById("final-model-size").value,
-    auto_transcribe: document.getElementById("auto-transcribe").checked,
-    stream_transcribe: document.getElementById("stream-transcribe").checked,
     live_transcribe: document.getElementById("live-transcribe").checked,
     consolidation_max_duration: parseFloat(document.getElementById("consolidation-max-duration").value) || 15,
     consolidation_max_gap: parseFloat(document.getElementById("consolidation-max-gap").value) || 2,
@@ -914,12 +961,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
   document
     .getElementById("final-model-size")
-    .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
-  document
-    .getElementById("auto-transcribe")
-    .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
-  document
-    .getElementById("stream-transcribe")
     .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
   document
     .getElementById("live-transcribe")

@@ -4,7 +4,12 @@ from app.services.transcription.base import (
     TranscriptionProviderError,
     TranscriptionResult,
 )
-from app.services.transcription.whisper_local import FasterWhisperProvider, WhisperConfig
+from app.services.transcription.whisper_local import (
+    FasterWhisperProvider,
+    WhisperConfig,
+    get_available_whisper_models,
+    get_whisper_model_info,
+)
 
 __all__ = [
     "TranscriptSegment",
@@ -13,4 +18,6 @@ __all__ = [
     "TranscriptionResult",
     "FasterWhisperProvider",
     "WhisperConfig",
+    "get_available_whisper_models",
+    "get_whisper_model_info",
 ]
