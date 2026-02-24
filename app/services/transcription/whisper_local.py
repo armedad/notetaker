@@ -10,7 +10,7 @@ from typing import Optional
 # This must be set before importing faster_whisper
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
-from faster_whisper import WhisperModel
+from faster_whisper import WhisperModel, available_models
 
 from app.services.transcription.base import (
     TranscriptSegment,
@@ -19,6 +19,148 @@ from app.services.transcription.base import (
     TranscriptionResult,
 )
 from app.services.diarization import DiarizationService
+
+
+# Static registry of Whisper model metadata for UI display
+# Models are grouped by category for better organization
+WHISPER_MODEL_INFO: dict[str, dict] = {
+    # Standard multilingual models
+    "tiny": {
+        "name": "Tiny",
+        "params": "39M",
+        "speed": "fastest",
+        "description": "Fastest model, lowest accuracy. Good for quick drafts or testing.",
+    },
+    "tiny.en": {
+        "name": "Tiny (English)",
+        "params": "39M",
+        "speed": "fastest",
+        "description": "English-only tiny model. Slightly better for English than multilingual.",
+    },
+    "base": {
+        "name": "Base",
+        "params": "74M",
+        "speed": "very fast",
+        "description": "Fast with basic accuracy. Good default for live transcription.",
+    },
+    "base.en": {
+        "name": "Base (English)",
+        "params": "74M",
+        "speed": "very fast",
+        "description": "English-only base model. Better for English content.",
+    },
+    "small": {
+        "name": "Small",
+        "params": "244M",
+        "speed": "fast",
+        "description": "Balanced speed and accuracy. Good for general use.",
+    },
+    "small.en": {
+        "name": "Small (English)",
+        "params": "244M",
+        "speed": "fast",
+        "description": "English-only small model. Recommended for English content.",
+    },
+    "medium": {
+        "name": "Medium",
+        "params": "769M",
+        "speed": "moderate",
+        "description": "High accuracy, slower. Good for final transcription pass.",
+    },
+    "medium.en": {
+        "name": "Medium (English)",
+        "params": "769M",
+        "speed": "moderate",
+        "description": "English-only medium model. Best quality for English without going to large.",
+    },
+    "large-v1": {
+        "name": "Large v1",
+        "params": "1.5B",
+        "speed": "slow",
+        "description": "Original large model. High accuracy, resource intensive.",
+    },
+    "large-v2": {
+        "name": "Large v2",
+        "params": "1.5B",
+        "speed": "slow",
+        "description": "Improved large model. Better accuracy than v1.",
+    },
+    "large-v3": {
+        "name": "Large v3",
+        "params": "1.5B",
+        "speed": "slow",
+        "description": "Latest large model. Highest accuracy, requires significant resources.",
+    },
+    "large": {
+        "name": "Large",
+        "params": "1.5B",
+        "speed": "slow",
+        "description": "Alias for latest large model (v3). Highest accuracy available.",
+    },
+    # Turbo models
+    "large-v3-turbo": {
+        "name": "Large v3 Turbo",
+        "params": "809M",
+        "speed": "fast",
+        "description": "Optimized large-v3 with 4 decoder layers. Near large-v2 accuracy at much higher speed.",
+    },
+    "turbo": {
+        "name": "Turbo",
+        "params": "809M",
+        "speed": "fast",
+        "description": "Alias for large-v3-turbo. Best speed/accuracy balance for most use cases.",
+    },
+    # Distil models (English only, knowledge-distilled)
+    "distil-small.en": {
+        "name": "Distil Small",
+        "params": "166M",
+        "speed": "very fast",
+        "description": "Distilled small model. 6x faster than large, English only. Good for constrained environments.",
+    },
+    "distil-medium.en": {
+        "name": "Distil Medium",
+        "params": "394M",
+        "speed": "very fast",
+        "description": "Distilled medium model. 6x faster than large, English only.",
+    },
+    "distil-large-v2": {
+        "name": "Distil Large v2",
+        "params": "756M",
+        "speed": "fast",
+        "description": "Distilled large-v2. 6x faster, within 1% accuracy of large. English only.",
+    },
+    "distil-large-v3": {
+        "name": "Distil Large v3",
+        "params": "756M",
+        "speed": "fast",
+        "description": "Distilled large-v3. Best distil model, 6x faster than large. English only.",
+    },
+    "distil-large-v3.5": {
+        "name": "Distil Large v3.5",
+        "params": "756M",
+        "speed": "fast",
+        "description": "Latest distilled model. Improved accuracy over v3. English only.",
+    },
+}
+
+
+def get_available_whisper_models() -> list[str]:
+    """Return list of available Whisper model IDs from faster-whisper."""
+    return available_models()
+
+
+def get_whisper_model_info() -> dict[str, dict]:
+    """Return model info for all available models.
+    
+    Filters WHISPER_MODEL_INFO to only include models that are
+    actually available in the installed faster-whisper version.
+    """
+    available = set(available_models())
+    return {
+        model_id: info
+        for model_id, info in WHISPER_MODEL_INFO.items()
+        if model_id in available
+    }
 
 
 @dataclass(frozen=True)

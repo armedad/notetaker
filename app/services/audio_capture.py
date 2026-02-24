@@ -11,6 +11,7 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 
+from app.services.file_read_service import FileReadService
 from app.services.ndjson_debug import dbg as nd_dbg
 
 
@@ -39,6 +40,7 @@ class AudioCaptureService:
         self._stop_event = threading.Event()
         self._capture_stopped = threading.Event()  # Signals capture has stopped but transcription may continue
         self._stream: Optional[sd.RawInputStream] = None
+        self._file_reader: Optional[FileReadService] = None
         self._logger = logging.getLogger("notetaker.audio")
         self._callback_counter = 0
         self._first_callback_logged = False
@@ -79,11 +81,19 @@ class AudioCaptureService:
     def is_capture_stopped(self) -> bool:
         """Check if audio capture has stopped (but transcription may still be processing)."""
         return self._capture_stopped.is_set()
+    
+    def has_buffered_audio(self) -> bool:
+        """Check if there is audio buffered in the live queue."""
+        return not self._live_queue.empty()
 
     def enable_live_tap(self) -> None:
         with self._lock:
             self._logger.debug("Live tap enabled")
             self._live_enabled = True
+            # #region agent log
+            was_stopped = self._capture_stopped.is_set()
+            self._logger.debug("ENABLE_LIVE_TAP: was_stopped_before_clear=%s", was_stopped)
+            # #endregion
             self._capture_stopped.clear()
 
     def disable_live_tap(self) -> None:
@@ -98,13 +108,28 @@ class AudioCaptureService:
 
     def signal_capture_stopped(self) -> None:
         """Signal that audio capture has stopped. Call this when user requests stop."""
+        # #region agent log
+        import traceback as _tb
+        self._logger.debug("SIGNAL_CAPTURE_STOPPED: stack=%s", _tb.format_stack()[-5:])
+        # #endregion
         self._capture_stopped.set()
         self._logger.debug("Capture stopped signal set")
 
     def get_live_chunk(self, timeout: float = 0.5) -> Optional[bytes]:
+        # #region agent log
+        qsize = self._live_queue.qsize()
+        self._logger.debug("GET_LIVE_CHUNK_ENTER: queue_size=%d live_enabled=%s", qsize, self._live_enabled)
+        # #endregion
         try:
-            return self._live_queue.get(timeout=timeout)
+            chunk = self._live_queue.get(timeout=timeout)
+            # #region agent log
+            self._logger.debug("GET_LIVE_CHUNK_GOT: chunk_len=%d", len(chunk) if chunk else 0)
+            # #endregion
+            return chunk
         except queue.Empty:
+            # #region agent log
+            self._logger.debug("GET_LIVE_CHUNK_EMPTY: queue_size=%d", self._live_queue.qsize())
+            # #endregion
             return None
 
     def drain_live_queue(self) -> bytes:
@@ -339,6 +364,12 @@ class AudioCaptureService:
                 self._stream = None
                 self._logger.debug("InputStream stopped")
 
+            if self._file_reader is not None:
+                self._logger.debug("Stopping FileReadService")
+                self._file_reader.stop()
+                self._file_reader = None
+                self._logger.debug("FileReadService stopped")
+
             self._stop_event.set()
             if self._writer_thread is not None:
                 self._logger.debug(
@@ -356,6 +387,70 @@ class AudioCaptureService:
 
             self._state = RecordingState()
             return final_state
+
+    def start_file_playback(
+        self,
+        file_path: str,
+        speed_percent: int = 300,
+        samplerate: int = 48000,
+        channels: int = 2,
+    ) -> dict:
+        """Start streaming audio from a file through the shared pipeline.
+
+        Sets up the same infrastructure as start_recording() (recording ID,
+        WAV output path, queues, writer thread, live tap) but uses
+        FileReadService instead of sounddevice to produce raw PCM blocks.
+
+        Returns the same dict shape as start_recording() / current_status().
+        """
+        with self._lock:
+            self._first_callback_logged = False
+            if self._state.recording_id is not None:
+                raise RuntimeError("Recording already in progress")
+
+            os.makedirs(self._ctx.recordings_dir, exist_ok=True)
+            recording_id = str(uuid.uuid4())
+            filename = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{recording_id}.wav"
+            wav_path = os.path.join(self._ctx.recordings_dir, filename)
+
+            self._state = RecordingState(
+                recording_id=recording_id,
+                started_at=datetime.utcnow(),
+                file_path=wav_path,
+                samplerate=samplerate,
+                channels=channels,
+                dtype="int16",
+            )
+
+            self._logger.info(
+                "File playback start: id=%s source=%s wav=%s sr=%s ch=%s speed=%s%%",
+                recording_id, os.path.basename(file_path), wav_path,
+                samplerate, channels, speed_percent,
+            )
+
+            self._stop_event.clear()
+            self._capture_stopped.clear()
+            self._callback_counter = 0
+
+            self._writer_thread = threading.Thread(
+                target=self._writer_loop, daemon=True
+            )
+            self._writer_thread.start()
+
+            self._live_enabled = True
+
+            self._file_reader = FileReadService(
+                file_path,
+                callback=self._audio_callback,
+                samplerate=samplerate,
+                channels=channels,
+                blocksize=4096,
+                speed_percent=speed_percent,
+                on_complete=self._capture_stopped.set,
+            )
+            self._file_reader.start()
+
+            return self.current_status()
 
     def _audio_callback(self, indata, frames, time, status) -> None:
         if status:
@@ -391,9 +486,19 @@ class AudioCaptureService:
             self._logger.debug("Audio callback frames=%s", frames)
         payload = bytes(indata)
         self._audio_queue.put(payload)
+        # #region agent log
+        if self._callback_counter <= 5:
+            self._logger.debug("CALLBACK_LIVE_CHECK: callback_counter=%d live_enabled=%s payload_len=%d", 
+                              self._callback_counter, self._live_enabled, len(payload))
+        # #endregion
         if self._live_enabled:
             try:
                 self._live_queue.put_nowait(payload)
+                # #region agent log
+                if self._callback_counter <= 5:
+                    self._logger.debug("CALLBACK_PUT_SUCCESS: callback_counter=%d queue_size=%d", 
+                                      self._callback_counter, self._live_queue.qsize())
+                # #endregion
             except queue.Full:
                 if self._callback_counter % 100 == 0:
                     self._logger.warning("Live queue full; dropping chunk")

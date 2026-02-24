@@ -8,43 +8,37 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.active_meeting_tracker import ActiveMeetingTracker
 
 # #region agent log
-_DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
+_dbg_logger = logging.getLogger("notetaker.debug")
 
 
 def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
-    """Write one NDJSON debug line for this session. Best-effort only."""
-    try:
-        payload = {
-            "id": f"log_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
-            "timestamp": int(time.time() * 1000),
-            "location": location,
-            "message": message,
-            "data": data,
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-        }
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        return
-
-
+    """Shim for legacy debug calls - logs to standard server log."""
+    _dbg_logger.debug("%s: %s data=%s", location, message, data)
 # #endregion
 
 
 _MEETINGS_FOLDER_README = """\
 # Notetaker Meetings
 
-This directory contains all meeting JSON files managed by [Notetaker](https://github.com/your-org/notetaker).
+This directory contains meeting transcripts and summaries captured by [Notetaker](https://github.com/your-org/notetaker).
+
+Each JSON file represents a single meeting and includes:
+- Full transcript with speaker identification and timestamps
+- AI-generated summary and action items
+- Attendee information
+- User notes
 
 ## Files
 
 - `README.md` - This file
 - `manifest.json` - Machine-readable index of all meetings
-- `*.json` - Individual meeting files (one per meeting)
+- `*.json` - Individual meeting files (one per meeting, containing transcript and summary)
 
 ## Meeting JSON Schema
 
@@ -152,7 +146,8 @@ class MeetingStore:
                 continue
             segments = m.get("segments") or []
             attendees = m.get("attendees") or []
-            summary = m.get("summary_state", {})
+            summary = m.get("summary", {})
+            summary_text = summary.get("text", "") if isinstance(summary, dict) else ""
             entries.append({
                 "id": m.get("id", ""),
                 "title": m.get("title", ""),
@@ -160,7 +155,8 @@ class MeetingStore:
                 "filename": os.path.basename(path),
                 "status": m.get("status", ""),
                 "segment_count": len(segments),
-                "has_summary": bool(summary.get("text")),
+                "has_summary": bool(summary_text),
+                "summary": summary_text,
                 "attendee_count": len(attendees),
             })
         return entries
@@ -207,7 +203,8 @@ class MeetingStore:
                     return
                 segments = m.get("segments") or []
                 attendees = m.get("attendees") or []
-                summary = m.get("summary_state", {})
+                summary = m.get("summary", {})
+                summary_text = summary.get("text", "") if isinstance(summary, dict) else ""
                 new_entry = {
                     "id": m.get("id", ""),
                     "title": m.get("title", ""),
@@ -215,7 +212,8 @@ class MeetingStore:
                     "filename": os.path.basename(path),
                     "status": m.get("status", ""),
                     "segment_count": len(segments),
-                    "has_summary": bool(summary.get("text")),
+                    "has_summary": bool(summary_text),
+                    "summary": summary_text,
                     "attendee_count": len(attendees),
                 }
                 existing = manifest.get("meetings", [])
@@ -316,25 +314,9 @@ class MeetingStore:
             # #region agent log
             try:
                 paths = self._list_meeting_paths()
-                _dbg_ndjson(
-                    location="app/services/meeting_store.py:list_meetings",
-                    message="list_meetings paths",
-                    data={
-                        "meetings_dir": self._meetings_dir,
-                        "path_count": len(paths),
-                        "path_names": [os.path.basename(p) for p in paths[:20]],
-                    },
-                    run_id="pre-fix",
-                    hypothesis_id="H2",
-                )
+                _dbg_logger.debug("list_meetings paths: meetings_dir=%s path_count=%d", self._meetings_dir, len(paths))
             except Exception as exc:
-                _dbg_ndjson(
-                    location="app/services/meeting_store.py:list_meetings",
-                    message="list_meetings paths error",
-                    data={"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
-                    run_id="pre-fix",
-                    hypothesis_id="H2",
-                )
+                _dbg_logger.debug("list_meetings paths error: exc_type=%s exc=%s", type(exc).__name__, str(exc)[:300])
             # #endregion
             meetings: list[dict] = []
             for path in self._list_meeting_paths():
@@ -413,7 +395,7 @@ class MeetingStore:
         
         Args:
             meeting_id: The meeting being finalized
-            status_text: Human-readable status text (e.g., "Analyzing speakers...")
+            status_text: Human-readable status text (e.g., "Diarization...")
             progress: Optional progress percentage (0.0 to 1.0)
         """
         with self._events_condition:
@@ -428,6 +410,42 @@ class MeetingStore:
             if len(self._events) > 200:
                 self._events = self._events[-100:]
             # Wake up any waiting SSE connections immediately
+            self._events_condition.notify_all()
+
+    def publish_status_log(
+        self,
+        meeting_id: str,
+        stage: str,
+        phase: str,
+        data: Optional[dict] = None,
+    ) -> None:
+        """Publish a detailed status log entry for the status panel.
+        
+        Args:
+            meeting_id: The meeting being processed
+            stage: "diarization", "speaker_names", "summary", "title"
+            phase: "started", "input", "output", "completed", "failed"
+            data: Raw input/output data to display (optional)
+        """
+        # #region agent log
+        import time as _t_sl; import json as _j_sl
+        try:
+            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_sl:
+                _f_sl.write(_j_sl.dumps({"location":"meeting_store.py:publish_status_log","message":"status_log_published","data":{"meeting_id":meeting_id,"stage":stage,"phase":phase,"events_len":len(self._events)},"timestamp":int(_t_sl.time()*1000),"hypothesisId":"H5"})+"\n")
+        except Exception: pass
+        # #endregion
+        with self._events_condition:
+            payload = {
+                "type": "status_log",
+                "meeting_id": meeting_id,
+                "stage": stage,
+                "phase": phase,
+                "data": data,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            self._events.append(payload)
+            if len(self._events) > 200:
+                self._events = self._events[-100:]
             self._events_condition.notify_all()
 
     def get_events_since(self, cursor: int) -> tuple[list[dict], int]:
@@ -538,105 +556,6 @@ class MeetingStore:
                         self._write_meeting_file(path, meeting)
                     return meeting
             return None
-
-    def create_from_recording(self, recording: dict, status: str = "in_progress") -> dict:
-        with self._lock:
-            meeting_id = recording.get("recording_id") or str(uuid.uuid4())
-            session_id = recording.get("session_id") or meeting_id  # Use recording_id as session_id for mic
-            existing_path = self._find_meeting_path(meeting_id)
-            if existing_path:
-                existing = self._read_meeting_file(existing_path) or {}
-                existing["schema_version"] = existing.get("schema_version", 1)
-                existing["audio_path"] = recording.get("file_path")
-                existing["recording_id"] = recording.get("recording_id")
-                existing["session_id"] = existing.get("session_id") or session_id
-                existing["samplerate"] = recording.get("samplerate")
-                existing["channels"] = recording.get("channels")
-                existing["status"] = status
-                if not existing.get("summary_state"):
-                    existing["summary_state"] = self._default_summary_state()
-                if "manual_notes" not in existing:
-                    existing["manual_notes"] = ""
-                if "manual_summary" not in existing:
-                    existing["manual_summary"] = ""
-                if "user_notes" not in existing:
-                    existing["user_notes"] = []
-                if "user_notes_draft" not in existing:
-                    existing["user_notes_draft"] = None
-                if status == "completed":
-                    existing["ended_at"] = datetime.utcnow().isoformat()
-                if status == "in_progress":
-                    existing["ended_at"] = None
-                self._ensure_title_fields(existing)
-                self._write_meeting_file(existing_path, existing)
-                # #region agent log
-                _dbg_ndjson(
-                    location="app/services/meeting_store.py:create_from_recording",
-                    message="create_from_recording updated existing",
-                    data={
-                        "meeting_id": meeting_id,
-                        "path_name": os.path.basename(existing_path),
-                        "status": status,
-                    },
-                    run_id="pre-fix",
-                    hypothesis_id="H4",
-                )
-                # #endregion
-                self.publish_event(
-                    "meeting_completed" if status == "completed" else "meeting_started",
-                    existing.get("id"),
-                )
-                return existing
-
-            created_at = recording.get("started_at") or datetime.utcnow().isoformat()
-            meeting = {
-                "schema_version": 1,
-                "id": meeting_id,
-                "title": f"Meeting {created_at}",
-                "title_source": "default",
-                "title_generated_at": None,
-                "created_at": created_at,
-                "audio_path": recording.get("file_path"),
-                "recording_id": recording.get("recording_id"),
-                "session_id": session_id,
-                "samplerate": recording.get("samplerate"),
-                "channels": recording.get("channels"),
-                "status": status,
-                "ended_at": None,
-                "attendees": [],
-                "transcript": None,
-                "summary": None,
-                "action_items": [],
-                "summary_state": self._default_summary_state(),
-                "manual_notes": "",
-                "manual_summary": "",
-                "user_notes": [],
-                "user_notes_draft": None,
-            }
-            if status == "completed":
-                meeting["ended_at"] = datetime.utcnow().isoformat()
-            path = self._meeting_path_for_new(created_at, meeting_id)
-            self._write_meeting_file(path, meeting)
-            # #region agent log
-            _dbg_ndjson(
-                location="app/services/meeting_store.py:create_from_recording",
-                message="create_from_recording created new",
-                data={
-                    "meeting_id": meeting_id,
-                    "path_name": os.path.basename(path),
-                    "status": status,
-                },
-                run_id="pre-fix",
-                hypothesis_id="H4",
-            )
-            # #endregion
-            self._logger.info("Meeting created: id=%s session_id=%s", meeting_id, session_id)
-            self.publish_event(
-                "meeting_completed" if status == "completed" else "meeting_started",
-                meeting_id,
-            )
-            self.regenerate_folder_docs()
-            return meeting
 
     def create_file_meeting(
         self,
@@ -1075,6 +994,35 @@ class MeetingStore:
                 self.publish_event("transcript_updated", meeting_id, {"segments": normalized_segments})
                 # Also emit attendees update
                 self.publish_event("attendees_updated", meeting_id, {"attendees": attendees})
+            return meeting
+
+    def replace_transcript_segments(
+        self,
+        meeting_id: str,
+        segments: list[dict],
+        language: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Replace all transcript segments wholesale (e.g. after re-transcription with a better model)."""
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            transcript = meeting.get("transcript") or {}
+            if not isinstance(transcript, dict):
+                transcript = {}
+            transcript["segments"] = segments
+            if language:
+                transcript["language"] = language
+            meeting["transcript"] = transcript
+            self._write_meeting_file(path, meeting)
+            self.publish_event("transcript_updated", meeting_id, {"segments": segments})
+            self._logger.info(
+                "Transcript segments replaced: meeting_id=%s segments=%d",
+                meeting_id, len(segments),
+            )
             return meeting
 
     def reconcile_speakers(
@@ -2113,6 +2061,62 @@ class MeetingStore:
         
         # Check if any stage is pending (not failed or completed)
         return len(self.get_pending_finalization_stages(meeting)) > 0
+
+    def resolve_state(self, meeting_id: str, tracker: "ActiveMeetingTracker") -> str:
+        """Resolve the authoritative state for a meeting.
+        
+        This method provides the correct meeting state by checking:
+        1. The in-memory tracker first (authoritative for active meetings)
+        2. File-based state only for inactive meetings
+        
+        The tracker is authoritative for any meeting it knows about. File state
+        marked as "in_progress" is considered stale if the tracker doesn't know
+        about it.
+        
+        Args:
+            meeting_id: The meeting ID
+            tracker: The ActiveMeetingTracker instance
+            
+        Returns:
+            One of: "recording", "finalizing", "background_finalizing",
+                    "pending_finalization", "completed"
+        """
+        # 1. Check tracker first (authoritative for active meetings)
+        active = tracker.get_state(meeting_id)
+        if active:
+            return active.state.value
+        
+        # 2. Get meeting from file
+        meeting = self.get_meeting(meeting_id)
+        if not meeting:
+            return "completed"
+        
+        file_status = meeting.get("status", "completed")
+        
+        # 3. If file says in_progress but tracker doesn't know about it,
+        #    it's stale - treat as completed
+        if file_status == "in_progress":
+            self._logger.debug(
+                "Meeting %s has stale in_progress status - resolving as completed",
+                meeting_id,
+            )
+            return "completed"
+        
+        # 4. If file says processing but tracker doesn't know about it,
+        #    it's stale - treat as completed
+        if file_status == "processing":
+            self._logger.debug(
+                "Meeting %s has stale processing status - resolving as completed",
+                meeting_id,
+            )
+            return "completed"
+        
+        # 5. Check if pending finalization (background sweep will pick it up)
+        if self.needs_finalization(meeting):
+            return "pending_finalization"
+        
+        # 6. Default to file status
+        return file_status
 
     def list_meetings_needing_finalization(self) -> list[dict]:
         """Get all meetings that need background finalization.

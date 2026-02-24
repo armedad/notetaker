@@ -223,9 +223,6 @@ class RealtimeDiarizationService:
                 )
                 
                 # #region agent log - track annotation accumulation
-                import json as _json
-                import time as _time
-                _DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
                 prev_count = len(self._annotations)
                 # #endregion
                 
@@ -233,23 +230,8 @@ class RealtimeDiarizationService:
                     # Accumulate into internal list for get_speaker_at lookups
                     self._annotations.extend(new_annotations)
                     # #region agent log - log when annotations are updated
-                    try:
-                        with open(_DEBUG_LOG_PATH, "a") as f:
-                            f.write(_json.dumps({
-                                "location": "realtime_diarization.py:feed_audio",
-                                "message": "annotations_accumulated",
-                                "data": {
-                                    "prev_count": prev_count,
-                                    "added_count": len(new_annotations),
-                                    "total_count": len(self._annotations),
-                                    "total_audio_s": round(self._total_audio_duration, 2),
-                                    "new_ranges": [(round(a["start"], 2), round(a["end"], 2), a["speaker"]) for a in new_annotations],
-                                },
-                                "timestamp": _time.time() * 1000,
-                                "runId": "diarize-debug-fix",
-                                "hypothesisId": "H2-FIX"
-                            }) + "\n")
-                    except: pass
+                    self._logger.debug("annotations_accumulated: prev=%d added=%d total=%d audio_s=%.2f",
+                                      prev_count, len(new_annotations), len(self._annotations), self._total_audio_duration)
                     # #endregion
 
                 # Log only first few feed calls to avoid spamming.
@@ -322,9 +304,6 @@ class RealtimeDiarizationService:
                 return None
             
             # #region agent log
-            import json as _json
-            import time as _time
-            _DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
             found_speaker = None
             match_type = None
             matched_ann = None
@@ -355,24 +334,10 @@ class RealtimeDiarizationService:
                         matched_ann = ann
             
             # #region agent log
-            try:
-                with open(_DEBUG_LOG_PATH, "a") as f:
-                    f.write(_json.dumps({
-                        "location": "realtime_diarization.py:get_speaker_at",
-                        "message": "speaker_lookup_result",
-                        "data": {
-                            "timestamp": round(timestamp, 2),
-                            "found_speaker": found_speaker,
-                            "match_type": match_type,
-                            "matched_range": [round(matched_ann["start"], 2), round(matched_ann["end"], 2)] if matched_ann else None,
-                            "num_annotations": len(self._annotations),
-                            "total_audio_s": round(self._total_audio_duration, 2),
-                        },
-                        "timestamp": _time.time() * 1000,
-                        "runId": "diarize-debug-fix",
-                        "hypothesisId": "H1-FIX"
-                    }) + "\n")
-            except: pass
+            matched_range = [round(matched_ann["start"], 2), round(matched_ann["end"], 2)] if matched_ann else None
+            self._logger.debug("speaker_lookup_result: ts=%.2f speaker=%s match=%s range=%s anns=%d audio_s=%.2f",
+                              timestamp, found_speaker, match_type, matched_range, 
+                              len(self._annotations), self._total_audio_duration)
             # #endregion
             
             return found_speaker

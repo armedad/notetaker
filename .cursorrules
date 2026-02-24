@@ -1,0 +1,54 @@
+# Cursor Rules for Notetaker
+
+## Debug Logging
+
+When adding debug instrumentation to this codebase:
+
+1. **Use the standard Python logging facility** - do NOT write to custom files like `.cursor/debug.log` or `logs/debug.log`
+2. **All debug logs go to `logs/server_[datetime].log`** via Python's logging module
+3. **Use the `notetaker.debug` logger** for temporary debug instrumentation:
+
+```python
+import logging
+_dbg_logger = logging.getLogger("notetaker.debug")
+
+# Simple debug log
+_dbg_logger.debug("checkpoint_name: %s", {"key": value})
+
+# Or use the dbg() helper from app.services.debug_logging for structured JSON:
+from app.services.debug_logging import dbg
+dbg(_dbg_logger, location="file.py:function", message="checkpoint", data={"key": value})
+```
+
+4. **For tracing in transcription.py**, use the existing `trace()` function or `trace_logger`
+5. **After debugging is complete**, remove the instrumentation - don't leave debug logs in production code
+6. **To view logs during debugging**, tail the server log: `tail -f logs/server_*.log | grep -i debug`
+
+## Custom Commands
+
+### deploy
+
+**Command:** `deploy`
+
+**Purpose:** Deploy the notetaker project from the development folder to the production folder.
+
+**Workflow:**
+1. Run the deploy script: `./deploy.sh`
+2. This script will:
+   - Bump the version number in `VERSION.txt` (increments the build number)
+   - Rsync the project to `~/projects/notetaker` (excluding `.git/`, `__pycache__/`, `.venv/`, `data/`, `logs/`)
+3. Report the new version number and deployment status
+
+**Example:**
+```
+> deploy
+
+Version bumped to v0.1.0.324
+Deployed to /Users/chee/projects/notetaker
+```
+
+**Notes:**
+- The deploy script refuses to run if source and destination are the same directory
+- The deploy script requires the source to be in `.../coding/notetaker`
+- Data and logs are NOT deployed (they stay local to each environment)
+- After deploy, the production server at `~/projects/notetaker` can be started with `./notetaker.sh`

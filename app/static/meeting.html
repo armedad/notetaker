@@ -68,10 +68,13 @@
       <!-- Main content: 2x2 grid -->
       <main class="meeting-main">
         <div class="meeting-grid-2x2" id="meeting-grid">
-          <!-- Upper left: Transcript -->
+          <!-- Upper left: Transcript / Status -->
           <section class="grid-panel transcript-panel" data-panel="transcript">
             <div class="grid-panel-header">
-              <h2>Transcript</h2>
+              <div class="panel-tabs">
+                <button class="panel-tab active" data-tab="transcript">Transcript</button>
+                <button class="panel-tab" data-tab="status">Status</button>
+              </div>
               <div id="transcript-search-bar" class="chat-search-bar chat-search-bar-inline" style="display:none">
                 <input class="chat-search-input" placeholder="Search..." />
                 <span class="chat-search-count">0/0</span>
@@ -83,8 +86,15 @@
                 <button class="panel-maximize-btn icon-btn" title="Maximize">&#x26F6;</button>
               </div>
             </div>
-            <div class="status" id="transcript-status">No transcript yet.</div>
-            <div class="output transcript" id="transcript-output"></div>
+            <div class="panel-tab-content active" data-tab-content="transcript">
+              <div class="status" id="transcript-status">No transcript yet.</div>
+              <div class="output transcript" id="transcript-output"></div>
+            </div>
+            <div class="panel-tab-content" data-tab-content="status">
+              <div class="status-log" id="status-log-output">
+                <div class="status-log-empty">No status logs yet. Start a recording to see processing status.</div>
+              </div>
+            </div>
           </section>
 
           <!-- Upper right: Summary -->

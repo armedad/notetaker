@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from app.services.meeting_store import MeetingStore
 from app.services.summarization import SummarizationService
 from app.services.transcript_utils import consolidate_segments
+from app.services.active_meeting_tracker import get_tracker
 
 
 class UpdateMeetingRequest(BaseModel):
@@ -59,6 +60,9 @@ def create_meetings_router(
 ) -> APIRouter:
     router = APIRouter()
     logger = logging.getLogger("notetaker.api.meetings")
+    
+    # Get global active meeting tracker
+    active_tracker = get_tracker()
 
     def _get_consolidation_settings() -> tuple[float, float]:
         """Load consolidation settings from config, with defaults."""
@@ -80,10 +84,35 @@ def create_meetings_router(
         meetings = meeting_store.list_meetings()
         # Add computed finalization fields for UI
         for meeting in meetings:
+            meeting_id = meeting.get("id")
+            # Use tracker-aware state resolution
+            if meeting_id:
+                meeting["resolved_state"] = meeting_store.resolve_state(meeting_id, active_tracker)
+            else:
+                meeting["resolved_state"] = meeting.get("status", "completed")
             meeting["needs_finalization"] = meeting_store.needs_finalization(meeting)
             meeting["pending_stages"] = meeting_store.get_pending_finalization_stages(meeting)
             meeting["failed_stages"] = meeting_store.get_failed_finalization_stages(meeting)
         return meetings
+    
+    @router.get("/api/meetings/active")
+    def get_active_meetings() -> dict:
+        """Get all meetings currently being actively processed.
+        
+        Returns a dict with:
+        - meetings: dict mapping meeting_id to state info
+        - count: number of active meetings
+        
+        Active meetings include:
+        - recording: actively being recorded/transcribed
+        - finalizing: live finalization in progress
+        - background_finalizing: background sweep processing
+        """
+        active = active_tracker.get_all_active_dict()
+        return {
+            "meetings": active,
+            "count": len(active),
+        }
 
     @router.get("/api/meetings/events")
     def meeting_events() -> StreamingResponse:
@@ -91,13 +120,20 @@ def create_meetings_router(
 
         def event_stream():
             cursor = 0
+            # #region agent log
+            _buf_size = len(meeting_store._events)
+            _event_types = [e.get("type") for e in meeting_store._events[-10:]]
+            logger.debug("SSE_STREAM_INIT: cursor=%d buffer_size=%d recent_types=%s", cursor, _buf_size, _event_types)
+            # #endregion
             while True:
-                # Block until events are available (true push-based SSE)
-                # Timeout after 5s to send heartbeat for connection keepalive
                 events, cursor = meeting_store.wait_for_events(cursor, timeout=5.0)
+                # #region agent log
+                if events:
+                    _etypes = [e.get("type") for e in events]
+                    logger.debug("SSE_EVENTS_SENT: count=%d types=%s new_cursor=%d", len(events), _etypes, cursor)
+                # #endregion
                 for event in events:
                     yield f"data: {json.dumps(event)}\n\n"
-                # Send heartbeat if no events (timeout expired)
                 if not events:
                     yield "data: {\"type\":\"heartbeat\"}\n\n"
 
@@ -122,7 +158,8 @@ def create_meetings_router(
                     meeting["transcript"] = dict(transcript)
                     meeting["transcript"]["segments"] = consolidated
         
-        # Add computed finalization fields
+        # Add computed finalization fields and resolved state
+        meeting["resolved_state"] = meeting_store.resolve_state(meeting_id, active_tracker)
         meeting["needs_finalization"] = meeting_store.needs_finalization(meeting)
         meeting["pending_stages"] = meeting_store.get_pending_finalization_stages(meeting)
         meeting["failed_stages"] = meeting_store.get_failed_finalization_stages(meeting)

@@ -61,11 +61,7 @@ class PyannoteProvider(DiarizationProvider):
                 import torch as _torch
                 _dev = _torch.device(self._config.device)
                 # #region agent log
-                import json as _json, time as _time
-                try:
-                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
-                        _f.write(_json.dumps({"location":"pyannote_provider.py:33","message":"pipeline.to device","data":{"config_device":self._config.device,"torch_device":str(_dev)},"timestamp":_time.time()*1000,"runId":"diar-fix","hypothesisId":"H2"})+"\n")
-                except: pass
+                self._logger.debug("pipeline.to device: config_device=%s torch_device=%s", self._config.device, str(_dev))
                 # #endregion
                 self._pipeline.to(_dev)
             except Exception as exc:
@@ -86,19 +82,14 @@ class PyannoteProvider(DiarizationProvider):
                 _restore_torch_load(original_torch_load)
 
         # #region agent log
-        import json as _jpy, time as _tpy, os as _ospy
-        _DBG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
-        def _dbg_pyannote(msg, data=None):
-            try:
-                with open(_DBG_PATH, "a") as _fp:
-                    _fp.write(_jpy.dumps({"location":"pyannote_provider.py:diarize","message":msg,"data":data or {},"timestamp":int(_tpy.time()*1000),"hypothesisId":"H1"})+"\n")
-            except: pass
+        import time as _tpy, os as _ospy
         _t0 = _tpy.time()
-        _dbg_pyannote("PIPELINE_CALL_START", {"audio_path": _ospy.path.basename(audio_path), "audio_size_mb": round(_ospy.path.getsize(audio_path)/1024/1024,2) if _ospy.path.isfile(audio_path) else None})
+        _audio_size_mb = round(_ospy.path.getsize(audio_path)/1024/1024,2) if _ospy.path.isfile(audio_path) else None
+        self._logger.debug("PIPELINE_CALL_START: audio_path=%s audio_size_mb=%s", _ospy.path.basename(audio_path), _audio_size_mb)
         # #endregion
         diarization = self._pipeline(audio_path)
         # #region agent log
-        _dbg_pyannote("PIPELINE_CALL_DONE", {"elapsed_s": round(_tpy.time()-_t0,1)})
+        self._logger.debug("PIPELINE_CALL_DONE: elapsed_s=%s", round(_tpy.time()-_t0,1))
         # #endregion
         segments: list[dict] = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):

@@ -15,8 +15,6 @@ const state = {
   transcriptionSettings: {
     live_model_size: "base",
     final_model_size: "medium",
-    auto_transcribe: true,
-    stream_transcribe: true,
     live_transcribe: true,
   },
   meetingsEvents: null,
@@ -27,6 +25,8 @@ const state = {
   searchQuery: "",
   searchResults: [],
   showSearchResults: false,
+  // Finalization tracking: meetingId -> { stageText, startedAt }
+  finalizingMeetings: {},
 };
 
 // --- Multi-select helper functions ---
@@ -563,6 +563,9 @@ function setGlobalBusy(message) {
 }
 
 function startMeetingsEventStream() {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startMeetingsEventStream',message:'SSE_CONNECT_ATTEMPT',data:{alreadyHasConnection:!!state.meetingsEvents},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+  // #endregion
   if (state.meetingsEvents) {
     return;
   }
@@ -583,14 +586,55 @@ function startMeetingsEventStream() {
     }
     debugLog("Meetings SSE event", payload);
     
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:onmessage',message:'SSE_EVENT_RECEIVED',data:{type:payload.type,meeting_id:payload.meeting_id,ts:payload.timestamp,hasData:!!payload.data},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
+    // Track finalization progress for blue dot indicator
+    if (payload.type === "finalization_status" && payload.meeting_id) {
+      // #region agent log
+      const _existing = state.finalizingMeetings[payload.meeting_id];
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_status_sse',message:'FINALIZATION_STATUS_EVENT',data:{meeting_id:payload.meeting_id,statusText:payload.status_text,existingEntry:_existing||null,now:new Date().toISOString()},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
+      const existing = state.finalizingMeetings[payload.meeting_id];
+      state.finalizingMeetings[payload.meeting_id] = {
+        stageText: payload.status_text || "Finalizing...",
+        startedAt: existing?.startedAt || new Date().toISOString(),
+      };
+      renderMeetings();
+    }
+
     // Handle finalization events for notifications
     if (payload.type === "finalization_complete") {
+      delete state.finalizingMeetings[payload.meeting_id];
       const title = payload.data?.meeting_title || "Meeting";
-      NotificationCenter.success(`Finalization complete: ${title}`);
+      const eventAge = payload.timestamp ? (Date.now() - new Date(payload.timestamp).getTime()) : null;
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_complete',message:'NOTIFY_TRIGGERED',data:{title,eventTimestamp:payload.timestamp,eventAgeMs:eventAge,isStale:eventAge>30000},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
+      // Skip stale events (older than 30 seconds) to avoid duplicate notifications on reconnect
+      if (eventAge !== null && eventAge > 30000) {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_complete',message:'SKIPPED_STALE_EVENT',data:{title,eventAgeMs:eventAge},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+        // #endregion
+      } else {
+        NotificationCenter.success(`Finalization complete: ${title}`);
+      }
     } else if (payload.type === "finalization_failed") {
+      delete state.finalizingMeetings[payload.meeting_id];
       const title = payload.data?.meeting_title || "Meeting";
       const errorCount = payload.data?.errors?.length || 1;
-      NotificationCenter.error(`Finalization failed: ${title} (${errorCount} error${errorCount > 1 ? "s" : ""})`);
+      const eventAge = payload.timestamp ? (Date.now() - new Date(payload.timestamp).getTime()) : null;
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_failed',message:'NOTIFY_TRIGGERED',data:{title,errorCount,eventTimestamp:payload.timestamp,eventAgeMs:eventAge,isStale:eventAge>30000},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
+      // Skip stale events (older than 30 seconds) to avoid duplicate notifications on reconnect
+      if (eventAge !== null && eventAge > 30000) {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_failed',message:'SKIPPED_STALE_EVENT',data:{title,eventAgeMs:eventAge},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+        // #endregion
+      } else {
+        NotificationCenter.error(`Finalization failed: ${title} (${errorCount} error${errorCount > 1 ? "s" : ""})`);
+      }
     }
     
     refreshMeetings();
@@ -755,10 +799,6 @@ async function loadTranscriptionSettings() {
       live_model_size: data.live_model_size || state.transcriptionSettings.live_model_size,
       final_model_size:
         data.final_model_size || state.transcriptionSettings.final_model_size,
-      auto_transcribe:
-        data.auto_transcribe ?? state.transcriptionSettings.auto_transcribe,
-      stream_transcribe:
-        data.stream_transcribe ?? state.transcriptionSettings.stream_transcribe,
       live_transcribe:
         data.live_transcribe ?? state.transcriptionSettings.live_transcribe,
     };
@@ -816,6 +856,7 @@ async function startFileRecording() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        source: "file",
         audio_path: state.testAudioPath,
       }),
     });
@@ -1146,12 +1187,15 @@ function renderMeetings() {
   state.meetings
     .slice()
     .sort((a, b) => {
-      const aInProgress = a.status === "in_progress";
-      const bInProgress = b.status === "in_progress";
-      if (aInProgress && !bInProgress) {
+      // Use resolved_state for active meetings (from tracker), fall back to status
+      const aState = a.resolved_state || a.status;
+      const bState = b.resolved_state || b.status;
+      const aActive = aState === "recording" || aState === "finalizing" || aState === "in_progress";
+      const bActive = bState === "recording" || bState === "finalizing" || bState === "in_progress";
+      if (aActive && !bActive) {
         return -1;
       }
-      if (!aInProgress && bInProgress) {
+      if (!aActive && bActive) {
         return 1;
       }
       const aTime = a.created_at || "";
@@ -1178,8 +1222,34 @@ function renderMeetings() {
       const finalizationIcon = document.createElement("span");
       finalizationIcon.className = "finalization-pending-icon";
       finalizationIcon.textContent = "⏳";
-      finalizationIcon.title = `Pending: ${meeting.pending_stages.join(", ")}`;
+
+      const activeInfo = state.finalizingMeetings[meeting.id];
+      const startTime = activeInfo ? new Date(activeInfo.startedAt).toLocaleTimeString() : null;
+      const stageText = activeInfo?.stageText || "";
+
+      const tooltipLines = ["Pending finalization:"];
+      if (activeInfo) {
+        // Show active stage with start time, then remaining pending stages
+        tooltipLines.push(`  ▶ ${stageText} (started ${startTime})`);
+        for (const stage of meeting.pending_stages) {
+          if (!stageText.toLowerCase().includes(stage.toLowerCase())) {
+            tooltipLines.push(`  - ${stage}`);
+          }
+        }
+      } else {
+        for (const stage of meeting.pending_stages) {
+          tooltipLines.push(`  - ${stage}`);
+        }
+      }
+      finalizationIcon.title = tooltipLines.join("\n");
       titleRow.appendChild(finalizationIcon);
+
+      if (activeInfo) {
+        const dot = document.createElement("span");
+        dot.className = "finalization-active-dot";
+        dot.title = finalizationIcon.title;
+        titleRow.appendChild(dot);
+      }
     }
     
     // Add warning icon for meetings with failed finalization stages
@@ -1194,8 +1264,17 @@ function renderMeetings() {
     const meta = document.createElement("div");
     meta.className = "meeting-meta";
     const timestamp = meeting.created_at || "";
-    const inProgress = meeting.status === "in_progress";
-    meta.textContent = inProgress ? `${timestamp} · In progress` : timestamp;
+    // Use resolved_state for accurate status display
+    const resolvedState = meeting.resolved_state || meeting.status;
+    let statusLabel = "";
+    if (resolvedState === "recording") {
+      statusLabel = " · Recording";
+    } else if (resolvedState === "finalizing" || resolvedState === "background_finalizing") {
+      statusLabel = " · Finalizing";
+    } else if (resolvedState === "in_progress") {
+      statusLabel = " · In progress";
+    }
+    meta.textContent = timestamp + statusLabel;
     item.appendChild(titleRow);
     item.appendChild(meta);
     
@@ -1251,12 +1330,30 @@ async function refreshMeetings() {
       const meeting = state.meetings.find(
         (item) => item.id === state.fileMeetingId
       );
-      if (meeting && meeting.status === "completed") {
+      // Use resolved_state for accurate completion check
+      const resolvedState = meeting?.resolved_state || meeting?.status;
+      if (meeting && resolvedState === "completed") {
         state.testTranscribing = false;
         setRecordingToggleLabel(false);
         setTranscriptStatus("File transcription completed.");
       }
     }
+    // Seed finalization tracking — find which meetings are actively finalizing
+    try {
+      const fResp = await fetchJson("/api/transcribe/finalizing");
+      const activeIds = fResp.meeting_ids || [];
+      const meetingsInfo = fResp.meetings || {};
+      const updated = {};
+      for (const mid of activeIds) {
+        const serverInfo = meetingsInfo[mid] || {};
+        updated[mid] = state.finalizingMeetings[mid] || {
+          stageText: serverInfo.stage || "Finalizing...",
+          startedAt: serverInfo.started_at || new Date().toISOString(),
+        };
+      }
+      state.finalizingMeetings = updated;
+    } catch (_) {}
+
     renderMeetings();
     if (!state.selectedMeetingId) {
       setAttendeeEditor([]);
@@ -1495,37 +1592,24 @@ async function startRecording() {
     const maxChannels = selected ? selected.max_input_channels : channels;
     const safeChannels = Math.min(channels, maxChannels || channels);
 
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startRecording',message:'about_to_call_recording_start',data:{deviceIndex,samplerate,channels:safeChannels},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion
-    const data = await fetchJson("/api/recording/start", {
+    const data = await fetchJson("/api/transcribe/simulate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        source: "mic",
         device_index: deviceIndex,
         samplerate,
         channels: safeChannels,
       }),
     });
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startRecording',message:'recording_start_OK',data:{recording_id:data.recording_id,file_path:data.file_path},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H1,H2'})}).catch(()=>{});
-    // #endregion
-    setOutput(`Recording started: ${data.recording_id}`);
-    if (data.file_path) {
-      state.lastRecordingPath = data.file_path;
-    }
-    if (data.recording_id) {
-      state.selectedMeetingId = data.recording_id;
+    setOutput(`Recording started: ${data.meeting_id}`);
+    if (data.meeting_id) {
+      state.selectedMeetingId = data.meeting_id;
     }
     await refreshRecordingStatus();
-    // NOTE: Do NOT call startLiveTranscription() here!
-    // We navigate to meeting.js immediately, which will establish its own
-    // SSE connection for live transcription. Starting one here creates
-    // two competing consumers for the same audio queue, causing audio starvation.
     refreshMeetings();
-    // Navigate to the newly created meeting
-    if (data.recording_id) {
-      window.location.href = `/meeting?id=${data.recording_id}`;
+    if (data.meeting_id) {
+      window.location.href = `/meeting?id=${data.meeting_id}`;
     }
   } catch (error) {
     // #region agent log
@@ -1562,182 +1646,6 @@ function buildTranscriptText(segments) {
     .join("\n");
 }
 
-async function transcribeLatest() {
-  const streamEnabled = state.transcriptionSettings.stream_transcribe;
-  const finalModel = state.transcriptionSettings.final_model_size;
-  if (!state.lastRecordingPath) {
-    setTranscriptStatus("No recording found yet.");
-    setTranscriptOutput("");
-    return;
-  }
-
-  setTranscriptStatus("Transcribing...");
-  setTranscriptOutput("");
-  setGlobalBusy("Transcribing...");
-  try {
-    if (streamEnabled) {
-      await streamTranscription(state.lastRecordingPath);
-    } else {
-      const data = await fetchJson("/api/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audio_path: state.lastRecordingPath,
-          model_size: finalModel,
-        }),
-      });
-      const transcriptText = buildTranscriptText(data.segments || []);
-      state.lastTranscriptSegments = data.segments || [];
-      setTranscriptStatus(
-        `Transcript ready (${data.segments.length} segments, ${data.language || "unknown"}).`
-      );
-      setTranscriptOutput(transcriptText || "Transcript returned no segments.");
-    }
-    await refreshMeetings();
-    if (!state.selectedMeetingId && state.lastRecordingPath) {
-      const match = findMeetingByAudioPath(state.lastRecordingPath);
-      if (match) {
-        await loadMeeting(match.id);
-      }
-    }
-  } catch (error) {
-    setTranscriptStatus(`Transcription failed: ${error.message}`);
-    setGlobalError("Transcription failed.");
-  } finally {
-    setGlobalBusy("");
-  }
-}
-
-async function streamTranscription(audioPath, controller = null, options = {}) {
-  const finalModel = state.transcriptionSettings.final_model_size;
-  const segments = [];
-  let language = "unknown";
-  let done = false;
-
-  const response = await fetch("/api/transcribe/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: controller ? controller.signal : undefined,
-    body: JSON.stringify({
-      audio_path: audioPath,
-      model_size: finalModel,
-      meeting_id: options.meetingId || null,
-      simulate_live: !!options.simulateLive,
-    }),
-  });
-
-  if (!response.ok || !response.body) {
-    const text = await response.text();
-    throw new Error(text || `Request failed: ${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-
-  while (!done) {
-    const { value, done: streamDone } = await reader.read();
-    if (streamDone) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() || "";
-
-    for (const part of parts) {
-      const line = part.trim();
-      if (!line.startsWith("data:")) {
-        continue;
-      }
-      const payloadText = line.replace(/^data:\s*/, "");
-      if (!payloadText) {
-        continue;
-      }
-      const event = JSON.parse(payloadText);
-      if (event.type === "meta") {
-        language = event.language || "unknown";
-        setTranscriptStatus(`Transcribing... (${language})`);
-      } else if (event.type === "segment") {
-        segments.push(event);
-        state.lastTranscriptSegments = segments;
-        setTranscriptOutput(buildTranscriptText(segments));
-      } else if (event.type === "done") {
-        done = true;
-      } else if (event.type === "error") {
-        throw new Error(event.message || "Transcription failed");
-      }
-    }
-  }
-
-  setTranscriptStatus(
-    `Transcript ready (${segments.length} segments, ${language}).`
-  );
-}
-
-async function streamTranscriptionLive(controller) {
-  const liveModel = state.transcriptionSettings.live_model_size;
-  const segments = [];
-  let language = "unknown";
-  let done = false;
-
-  const response = await fetch("/api/transcribe/live", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: controller.signal,
-    body: JSON.stringify({
-      model_size: liveModel,
-      meeting_id: state.selectedMeetingId,
-    }),
-  });
-
-  if (!response.ok || !response.body) {
-    const text = await response.text();
-    throw new Error(text || `Request failed: ${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-
-  while (!done) {
-    const { value, done: streamDone } = await reader.read();
-    if (streamDone) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() || "";
-
-    for (const part of parts) {
-      const line = part.trim();
-      if (!line.startsWith("data:")) {
-        continue;
-      }
-      const payloadText = line.replace(/^data:\s*/, "");
-      if (!payloadText) {
-        continue;
-      }
-      const event = JSON.parse(payloadText);
-      if (event.type === "meta") {
-        language = event.language || "unknown";
-        setTranscriptStatus(`Live transcription... (${language})`);
-      } else if (event.type === "segment") {
-        segments.push(event);
-        state.lastTranscriptSegments = segments;
-        setTranscriptOutput(buildTranscriptText(segments));
-      } else if (event.type === "done") {
-        done = true;
-      } else if (event.type === "error") {
-        throw new Error(event.message || "Live transcription failed");
-      }
-    }
-  }
-
-  setTranscriptStatus(
-    `Live transcript ready (${segments.length} segments, ${language}).`
-  );
-}
-
 async function stopRecording() {
   if (state.stopInFlight) {
     return;
@@ -1754,37 +1662,19 @@ async function stopRecording() {
       await stopFileRecording();
       return;
     }
-    
-    // Stop live transcription SSE stream immediately
-    // This signals to stop pulling audio from the queue
-    await stopLiveTranscription();
-    debugLog("Live transcription stream aborted");
-    
-    // Now stop the actual recording
-    const data = await fetchJson("/api/recording/stop", {
+
+    const meetingId = state.selectedMeetingId;
+    if (!meetingId) {
+      setOutput("No active meeting to stop.");
+      return;
+    }
+    const data = await fetchJson(`/api/transcribe/stop/${meetingId}`, {
       method: "POST",
     });
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/app.js:stopRecording',message:'stopRecording response',data:{recording_id:data?.recording_id||null,file_path:data?.file_path||null},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
-    // #endregion
-    
     setOutput("Audio capture stopped. Finishing transcription...");
     setGlobalBusy("Audio capture stopped. Finishing transcription...");
-    
-    if (data.file_path) {
-      state.lastRecordingPath = data.file_path;
-    }
     await refreshRecordingStatus();
     await refreshMeetings();
-    if (data.recording_id) {
-      await loadMeeting(data.recording_id);
-    }
-    if (state.transcriptionSettings.auto_transcribe) {
-      await transcribeLatest();
-    }
-    
-    setOutput(`Recording saved: ${data.file_path}`);
-    refreshMeetings();
   } catch (error) {
     setOutput(`Failed to stop: ${error.message}`);
     setStatusError("Stop recording failed. Check Console Errors below.");
@@ -1799,34 +1689,6 @@ async function stopRecording() {
     setGlobalBusy("");
     state.stopInFlight = false;
   }
-}
-
-// startFileRecording and stopFileRecording are defined earlier in the file
-
-async function startLiveTranscription() {
-  if (!state.transcriptionSettings.live_transcribe) {
-    return;
-  }
-  if (state.liveController) {
-    return;
-  }
-  setTranscriptStatus("Live transcription starting...");
-  state.liveController = new AbortController();
-  try {
-    streamTranscriptionLive(state.liveController);
-  } catch (error) {
-    if (error.name !== "AbortError") {
-      setTranscriptStatus(`Live transcription failed: ${error.message}`);
-    }
-  }
-}
-
-async function stopLiveTranscription() {
-  if (!state.liveController) {
-    return;
-  }
-  state.liveController.abort();
-  state.liveController = null;
 }
 
 document.addEventListener("DOMContentLoaded", async () => {

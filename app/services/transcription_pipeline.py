@@ -18,11 +18,7 @@ import json
 import tempfile
 import threading
 import time
-import uuid
 from typing import TYPE_CHECKING, Iterator, Optional
-
-import shutil
-import subprocess
 
 import numpy as np
 import soundfile as sf
@@ -30,77 +26,8 @@ import soundfile as sf
 from app.services.debug_logging import dbg
 
 _logger = logging.getLogger(__name__)
+_dbg_logger = logging.getLogger("notetaker.debug")
 
-
-def _ffmpeg_to_wav(input_path: str, output_path: str) -> tuple[int, int]:
-    """Convert any audio file to WAV using ffmpeg.
-
-    Returns (samplerate, channels) of the output file.
-    Raises RuntimeError if ffmpeg is not available or conversion fails.
-    """
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise RuntimeError("ffmpeg not found on PATH — needed for MP3/AAC/etc. conversion")
-
-    result = subprocess.run(
-        [
-            ffmpeg, "-y", "-i", input_path,
-            "-acodec", "pcm_s16le",
-            output_path,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed ({result.returncode}): {result.stderr[-500:]}")
-
-    info = sf.info(output_path)
-    return info.samplerate, info.channels
-
-
-def convert_to_wav(
-    input_path: str,
-    output_dir: str,
-    target_samplerate: int = 48000,
-    target_channels: int = 2,
-) -> tuple[str, int, int]:
-    """Convert any audio file to PCM_16 WAV using ffmpeg.
-
-    Uses ffmpeg as the single conversion path so every format it supports
-    (MP3, AAC, M4A, OGG, FLAC, WAV, etc.) works identically.  This keeps
-    the file-upload pipeline consistent with the mic pipeline, where raw
-    PCM is already written to WAV by ``_write_temp_wav``.
-
-    Args:
-        input_path: Path to input audio file (any format ffmpeg supports).
-        output_dir: Directory to write the output WAV file.
-        target_samplerate: Unused (kept for API compat); actual rate is
-            preserved from the source file.
-        target_channels: Unused (kept for API compat); actual channel
-            count is preserved from the source file.
-
-    Returns:
-        Tuple of (output_wav_path, actual_samplerate, actual_channels).
-    """
-    os.makedirs(output_dir, exist_ok=True)
-
-    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    output_filename = f"{timestamp}-{uuid.uuid4()}.wav"
-    output_path = os.path.join(output_dir, output_filename)
-
-    if not os.path.isfile(input_path):
-        raise FileNotFoundError(f"Audio file not found: {input_path}")
-
-    _logger.info("Converting audio via ffmpeg: input=%s output=%s", input_path, output_path)
-    actual_samplerate, actual_channels = _ffmpeg_to_wav(input_path, output_path)
-
-    _logger.info(
-        "Audio converted: output=%s samplerate=%d channels=%d",
-        output_path, actual_samplerate, actual_channels,
-    )
-
-    return output_path, actual_samplerate, actual_channels
 
 if TYPE_CHECKING:
     from app.services.transcription import FasterWhisperProvider
@@ -393,10 +320,7 @@ class TranscriptionPipeline:
         language = getattr(info, "language", None)
         
         # #region agent log
-        import json as _json
-        import time as _time
         import soundfile as _sf
-        _DEBUG_LOG_PATH = os.path.join(os.getcwd(), "logs", "debug.log")
         try:
             with _sf.SoundFile(audio_path) as f:
                 actual_audio_duration = f.frames / f.samplerate
@@ -425,27 +349,11 @@ class TranscriptionPipeline:
         # #region agent log
         first_raw_start = raw_segments[0]["raw_start"] if raw_segments else None
         last_raw_end = raw_segments[-1]["raw_end"] if raw_segments else None
-        try:
-            with open(_DEBUG_LOG_PATH, "a") as f:
-                f.write(_json.dumps({
-                    "location": "transcription_pipeline.py:transcribe_chunk",
-                    "message": "whisper_raw_output",
-                    "data": {
-                        "audio_path": audio_path,
-                        "offset_seconds": offset_seconds,
-                        "actual_audio_duration": actual_audio_duration,
-                        "max_end_from_whisper": max_end,
-                        "num_raw_segments": len(raw_segments),
-                        "first_raw_start": first_raw_start,
-                        "last_raw_end": last_raw_end,
-                        "gap_at_start": first_raw_start if first_raw_start is not None else None,
-                        "gap_at_end": actual_audio_duration - max_end if actual_audio_duration > 0 else None,
-                    },
-                    "timestamp": _time.time() * 1000,
-                    "runId": "gaps-debug",
-                    "hypothesisId": "H3-H4"
-                }) + "\n")
-        except: pass
+        gap_at_start = first_raw_start if first_raw_start is not None else None
+        gap_at_end = actual_audio_duration - max_end if actual_audio_duration > 0 else None
+        _dbg_logger.debug("whisper_raw_output: path=%s offset=%f actual_dur=%f max_end=%f raw_segs=%d first=%s last=%s gap_start=%s gap_end=%s",
+                         audio_path, offset_seconds, actual_audio_duration, max_end, len(raw_segments),
+                         first_raw_start, last_raw_end, gap_at_start, gap_at_end)
         # #endregion
         
         return segments, language, max_end
@@ -623,16 +531,17 @@ class TranscriptionPipeline:
         """Finalize a meeting with full diarization pipeline.
         
         Enhanced finalization flow:
-        1. Publish status: "Analyzing speakers..."
+        1. Publish status: "Diarization..."
         2. Run batch diarization on the full audio
         3. Apply speaker labels to transcript
-        4. Publish status: "Identifying speaker names..."
+        4. Publish status: "Speaker Names..."
         5. Use LLM to identify speaker names (if available)
         6. Update attendee names
-        7. Publish status: "Generating summary..."
+        7. Publish status: "Summary..."
         8. Run summarization
-        9. Generate auto-title
-        10. Publish status: "Complete"
+        9. Publish status: "Title..."
+        10. Generate auto-title
+        11. Publish status: "Complete"
         
         Args:
             meeting_id: Meeting ID to finalize
@@ -681,14 +590,8 @@ class TranscriptionPipeline:
             )
             
             # #region agent log
-            _DBG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
-            import json as _jfin, time as _tfin
-            def _dbg_step(step, data=None):
-                try:
-                    with open(_DBG_PATH, "a") as _ff:
-                        _ff.write(_jfin.dumps({"location":"pipeline:finalize","message":step,"data":data or {},"timestamp":int(_tfin.time()*1000),"hypothesisId":"FIN"})+"\n")
-                except: pass
-            _dbg_step("ENTER", {"meeting_id": meeting_id, "segments": len(segments) if segments else 0, "audio_path": audio_path})
+            _dbg_logger.debug("FINALIZE_ENTER: meeting_id=%s segments=%d audio_path=%s", 
+                             meeting_id, len(segments) if segments else 0, audio_path)
             # #endregion
             
             # Guard against double finalization
@@ -716,32 +619,21 @@ class TranscriptionPipeline:
             # Step 1-3: Run batch diarization if enabled and audio available
             diarization_segments = []
             # #region agent log
-            import json as _json
-            import time as _time
-            _DEBUG_LOG_PATH = "/Users/chee/zapier ai project/.cursor/debug.log"
-            try:
-                with open(_DEBUG_LOG_PATH, "a") as f:
-                    f.write(_json.dumps({
-                        "location": "transcription_pipeline.py:finalize",
-                        "message": "batch_diarization_check",
-                        "data": {
-                            "meeting_id": meeting_id,
-                            "has_audio_path": bool(audio_path),
-                            "audio_path": audio_path[:100] if audio_path else None,
-                            "diarization_enabled": self._diarization.is_enabled(),
-                            "will_run": bool(audio_path and self._diarization.is_enabled()),
-                        },
-                        "timestamp": _time.time() * 1000,
-                        "runId": "batch-diar-debug",
-                        "hypothesisId": "H3"
-                    }) + "\n")
-            except: pass
+            _dbg_logger.debug("batch_diarization_check: meeting_id=%s has_audio=%s diar_enabled=%s will_run=%s",
+                             meeting_id, bool(audio_path), self._diarization.is_enabled(),
+                             bool(audio_path and self._diarization.is_enabled()))
             # #endregion
             if audio_path and self._diarization.is_enabled():
                 self._meeting_store.publish_finalization_status(
-                    meeting_id, "Analyzing speakers...", 0.1
+                    meeting_id, "Diarization...", 0.1
                 )
-                _dbg_step("DIARIZATION_START", {"meeting_id": meeting_id})
+                self._meeting_store.publish_status_log(
+                    meeting_id, "diarization", "started",
+                    {"audio_path": audio_path}
+                )
+                # #region agent log
+                _dbg_logger.debug("DIARIZATION_START: meeting_id=%s", meeting_id)
+                # #endregion
                 try:
                     diarization_segments = self._diarization.run(audio_path)
                     self._logger.info(
@@ -750,22 +642,20 @@ class TranscriptionPipeline:
                         len(diarization_segments),
                     )
                     # #region agent log
-                    try:
-                        with open(_DEBUG_LOG_PATH, "a") as f:
-                            f.write(_json.dumps({
-                                "location": "transcription_pipeline.py:finalize",
-                                "message": "batch_diarization_complete",
-                                "data": {
-                                    "meeting_id": meeting_id,
-                                    "segments_count": len(diarization_segments),
-                                    "unique_speakers": list(set(s.get("speaker") for s in diarization_segments if s.get("speaker"))),
-                                },
-                                "timestamp": _time.time() * 1000,
-                                "runId": "batch-diar-debug",
-                                "hypothesisId": "H3"
-                            }) + "\n")
-                    except: pass
+                    unique_spk = list(set(s.get("speaker") for s in diarization_segments if s.get("speaker")))
+                    _dbg_logger.debug("batch_diarization_complete: meeting_id=%s segments=%d speakers=%s",
+                                     meeting_id, len(diarization_segments), unique_spk)
                     # #endregion
+                    
+                    # Emit diarization output to status log
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "diarization", "output",
+                        {
+                            "segments_count": len(diarization_segments),
+                            "unique_speakers": list(set(s.get("speaker") for s in diarization_segments if s.get("speaker"))),
+                            "segments": diarization_segments[:10],  # First 10 for display
+                        }
+                    )
                     
                     # Apply speaker labels to transcript
                     if diarization_segments:
@@ -774,6 +664,9 @@ class TranscriptionPipeline:
                         self._meeting_store.update_transcript_speakers(meeting_id, segments)
                     # Mark diarization stage complete
                     self._meeting_store.mark_finalization_stage(meeting_id, "diarization")
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "diarization", "completed"
+                    )
                 except Exception as exc:
                     self._logger.warning(
                         "Diarization failed, continuing without: meeting_id=%s error=%s",
@@ -781,42 +674,41 @@ class TranscriptionPipeline:
                     )
                     self._meeting_store.publish_finalization_status(
                         meeting_id,
-                        f"Speaker analysis failed: {type(exc).__name__}: {str(exc)[:120]}. Continuing without speaker labels.",
+                        f"Diarization failed: {type(exc).__name__}: {str(exc)[:120]}. Continuing without speaker labels.",
                         0.2,
                     )
                     # Mark diarization as failed (not retried by background finalizer)
                     self._meeting_store.mark_finalization_stage_failed(
                         meeting_id, "diarization", f"{type(exc).__name__}: {str(exc)}"
                     )
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "diarization", "failed",
+                        {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+                    )
                     # #region agent log
                     import traceback
-                    try:
-                        with open(_DEBUG_LOG_PATH, "a") as f:
-                            f.write(_json.dumps({
-                                "location": "transcription_pipeline.py:finalize",
-                                "message": "batch_diarization_error",
-                                "data": {
-                                    "meeting_id": meeting_id,
-                                    "error": str(exc)[:500],
-                                    "traceback": traceback.format_exc()[-1000:],
-                                },
-                                "timestamp": _time.time() * 1000,
-                                "runId": "batch-diar-debug",
-                                "hypothesisId": "H3"
-                            }) + "\n")
-                    except: pass
+                    _dbg_logger.debug("batch_diarization_error: meeting_id=%s error=%s", meeting_id, str(exc)[:500])
                     # #endregion
             
             # Step 4-6: Identify speaker names using LLM
-            _dbg_step("DIARIZATION_DONE", {"meeting_id": meeting_id, "diar_segments": len(diarization_segments)})
+            # #region agent log
+            _dbg_logger.debug("DIARIZATION_DONE: meeting_id=%s diar_segments=%d", meeting_id, len(diarization_segments))
+            # #endregion
             if diarization_segments:
                 self._meeting_store.publish_finalization_status(
-                    meeting_id, "Identifying speaker names...", 0.3
+                    meeting_id, "Speaker Names...", 0.3
+                )
+                self._meeting_store.publish_status_log(
+                    meeting_id, "speaker_names", "started",
+                    {"speakers_to_identify": list(set(s.get("speaker") for s in diarization_segments if s.get("speaker")))}
                 )
                 try:
                     self._identify_and_update_speaker_names(meeting_id, segments)
                     # Mark speaker names stage complete
                     self._meeting_store.mark_finalization_stage(meeting_id, "speaker_names")
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "speaker_names", "completed"
+                    )
                 except Exception as exc:
                     self._logger.warning(
                         "Speaker name identification failed: meeting_id=%s error=%s",
@@ -824,12 +716,16 @@ class TranscriptionPipeline:
                     )
                     self._meeting_store.publish_finalization_status(
                         meeting_id,
-                        f"Speaker identification failed: {str(exc)[:100]}. Continuing with generic names.",
+                        f"Speaker Names failed: {str(exc)[:100]}. Continuing with generic names.",
                         0.4,
                     )
                     # Mark speaker names as failed
                     self._meeting_store.mark_finalization_stage_failed(
                         meeting_id, "speaker_names", f"{type(exc).__name__}: {str(exc)}"
+                    )
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "speaker_names", "failed",
+                        {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
                     )
             elif audio_path and self._diarization.is_enabled():
                 # Diarization ran but returned no segments - no speakers to identify
@@ -842,9 +738,11 @@ class TranscriptionPipeline:
             
             # Step 7-9: Generate summary with streaming events
             # Backend always generates - frontend subscribes to events if connected
-            _dbg_step("SPEAKER_ID_DONE", {"meeting_id": meeting_id})
+            # #region agent log
+            _dbg_logger.debug("SPEAKER_ID_DONE: meeting_id=%s", meeting_id)
+            # #endregion
             self._meeting_store.publish_finalization_status(
-                meeting_id, "Generating summary...", 0.6
+                meeting_id, "Summary...", 0.6
             )
             
             # Get user notes for inclusion in summary
@@ -858,8 +756,21 @@ class TranscriptionPipeline:
             )
             
             result = None
-            _dbg_step("SUMMARY_TEXT_READY", {"meeting_id": meeting_id, "summary_text_len": len(summary_text.strip())})
+            # #region agent log
+            _dbg_logger.debug("SUMMARY_TEXT_READY: meeting_id=%s summary_text_len=%d", meeting_id, len(summary_text.strip()))
+            # #endregion
             if summary_text.strip():
+                self._meeting_store.publish_status_log(
+                    meeting_id, "summary", "started"
+                )
+                self._meeting_store.publish_status_log(
+                    meeting_id, "summary", "input",
+                    {
+                        "transcript_length": len(summary_text),
+                        "transcript_preview": summary_text[:500] + ("..." if len(summary_text) > 500 else ""),
+                        "user_notes_count": len(user_notes),
+                    }
+                )
                 try:
                     # Emit summary_start event for any connected frontends
                     self._meeting_store.publish_event("summary_start", meeting_id)
@@ -915,6 +826,15 @@ class TranscriptionPipeline:
                         {"text": result.get("summary", "")}
                     )
                     
+                    # Emit summary output to status log
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "summary", "output",
+                        {
+                            "summary": result.get("summary", ""),
+                            "action_items": result.get("action_items", []),
+                        }
+                    )
+                    
                     # Save to meeting store
                     self._meeting_store.add_summary(
                         meeting_id,
@@ -924,22 +844,49 @@ class TranscriptionPipeline:
                     )
                     # Mark summary stage complete
                     self._meeting_store.mark_finalization_stage(meeting_id, "summary")
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "summary", "completed"
+                    )
                     
                     # Auto-generate title
-                    _dbg_step("SUMMARY_SAVED", {"meeting_id": meeting_id, "summary_len": len(result.get("summary",""))})
+                    # #region agent log
+                    _dbg_logger.debug("SUMMARY_SAVED: meeting_id=%s summary_len=%d", meeting_id, len(result.get("summary","")))
+                    # #endregion
                     self._meeting_store.publish_finalization_status(
-                        meeting_id, "Generating title...", 0.9
+                        meeting_id, "Title...", 0.9
                     )
-                    _dbg_step("TITLE_GEN_START", {"meeting_id": meeting_id})
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "title", "started"
+                    )
+                    summary_for_title = result.get("summary", "")
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "title", "input",
+                        {"summary_preview": summary_for_title[:200] + ("..." if len(summary_for_title) > 200 else "")}
+                    )
+                    # #region agent log
+                    _dbg_logger.debug("TITLE_GEN_START: meeting_id=%s", meeting_id)
+                    # #endregion
                     self._meeting_store.maybe_auto_title(
                         meeting_id,
-                        result.get("summary", ""),
+                        summary_for_title,
                         self._summarization,
                         force=True,
                     )
+                    # Get the generated title for status log
+                    updated_meeting = self._meeting_store.get_meeting(meeting_id)
+                    generated_title = updated_meeting.get("title", "") if updated_meeting else ""
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "title", "output",
+                        {"title": generated_title}
+                    )
                     # Mark title stage complete
                     self._meeting_store.mark_finalization_stage(meeting_id, "title")
-                    _dbg_step("TITLE_GEN_DONE", {"meeting_id": meeting_id})
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "title", "completed"
+                    )
+                    # #region agent log
+                    _dbg_logger.debug("TITLE_GEN_DONE: meeting_id=%s", meeting_id)
+                    # #endregion
                 except Exception as exc:
                     self._logger.warning(
                         "Summarization failed: meeting_id=%s error=%s",
@@ -947,7 +894,7 @@ class TranscriptionPipeline:
                     )
                     self._meeting_store.publish_finalization_status(
                         meeting_id,
-                        f"Summary generation failed: {type(exc).__name__}: {str(exc)[:120]}",
+                        f"Summary failed: {type(exc).__name__}: {str(exc)[:120]}",
                         0.7,
                     )
                     # Mark summary and title as failed (title depends on summary)
@@ -956,9 +903,17 @@ class TranscriptionPipeline:
                     self._meeting_store.mark_finalization_stage_failed(
                         meeting_id, "title", "Summary generation failed (required for title)"
                     )
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "summary", "failed",
+                        {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+                    )
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "title", "failed",
+                        {"error": "Summary generation failed (required for title)"}
+                    )
                     # #region agent log
                     import traceback as _tb_sum
-                    _dbg_step("SUMMARIZATION_ERROR", {"meeting_id": meeting_id, "error": str(exc)[:500], "traceback": _tb_sum.format_exc()[-1000:]})
+                    _dbg_logger.debug("SUMMARIZATION_ERROR: meeting_id=%s error=%s", meeting_id, str(exc)[:500])
                     # #endregion
             
             # Step 10: Ensure attendees are created from speaker labels
@@ -983,12 +938,16 @@ class TranscriptionPipeline:
             self._meeting_store.update_status(meeting_id, "completed")
             self._meeting_store.publish_event("meeting_updated", meeting_id)
             
-            _dbg_step("FINALIZATION_COMPLETE", {"meeting_id": meeting_id})
+            # #region agent log
+            _dbg_logger.debug("FINALIZATION_COMPLETE: meeting_id=%s", meeting_id)
+            # #endregion
             self._logger.info("finalize_meeting_with_diarization complete: meeting_id=%s", meeting_id)
             return result
             
         except Exception as exc:
-            _dbg_step("FINALIZATION_CRASH", {"meeting_id": meeting_id, "error": str(exc)[:500]})  # #region agent log  # #endregion
+            # #region agent log
+            _dbg_logger.debug("FINALIZATION_CRASH: meeting_id=%s error=%s", meeting_id, str(exc)[:500])
+            # #endregion
             self._logger.exception(
                 "finalize_meeting_with_diarization failed: meeting_id=%s error=%s",
                 meeting_id, exc
@@ -1046,6 +1005,22 @@ class TranscriptionPipeline:
             self._logger.info("All speakers already have manual names, skipping identification")
             return
 
+        # Emit input to status log
+        transcript_sample = []
+        for seg in segments[:20]:  # First 20 segments for preview
+            if seg.get("speaker") in ids_to_identify:
+                transcript_sample.append({
+                    "speaker": seg.get("speaker"),
+                    "text": seg.get("text", "")[:100],
+                })
+        self._meeting_store.publish_status_log(
+            meeting_id, "speaker_names", "input",
+            {
+                "speakers_to_identify": ids_to_identify,
+                "transcript_sample": transcript_sample,
+            }
+        )
+
         # Single batch LLM call
         try:
             results = self._summarization.identify_all_speakers(
@@ -1057,6 +1032,12 @@ class TranscriptionPipeline:
                 meeting_id, exc,
             )
             return
+
+        # Emit output to status log
+        self._meeting_store.publish_status_log(
+            meeting_id, "speaker_names", "output",
+            {"results": results}
+        )
 
         # Apply results
         identified_count = 0

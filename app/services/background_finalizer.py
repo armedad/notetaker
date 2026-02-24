@@ -14,6 +14,8 @@ import threading
 import time
 from typing import TYPE_CHECKING, Optional
 
+from app.services.active_meeting_tracker import get_tracker, MeetingState
+
 if TYPE_CHECKING:
     from app.services.meeting_store import MeetingStore
     from app.services.summarization import SummarizationService
@@ -60,10 +62,13 @@ class BackgroundFinalizer:
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         
-        # Track current work for status reporting
+        # Track current work for status reporting (also tracked in global tracker)
         self._current_meeting_id: Optional[str] = None
         self._current_stage: Optional[str] = None
         self._lock = threading.Lock()
+        
+        # Get reference to global tracker
+        self._tracker = get_tracker()
     
     def start(self) -> None:
         """Start the background finalizer thread."""
@@ -172,13 +177,18 @@ class BackgroundFinalizer:
     def _find_next_incomplete(self) -> Optional[dict]:
         """Find the oldest meeting that needs finalization.
         
+        Skips meetings that are already being processed (recording or finalizing).
+        
         Returns:
             Meeting dict or None if no meetings need finalization
         """
         try:
             meetings = self._meeting_store.list_meetings_needing_finalization()
-            if meetings:
-                return meetings[0]  # Oldest first
+            for meeting in meetings:
+                meeting_id = meeting.get("id")
+                if meeting_id and not self._tracker.is_active(meeting_id):
+                    return meeting
+            return None
         except Exception as exc:
             _logger.warning(
                 "BackgroundFinalizer: error finding incomplete meetings: %s",
@@ -189,8 +199,13 @@ class BackgroundFinalizer:
     def _set_current_work(self, meeting_id: Optional[str], stage: Optional[str]) -> None:
         """Update current work tracking."""
         with self._lock:
+            prev_meeting_id = self._current_meeting_id
             self._current_meeting_id = meeting_id
             self._current_stage = stage
+        
+        # Update global tracker
+        if meeting_id and stage:
+            self._tracker.update_stage(meeting_id, stage)
     
     def _finalize_meeting(self, meeting: dict) -> None:
         """Run finalization for a single meeting.
@@ -205,6 +220,18 @@ class BackgroundFinalizer:
         
         meeting_id = meeting.get("id")
         if not meeting_id:
+            return
+        
+        # Register with global tracker (acts as mutex)
+        if not self._tracker.register(
+            meeting_id,
+            MeetingState.BACKGROUND_FINALIZING,
+            stage="starting",
+        ):
+            _logger.info(
+                "BackgroundFinalizer: skipping %s - already active in tracker",
+                meeting_id,
+            )
             return
         
         self._set_current_work(meeting_id, "starting")
@@ -239,7 +266,7 @@ class BackgroundFinalizer:
             if needs_diarization and audio_path and self._diarization.is_enabled():
                 self._set_current_work(meeting_id, "diarization")
                 self._meeting_store.publish_finalization_status(
-                    meeting_id, "Analyzing speakers...", 0.1
+                    meeting_id, "Diarization...", 0.1
                 )
                 try:
                     diarization_segments = self._diarization.run(audio_path)
@@ -269,7 +296,7 @@ class BackgroundFinalizer:
             if needs_speaker_names and diarization_segments:
                 self._set_current_work(meeting_id, "speaker_names")
                 self._meeting_store.publish_finalization_status(
-                    meeting_id, "Identifying speaker names...", 0.3
+                    meeting_id, "Speaker Names...", 0.3
                 )
                 try:
                     self._identify_speaker_names(meeting_id, segments)
@@ -291,7 +318,7 @@ class BackgroundFinalizer:
             if needs_summary:
                 self._set_current_work(meeting_id, "summary")
                 self._meeting_store.publish_finalization_status(
-                    meeting_id, "Generating summary...", 0.6
+                    meeting_id, "Summary...", 0.6
                 )
                 # Refresh meeting to get latest segments
                 meeting = self._meeting_store.get_meeting(meeting_id)
@@ -358,7 +385,7 @@ class BackgroundFinalizer:
             if needs_title:
                 self._set_current_work(meeting_id, "title")
                 self._meeting_store.publish_finalization_status(
-                    meeting_id, "Generating title...", 0.9
+                    meeting_id, "Title...", 0.9
                 )
                 meeting = self._meeting_store.get_meeting(meeting_id)
                 if meeting:
@@ -405,6 +432,9 @@ class BackgroundFinalizer:
             )
             errors_occurred.append(("unknown", str(exc)))
         finally:
+            # Unregister from global tracker
+            self._tracker.unregister(meeting_id)
+            
             # Publish completion or failure event
             self._set_current_work(None, None)
             

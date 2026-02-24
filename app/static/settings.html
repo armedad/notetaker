@@ -137,34 +137,14 @@
               <div class="row-setting">
                 <label for="live-model-size">Live model size</label>
                 <select id="live-model-size">
-                  <option value="tiny">tiny</option>
-                  <option value="base" selected>base</option>
-                  <option value="small">small</option>
-                  <option value="medium">medium</option>
-                  <option value="large-v3">large-v3</option>
+                  <!-- Populated dynamically from /api/settings/transcription/models -->
                 </select>
               </div>
               <div class="row-setting">
                 <label for="final-model-size">Final model size</label>
                 <select id="final-model-size">
-                  <option value="tiny">tiny</option>
-                  <option value="base">base</option>
-                  <option value="small" selected>small</option>
-                  <option value="medium">medium</option>
-                  <option value="large-v3">large-v3</option>
+                  <!-- Populated dynamically from /api/settings/transcription/models -->
                 </select>
-              </div>
-              <div class="row">
-                <label>
-                  <input id="auto-transcribe" type="checkbox" checked />
-                  Auto-transcribe after stop
-                </label>
-              </div>
-              <div class="row">
-                <label>
-                  <input id="stream-transcribe" type="checkbox" checked />
-                  Stream transcript updates
-                </label>
               </div>
               <div class="row">
                 <label>
