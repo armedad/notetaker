@@ -622,7 +622,8 @@ function startMeetingsEventStream() {
     } else if (payload.type === "finalization_failed") {
       delete state.finalizingMeetings[payload.meeting_id];
       const title = payload.data?.meeting_title || "Meeting";
-      const errorCount = payload.data?.errors?.length || 1;
+      const errors = payload.data?.errors || [];
+      const errorCount = errors.length || 1;
       const eventAge = payload.timestamp ? (Date.now() - new Date(payload.timestamp).getTime()) : null;
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_failed',message:'NOTIFY_TRIGGERED',data:{title,errorCount,eventTimestamp:payload.timestamp,eventAgeMs:eventAge,isStale:eventAge>30000},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
@@ -633,7 +634,19 @@ function startMeetingsEventStream() {
         fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_failed',message:'SKIPPED_STALE_EVENT',data:{title,eventAgeMs:eventAge},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
         // #endregion
       } else {
-        NotificationCenter.error(`Finalization failed: ${title} (${errorCount} error${errorCount > 1 ? "s" : ""})`);
+        // Build detailed error message with stage and error info
+        let errorMsg = `Finalization failed: ${title}`;
+        if (errors.length > 0) {
+          const firstError = errors[0];
+          errorMsg += ` — ${firstError.stage}: ${firstError.error}`;
+        }
+        NotificationCenter.error(errorMsg, 15000);  // Show for 15 seconds
+        // Log full error details to console for debugging
+        console.error("Finalization failed:", {
+          meeting_id: payload.meeting_id,
+          title,
+          errors,
+        });
       }
     }
     

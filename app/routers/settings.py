@@ -83,6 +83,10 @@ class TranscriptionSettingsRequest(BaseModel):
     consolidation_max_gap: float = 2.0
 
 
+class WhisperModelTestRequest(BaseModel):
+    model_size: str
+
+
 class TestingSettingsRequest(BaseModel):
     audio_path: str = ""
     audio_name: str = ""
@@ -551,6 +555,95 @@ def create_settings_router(ctx) -> APIRouter:
             "live_models": live_models,
             "final_models": final_models,
         }
+
+    @router.post("/api/settings/transcription/test-model")
+    def test_whisper_model(payload: WhisperModelTestRequest) -> dict:
+        """Test loading a Whisper model. Returns success or error details."""
+        import time
+        import concurrent.futures
+        from pathlib import Path
+        
+        model_size = payload.model_size
+        if model_size == "none":
+            return {"status": "ok", "message": "No model to test (none selected)"}
+        
+        _logger.info(f"Testing Whisper model: {model_size}")
+        
+        # First, check if model files exist and are complete in cache
+        cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+        model_repo = f"models--Systran--faster-whisper-{model_size}"
+        model_cache = cache_dir / model_repo / "blobs"
+        
+        if model_cache.exists():
+            incomplete_files = list(model_cache.glob("*.incomplete"))
+            if incomplete_files:
+                return {
+                    "status": "error",
+                    "message": f"Model download incomplete. Found {len(incomplete_files)} incomplete file(s). Enable 'Allow HuggingFace auto-download' to complete.",
+                    "error": "incomplete_download",
+                }
+        
+        # Try to load the model with a timeout
+        def load_model():
+            from faster_whisper import WhisperModel
+            # Respect HF_HUB_OFFLINE setting
+            local_only = os.environ.get("HF_HUB_OFFLINE", "0") == "1"
+            return WhisperModel(
+                model_size,
+                device="cpu",
+                compute_type="int8",
+                local_files_only=local_only,
+            )
+        
+        try:
+            start = time.perf_counter()
+            
+            # Use ThreadPoolExecutor with timeout
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(load_model)
+                try:
+                    model = future.result(timeout=30)  # 30 second timeout
+                except concurrent.futures.TimeoutError:
+                    return {
+                        "status": "error",
+                        "message": "Model loading timed out (>30s). The model may be downloading or the system is under heavy load.",
+                        "error": "timeout",
+                    }
+            
+            elapsed = time.perf_counter() - start
+            
+            # Quick sanity check - try to access model info
+            _ = model.supported_languages
+            
+            _logger.info(f"Whisper model {model_size} loaded successfully in {elapsed:.2f}s")
+            return {
+                "status": "ok",
+                "message": f"Model loaded in {elapsed:.1f}s",
+                "elapsed_seconds": round(elapsed, 2),
+            }
+        except Exception as e:
+            error_msg = str(e)
+            _logger.error(f"Failed to load Whisper model {model_size}: {error_msg}")
+            
+            # Check for common issues
+            if "offline" in error_msg.lower() or "download" in error_msg.lower():
+                return {
+                    "status": "error",
+                    "message": "Model not cached. Enable 'Allow HuggingFace auto-download' or download manually.",
+                    "error": error_msg,
+                }
+            elif "incomplete" in error_msg.lower():
+                return {
+                    "status": "error",
+                    "message": "Model file is incomplete. Try re-downloading.",
+                    "error": error_msg,
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Failed to load: {error_msg}",
+                    "error": error_msg,
+                }
 
     @router.post("/api/settings/transcription")
     def update_transcription_settings(payload: TranscriptionSettingsRequest) -> dict:

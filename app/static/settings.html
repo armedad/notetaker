@@ -134,17 +134,21 @@
 
             <section class="panel">
               <h2>Transcription</h2>
-              <div class="row-setting">
+              <div class="row-setting-with-buttons">
                 <label for="live-model-size">Live model size</label>
                 <select id="live-model-size">
                   <!-- Populated dynamically from /api/settings/transcription/models -->
                 </select>
+                <button id="test-live-model" class="secondary">Test</button>
+                <span id="live-model-status" class="status-pill"></span>
               </div>
-              <div class="row-setting">
+              <div class="row-setting-with-buttons">
                 <label for="final-model-size">Final model size</label>
                 <select id="final-model-size">
                   <!-- Populated dynamically from /api/settings/transcription/models -->
                 </select>
+                <button id="test-final-model" class="secondary">Test</button>
+                <span id="final-model-status" class="status-pill"></span>
               </div>
               <div class="row">
                 <label>

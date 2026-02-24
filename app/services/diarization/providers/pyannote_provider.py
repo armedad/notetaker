@@ -30,6 +30,9 @@ def _restore_torch_load(original):
     torch.load = original
 
 
+_dbg_logger = logging.getLogger("notetaker.debug")
+
+
 class PyannoteProvider(DiarizationProvider):
     def __init__(self, config: DiarizationConfig) -> None:
         self._config = config
@@ -37,6 +40,10 @@ class PyannoteProvider(DiarizationProvider):
         self._pipeline = None
 
     def diarize(self, audio_path: str) -> list[dict]:
+        # #region agent log
+        _dbg_logger.debug("PYANNOTE_DIARIZE_ENTER: audio_path=%s model=%s device=%s",
+                        audio_path, self._config.model, self._config.device)
+        # #endregion
         if not self._config.hf_token:
             raise RuntimeError("Missing Hugging Face token for diarization")
         try:
@@ -50,6 +57,11 @@ class PyannoteProvider(DiarizationProvider):
                 self._config.model,
                 self._config.device,
             )
+            # #region agent log
+            _dbg_logger.debug("PYANNOTE_MODEL_LOAD_START: model=%s device=%s", self._config.model, self._config.device)
+            import time as _pytime
+            _model_load_t0 = _pytime.perf_counter()
+            # #endregion
             original_torch_load = _patch_torch_load_for_pyannote()
             # HF_HUB_OFFLINE is set globally at boot (main.py).
             # No per-call override needed — the settings UI handles downloads.
@@ -62,9 +74,17 @@ class PyannoteProvider(DiarizationProvider):
                 _dev = _torch.device(self._config.device)
                 # #region agent log
                 self._logger.debug("pipeline.to device: config_device=%s torch_device=%s", self._config.device, str(_dev))
+                _dbg_logger.debug("PYANNOTE_PIPELINE_TO_DEVICE: device=%s", str(_dev))
                 # #endregion
                 self._pipeline.to(_dev)
+                # #region agent log
+                _model_load_elapsed = _pytime.perf_counter() - _model_load_t0
+                _dbg_logger.debug("PYANNOTE_MODEL_LOAD_DONE: model=%s elapsed_sec=%.2f", self._config.model, _model_load_elapsed)
+                # #endregion
             except Exception as exc:
+                # #region agent log
+                _dbg_logger.debug("PYANNOTE_MODEL_LOAD_ERROR: exc_type=%s exc=%s", type(exc).__name__, str(exc)[:500])
+                # #endregion
                 error_str = str(exc).lower()
                 if "403" in error_str or "forbidden" in error_str or "gated" in error_str:
                     model_url = f"https://huggingface.co/{self._config.model}"
@@ -80,14 +100,23 @@ class PyannoteProvider(DiarizationProvider):
                 raise
             finally:
                 _restore_torch_load(original_torch_load)
+        else:
+            # #region agent log
+            _dbg_logger.debug("PYANNOTE_MODEL_CACHED: model=%s", self._config.model)
+            # #endregion
 
         # #region agent log
         import time as _tpy, os as _ospy
         _t0 = _tpy.time()
         _audio_size_mb = round(_ospy.path.getsize(audio_path)/1024/1024,2) if _ospy.path.isfile(audio_path) else None
         self._logger.debug("PIPELINE_CALL_START: audio_path=%s audio_size_mb=%s", _ospy.path.basename(audio_path), _audio_size_mb)
+        _dbg_logger.debug("PYANNOTE_PIPELINE_RUN_START: audio_path=%s audio_size_mb=%s", audio_path, _audio_size_mb)
         # #endregion
         diarization = self._pipeline(audio_path)
+        # #region agent log
+        _diar_elapsed = _tpy.time() - _t0
+        _dbg_logger.debug("PYANNOTE_PIPELINE_RUN_DONE: elapsed_sec=%.2f", _diar_elapsed)
+        # #endregion
         # #region agent log
         self._logger.debug("PIPELINE_CALL_DONE: elapsed_s=%s", round(_tpy.time()-_t0,1))
         # #endregion
