@@ -1012,7 +1012,11 @@ class MeetingStore:
     ) -> Optional[dict]:
         """Update speaker labels in transcript segments after diarization.
         
-        Also creates/updates attendees based on speaker labels found in segments.
+        Handles re-diarization by:
+        1. Preserving user-edited attendees (name_source="manual")
+        2. Clearing auto-generated attendees
+        3. Creating new attendees from diarization labels
+        4. Mapping preserved attendees to new speakers based on time overlap
         """
         with self._lock:
             path = self._find_meeting_path(meeting_id)
@@ -1024,19 +1028,143 @@ class MeetingStore:
             transcript = meeting.get("transcript", {})
             if isinstance(transcript, dict):
                 existing_segments = transcript.get("segments", [])
+                
+                # Build map of new speaker labels by segment start time
                 segment_map = {s["start"]: s.get("speaker") for s in segments}
+                
+                # #region agent log
+                _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
+                import json as _json
+                with open(_logpath, "a") as _f:
+                    _f.write(_json.dumps({"location": "meeting_store.py:1033", "message": "segment_map_built", "hypothesisId": "H3,H5", "data": {"segment_map_size": len(segment_map), "sample_entries": list(segment_map.items())[:5], "input_segments_count": len(segments), "input_segments_sample": [{"start": s.get("start"), "speaker": s.get("speaker")} for s in segments[:3]]}}) + "\n")
+                # #endregion
+                
+                # Collect time ranges for old speakers before updating
+                old_speaker_times: dict[str, list[tuple[float, float]]] = {}
+                for seg in existing_segments:
+                    old_speaker = seg.get("speaker") or seg.get("speaker_id")
+                    if old_speaker:
+                        if old_speaker not in old_speaker_times:
+                            old_speaker_times[old_speaker] = []
+                        old_speaker_times[old_speaker].append(
+                            (seg.get("start", 0), seg.get("end", seg.get("start", 0)))
+                        )
+                
+                # #region agent log
+                with open(_logpath, "a") as _f:
+                    _f.write(_json.dumps({"location": "meeting_store.py:1050", "message": "old_speaker_times_collected", "hypothesisId": "H2", "data": {"old_speaker_ids": list(old_speaker_times.keys()), "existing_segments_count": len(existing_segments), "sample_seg": [{"start": s.get("start"), "speaker": s.get("speaker"), "speaker_id": s.get("speaker_id")} for s in existing_segments[:3]]}}) + "\n")
+                # #endregion
+                
+                # Update segment speaker labels
                 for seg in existing_segments:
                     if seg["start"] in segment_map:
                         seg["speaker"] = segment_map[seg["start"]]
                 meeting["transcript"] = transcript
                 
-                # Create/update attendees from speaker labels
+                # Separate user-edited attendees from auto-generated ones
                 existing_attendees = meeting.get("attendees", [])
-                attendees, normalized_segments = self._assign_attendees(
-                    existing_attendees, existing_segments
+                user_edited = [a for a in existing_attendees if a.get("name_source") == "manual"]
+                
+                # #region agent log
+                with open(_logpath, "a") as _f:
+                    _f.write(_json.dumps({"location": "meeting_store.py:1065", "message": "user_edited_filtered", "hypothesisId": "H1", "data": {"existing_attendees_count": len(existing_attendees), "existing_attendees": [{"id": a.get("id"), "name": a.get("name"), "name_source": a.get("name_source")} for a in existing_attendees], "user_edited_count": len(user_edited), "user_edited": [{"id": a.get("id"), "name": a.get("name")} for a in user_edited]}}) + "\n")
+                # #endregion
+                
+                # Get new speaker labels from the updated segments
+                new_speaker_labels = sorted(
+                    {seg.get("speaker") for seg in existing_segments if seg.get("speaker")}
                 )
+                
+                # #region agent log
+                with open(_logpath, "a") as _f:
+                    _f.write(_json.dumps({"location": "meeting_store.py:1075", "message": "new_speaker_labels_extracted", "hypothesisId": "H3", "data": {"new_speaker_labels": new_speaker_labels, "segments_with_speaker": sum(1 for s in existing_segments if s.get("speaker"))}}) + "\n")
+                # #endregion
+                
+                # Collect time ranges for new speakers
+                new_speaker_times: dict[str, list[tuple[float, float]]] = {}
+                for seg in existing_segments:
+                    new_speaker = seg.get("speaker")
+                    if new_speaker:
+                        if new_speaker not in new_speaker_times:
+                            new_speaker_times[new_speaker] = []
+                        new_speaker_times[new_speaker].append(
+                            (seg.get("start", 0), seg.get("end", seg.get("start", 0)))
+                        )
+                
+                # Map user-edited attendees to new speakers by time overlap
+                speaker_mapping = self._map_speakers_by_overlap(
+                    user_edited, old_speaker_times, new_speaker_labels, new_speaker_times
+                )
+                
+                # #region agent log
+                with open(_logpath, "a") as _f:
+                    _f.write(_json.dumps({"location": "meeting_store.py:1095", "message": "speaker_mapping_result", "hypothesisId": "H4", "data": {"speaker_mapping": {k: {"id": v.get("id"), "name": v.get("name")} for k, v in speaker_mapping.items()}, "new_speaker_times_keys": list(new_speaker_times.keys())}}) + "\n")
+                # #endregion
+                
+                # If diarization produced no speaker labels, preserve existing attendees
+                if not new_speaker_labels:
+                    # #region agent log
+                    with open(_logpath, "a") as _f:
+                        _f.write(_json.dumps({"location": "meeting_store.py:1105", "message": "no_new_speakers_preserving_existing", "hypothesisId": "H_PRESERVE", "data": {"preserving_count": len(existing_attendees)}}) + "\n")
+                    # #endregion
+                    # No new speakers from diarization - keep existing attendees unchanged
+                    normalized_segments = []
+                    for seg in existing_segments:
+                        normalized = dict(seg)
+                        speaker = seg.get("speaker") or seg.get("speaker_id")
+                        if speaker:
+                            normalized["speaker_id"] = speaker
+                        normalized_segments.append(normalized)
+                    meeting["transcript"]["segments"] = normalized_segments
+                    self._write_meeting_file(path, meeting)
+                    self.publish_event("transcript_updated", meeting_id, {"segments": normalized_segments})
+                    return meeting
+                
+                # Build new attendees list starting fresh (no auto-generated ones)
+                # Only keep user-edited attendees that have a mapping
+                attendees: list[dict] = []
+                label_lookup: dict[str, dict] = {}
+                next_index = 1
+                
+                for new_label in new_speaker_labels:
+                    if new_label in speaker_mapping:
+                        # This new speaker maps to a user-edited attendee
+                        old_attendee = speaker_mapping[new_label]
+                        attendee = {
+                            "id": new_label,
+                            "label": new_label,
+                            "name": old_attendee.get("name", f"Person {next_index}"),
+                            "name_source": "manual",
+                        }
+                        if old_attendee.get("name_confidence"):
+                            attendee["name_confidence"] = old_attendee["name_confidence"]
+                    else:
+                        # New speaker with no mapping - auto-generate name
+                        attendee = {
+                            "id": new_label,
+                            "label": new_label,
+                            "name": f"Person {next_index}",
+                        }
+                    attendees.append(attendee)
+                    label_lookup[new_label] = attendee
+                    next_index += 1
+                
+                # Normalize segments with speaker_id
+                normalized_segments = []
+                for seg in existing_segments:
+                    normalized = dict(seg)
+                    speaker = seg.get("speaker")
+                    if speaker:
+                        normalized["speaker_id"] = speaker
+                    normalized_segments.append(normalized)
+                
                 meeting["attendees"] = attendees
                 meeting["transcript"]["segments"] = normalized_segments
+                
+                # #region agent log
+                with open(_logpath, "a") as _f:
+                    _f.write(_json.dumps({"location": "meeting_store.py:1145", "message": "final_attendees", "hypothesisId": "H1,H3,H4", "data": {"final_attendees_count": len(attendees), "final_attendees": [{"id": a.get("id"), "name": a.get("name"), "name_source": a.get("name_source")} for a in attendees]}}) + "\n")
+                # #endregion
                 
                 # #region agent log
                 _dbg_ndjson(
@@ -1045,7 +1173,9 @@ class MeetingStore:
                     data={
                         "meeting_id": meeting_id,
                         "existing_attendees_count": len(existing_attendees),
+                        "user_edited_count": len(user_edited),
                         "new_attendees_count": len(attendees),
+                        "mappings": {k: v.get("name") for k, v in speaker_mapping.items()},
                         "attendee_ids": [a.get("id") for a in attendees[:5]],
                     },
                     run_id="post-fix",
@@ -1059,6 +1189,65 @@ class MeetingStore:
                 # Also emit attendees update
                 self.publish_event("attendees_updated", meeting_id, {"attendees": attendees})
             return meeting
+    
+    def _map_speakers_by_overlap(
+        self,
+        user_edited_attendees: list[dict],
+        old_speaker_times: dict[str, list[tuple[float, float]]],
+        new_speaker_labels: list[str],
+        new_speaker_times: dict[str, list[tuple[float, float]]],
+    ) -> dict[str, dict]:
+        """Map new speaker labels to user-edited attendees based on time overlap.
+        
+        Returns a dict mapping new_speaker_label -> old_attendee for the best matches.
+        """
+        if not user_edited_attendees:
+            return {}
+        
+        def compute_overlap(times_a: list[tuple[float, float]], times_b: list[tuple[float, float]]) -> float:
+            """Compute total overlapping duration between two sets of time ranges."""
+            total = 0.0
+            for start_a, end_a in times_a:
+                for start_b, end_b in times_b:
+                    overlap_start = max(start_a, start_b)
+                    overlap_end = min(end_a, end_b)
+                    if overlap_end > overlap_start:
+                        total += overlap_end - overlap_start
+            return total
+        
+        # Build mapping: find best new speaker for each user-edited attendee
+        mapping: dict[str, dict] = {}
+        used_new_speakers: set[str] = set()
+        
+        # Score all pairs
+        scores: list[tuple[float, str, dict]] = []
+        for attendee in user_edited_attendees:
+            old_id = attendee.get("id") or attendee.get("label")
+            if not old_id or old_id not in old_speaker_times:
+                continue
+            old_times = old_speaker_times[old_id]
+            
+            for new_label in new_speaker_labels:
+                if new_label not in new_speaker_times:
+                    continue
+                new_times = new_speaker_times[new_label]
+                overlap = compute_overlap(old_times, new_times)
+                if overlap > 0:
+                    scores.append((overlap, new_label, attendee))
+        
+        # Sort by overlap descending and greedily assign
+        scores.sort(key=lambda x: -x[0])
+        used_attendees: set[str] = set()
+        
+        for overlap, new_label, attendee in scores:
+            attendee_id = attendee.get("id") or attendee.get("label")
+            if new_label in used_new_speakers or attendee_id in used_attendees:
+                continue
+            mapping[new_label] = attendee
+            used_new_speakers.add(new_label)
+            used_attendees.add(attendee_id)
+        
+        return mapping
 
     def replace_transcript_segments(
         self,

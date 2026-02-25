@@ -282,8 +282,18 @@ class BackgroundFinalizer:
         
         try:
             diarization_segments = self._diarization.run(audio_path)
+            # #region agent log
+            _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
+            import json as _json
+            with open(_logpath, "a") as _f:
+                _f.write(_json.dumps({"location": "background_finalizer.py:284", "message": "diarization_result", "hypothesisId": "H_DIAR", "data": {"meeting_id": meeting_id, "diarization_segments_count": len(diarization_segments) if diarization_segments else 0, "unique_speakers": list(set(s.get("speaker") for s in (diarization_segments or []))), "sample_segments": (diarization_segments or [])[:5]}}) + "\n")
+            # #endregion
             if diarization_segments:
                 updated_segments = apply_diarization(segments, diarization_segments)
+                # #region agent log
+                with open(_logpath, "a") as _f:
+                    _f.write(_json.dumps({"location": "background_finalizer.py:290", "message": "updated_segments_before_store", "hypothesisId": "H_DIAR", "data": {"meeting_id": meeting_id, "updated_segments_count": len(updated_segments), "unique_speakers_in_updated": list(set(s.get("speaker") for s in updated_segments)), "sample": [{"start": s.get("start"), "speaker": s.get("speaker")} for s in updated_segments[:5]]}}) + "\n")
+                # #endregion
                 self._meeting_store.update_transcript_speakers(meeting_id, updated_segments)
             self._meeting_store.mark_finalization_stage(meeting_id, "diarization")
             self._meeting_store.publish_status_log(meeting_id, "diarization", "completed",

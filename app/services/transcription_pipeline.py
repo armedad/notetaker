@@ -41,8 +41,8 @@ def apply_diarization(
 ) -> list[dict]:
     """Apply speaker labels to transcript segments based on diarization output.
     
-    Matches each segment to a diarization interval by start time and assigns
-    the corresponding speaker label.
+    Matches each segment to a diarization interval by overlap or proximity
+    and assigns the corresponding speaker label.
     """
     if not diarization_segments:
         return segments
@@ -50,10 +50,52 @@ def apply_diarization(
     diarization_segments = sorted(diarization_segments, key=lambda seg: seg["start"])
     
     for segment in segments:
+        seg_start = segment.get("start", 0)
+        seg_end = segment.get("end", seg_start)
+        
+        # First try: exact containment (segment start falls within diarization range)
+        matched = False
         for diar in diarization_segments:
-            if diar["start"] <= segment["start"] < diar["end"]:
+            if diar["start"] <= seg_start < diar["end"]:
                 segment["speaker"] = diar["speaker"]
+                matched = True
                 break
+        
+        if matched:
+            continue
+        
+        # Second try: find diarization segment with best overlap
+        best_overlap = 0
+        best_speaker = None
+        for diar in diarization_segments:
+            overlap_start = max(seg_start, diar["start"])
+            overlap_end = min(seg_end, diar["end"])
+            overlap = max(0, overlap_end - overlap_start)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_speaker = diar["speaker"]
+        
+        if best_speaker:
+            segment["speaker"] = best_speaker
+            continue
+        
+        # Third try: assign to nearest diarization segment by time proximity
+        min_distance = float("inf")
+        nearest_speaker = None
+        for diar in diarization_segments:
+            # Distance from segment to diarization range
+            if seg_end <= diar["start"]:
+                distance = diar["start"] - seg_end
+            elif seg_start >= diar["end"]:
+                distance = seg_start - diar["end"]
+            else:
+                distance = 0  # overlapping
+            if distance < min_distance:
+                min_distance = distance
+                nearest_speaker = diar["speaker"]
+        
+        if nearest_speaker:
+            segment["speaker"] = nearest_speaker
     
     return segments
 
