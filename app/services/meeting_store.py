@@ -2051,6 +2051,43 @@ class MeetingStore:
             self._write_meeting_file(path, meeting)
             return meeting
 
+    def force_retry_stages(self, meeting_id: str, stages: list[str]) -> Optional[dict]:
+        """Force stages to pending regardless of current state.
+        
+        Unlike clear_failed_stages, this sets stages to pending even if they're
+        already completed. Use this for manual re-run requests.
+        
+        Args:
+            meeting_id: The meeting ID
+            stages: List of stage keys to retry (e.g., ['diarization', 'summary'])
+                   
+        Returns:
+            Updated meeting dict, or None if not found
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            
+            self._ensure_finalization_state(meeting)
+            finalization = meeting["finalization"]
+            
+            for stage in stages:
+                if stage in self.FINALIZATION_STAGE_LABELS:
+                    prev_state = finalization.get(stage)
+                    finalization[stage] = self.FINALIZATION_PENDING
+                    finalization[f"{stage}_error"] = None
+                    self._logger.info(
+                        "Force retry stage %s for meeting %s (was %s)",
+                        stage, meeting_id, prev_state
+                    )
+            
+            self._write_meeting_file(path, meeting)
+            return meeting
+
     def needs_finalization(self, meeting: dict) -> bool:
         """Check if a meeting needs background finalization.
         

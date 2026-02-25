@@ -1646,13 +1646,17 @@ async function triggerRefinalization(stages, buttonEl) {
     }
 
     const data = await res.json();
-    const pendingCount = data.pending_stages?.length || 0;
-    NotificationCenter.success(`Re-finalization queued for ${stageName} (${pendingCount} pending)`);
+    if (data.status === "started") {
+      NotificationCenter.success(`Started ${stageName}...`);
+    } else {
+      const pendingCount = data.pending_stages?.length || 0;
+      NotificationCenter.success(`Re-finalization queued for ${stageName} (${pendingCount} pending)`);
+    }
 
     switchTranscriptTab("status");
   } catch (err) {
     console.error("Refinalization error:", err);
-    NotificationCenter.error(`Failed to queue re-finalization: ${err.message}`);
+    NotificationCenter.error(`Failed to start re-finalization: ${err.message}`);
   } finally {
     if (buttonEl) buttonEl.classList.remove("loading");
     updateRefinalizeControls();

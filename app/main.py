@@ -54,7 +54,7 @@ from app.services.crash_logging import enable_crash_logging
 from app.services.llm_logger import TestLLMLogger
 from app.services.rag_metrics import TestRAGMetrics
 from app.services.llm_instrumentation import test_install_instrumentation
-from app.services.background_finalizer import BackgroundFinalizer
+from app.services.background_finalizer import BackgroundFinalizer, set_background_finalizer
 from app.services.diarization import DiarizationService, parse_diarization_config
 
 def create_app() -> FastAPI:
@@ -271,6 +271,7 @@ def create_app() -> FastAPI:
                 diarization_service=diarization_service,
             )
             background_finalizer.start()
+            set_background_finalizer(background_finalizer)  # Set global singleton
             app.state.background_finalizer = background_finalizer
             logger.info("Boot: BackgroundFinalizer started")
         except Exception as exc:
