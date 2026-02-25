@@ -321,6 +321,21 @@ h1 {
   max-width: 300px;
 }
 
+/* Right-aligned control cluster within a row-setting */
+.setting-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.row-setting .setting-controls select,
+.row-setting .setting-controls input[type="number"] {
+  flex: 0 0 auto;
+  width: 180px;
+  max-width: none;
+}
+
 /* Row setting with buttons (for URL fields with Default/Test buttons) */
 .row-setting-with-buttons {
   display: flex;
@@ -3586,4 +3601,89 @@ body.settings-page {
 .notification-bubble .bubble-dismiss:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+/* ===========================================
+   Re-finalization Controls
+   =========================================== */
+.refinalize-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-secondary);
+}
+
+.refinalize-controls .btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+  border: none;
+  transition: opacity 0.15s;
+}
+
+.refinalize-controls .btn.btn-secondary {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+}
+
+.refinalize-controls .btn.btn-secondary:hover {
+  background: var(--border-default);
+  color: var(--text-primary);
+}
+
+.refinalize-controls .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.refinalize-controls .btn.loading {
+  position: relative;
+  color: transparent;
+}
+
+.refinalize-controls .btn.loading::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ===========================================
+   Audio Level Meter
+   =========================================== */
+.audio-level-meter {
+  width: 60px;
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+  display: none;
+  vertical-align: middle;
+}
+
+.audio-level-meter.active {
+  display: inline-block;
+}
+
+.audio-level-bar {
+  height: 100%;
+  background: var(--color-success);
+  width: 0%;
+  transition: width 50ms ease-out;
 }

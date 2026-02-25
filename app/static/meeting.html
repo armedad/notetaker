@@ -27,7 +27,10 @@
         <div class="status inline" id="global-busy"></div>
         <div class="header-actions">
           <span id="transcription-status-badge" class="status-badge"></span>
-          <button id="stop-transcription" class="secondary" style="display: none;">Stop</button>
+          <div class="audio-level-meter" id="audio-level-meter">
+            <div class="audio-level-bar" id="audio-level-bar"></div>
+          </div>
+          <button id="stop-transcription" class="secondary" style="display: none;">Stop recording</button>
           <button id="resume-transcription" class="secondary" style="display: none;">Resume</button>
           <button id="export-meeting" class="secondary">Export</button>
           <button id="delete-meeting" class="secondary">Delete</button>
@@ -91,6 +94,14 @@
               <div class="output transcript" id="transcript-output"></div>
             </div>
             <div class="panel-tab-content" data-tab-content="status">
+              <div class="refinalize-controls" id="refinalize-controls">
+                <button class="btn btn-sm btn-secondary" id="btn-refinalize-all" title="Re-run all finalization stages">Re-finalize</button>
+                <button class="btn btn-sm btn-secondary" id="btn-retranscribe" title="Re-transcribe with final model">Transcribe</button>
+                <button class="btn btn-sm btn-secondary" id="btn-rediarize" title="Re-run diarization">Diarize</button>
+                <button class="btn btn-sm btn-secondary" id="btn-speaker-names" title="Re-identify speaker names">Speakers</button>
+                <button class="btn btn-sm btn-secondary" id="btn-resummarize" title="Re-generate summary">Summary</button>
+                <button class="btn btn-sm btn-secondary" id="btn-retitle" title="Re-generate title">Title</button>
+              </div>
               <div class="status-log" id="status-log-output">
                 <div class="status-log-empty">No status logs yet. Start a recording to see processing status.</div>
               </div>

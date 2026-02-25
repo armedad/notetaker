@@ -10,7 +10,7 @@ from typing import Optional
 # This must be set before importing faster_whisper
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
-from faster_whisper import WhisperModel, available_models
+from faster_whisper import WhisperModel
 
 from app.services.transcription.base import (
     TranscriptSegment,
@@ -21,145 +21,71 @@ from app.services.transcription.base import (
 from app.services.diarization import DiarizationService
 
 
-# Static registry of Whisper model metadata for UI display
-# Models are grouped by category for better organization
-WHISPER_MODEL_INFO: dict[str, dict] = {
-    # Standard multilingual models
-    "tiny": {
-        "name": "Tiny",
-        "params": "39M",
-        "speed": "fastest",
-        "description": "Fastest model, lowest accuracy. Good for quick drafts or testing.",
-    },
-    "tiny.en": {
-        "name": "Tiny (English)",
-        "params": "39M",
-        "speed": "fastest",
-        "description": "English-only tiny model. Slightly better for English than multilingual.",
-    },
-    "base": {
-        "name": "Base",
-        "params": "74M",
-        "speed": "very fast",
-        "description": "Fast with basic accuracy. Good default for live transcription.",
-    },
-    "base.en": {
-        "name": "Base (English)",
-        "params": "74M",
-        "speed": "very fast",
-        "description": "English-only base model. Better for English content.",
-    },
-    "small": {
-        "name": "Small",
-        "params": "244M",
-        "speed": "fast",
-        "description": "Balanced speed and accuracy. Good for general use.",
-    },
-    "small.en": {
-        "name": "Small (English)",
-        "params": "244M",
-        "speed": "fast",
-        "description": "English-only small model. Recommended for English content.",
-    },
-    "medium": {
-        "name": "Medium",
-        "params": "769M",
-        "speed": "moderate",
-        "description": "High accuracy, slower. Good for final transcription pass.",
-    },
-    "medium.en": {
-        "name": "Medium (English)",
-        "params": "769M",
-        "speed": "moderate",
-        "description": "English-only medium model. Best quality for English without going to large.",
-    },
-    "large-v1": {
-        "name": "Large v1",
-        "params": "1.5B",
-        "speed": "slow",
-        "description": "Original large model. High accuracy, resource intensive.",
-    },
-    "large-v2": {
-        "name": "Large v2",
-        "params": "1.5B",
-        "speed": "slow",
-        "description": "Improved large model. Better accuracy than v1.",
-    },
-    "large-v3": {
-        "name": "Large v3",
-        "params": "1.5B",
-        "speed": "slow",
-        "description": "Latest large model. Highest accuracy, requires significant resources.",
-    },
-    "large": {
-        "name": "Large",
-        "params": "1.5B",
-        "speed": "slow",
-        "description": "Alias for latest large model (v3). Highest accuracy available.",
-    },
-    # Turbo models
-    "large-v3-turbo": {
-        "name": "Large v3 Turbo",
-        "params": "809M",
-        "speed": "fast",
-        "description": "Optimized large-v3 with 4 decoder layers. Near large-v2 accuracy at much higher speed.",
-    },
-    "turbo": {
-        "name": "Turbo",
-        "params": "809M",
-        "speed": "fast",
-        "description": "Alias for large-v3-turbo. Best speed/accuracy balance for most use cases.",
-    },
-    # Distil models (English only, knowledge-distilled)
-    "distil-small.en": {
-        "name": "Distil Small",
-        "params": "166M",
-        "speed": "very fast",
-        "description": "Distilled small model. 6x faster than large, English only. Good for constrained environments.",
-    },
-    "distil-medium.en": {
-        "name": "Distil Medium",
-        "params": "394M",
-        "speed": "very fast",
-        "description": "Distilled medium model. 6x faster than large, English only.",
-    },
-    "distil-large-v2": {
-        "name": "Distil Large v2",
-        "params": "756M",
-        "speed": "fast",
-        "description": "Distilled large-v2. 6x faster, within 1% accuracy of large. English only.",
-    },
-    "distil-large-v3": {
-        "name": "Distil Large v3",
-        "params": "756M",
-        "speed": "fast",
-        "description": "Distilled large-v3. Best distil model, 6x faster than large. English only.",
-    },
-    "distil-large-v3.5": {
-        "name": "Distil Large v3.5",
-        "params": "756M",
-        "speed": "fast",
-        "description": "Latest distilled model. Improved accuracy over v3. English only.",
-    },
-}
+def _get_locally_installed_models() -> list[str]:
+    """Return list of Whisper models that are fully downloaded locally.
+    
+    Checks the HuggingFace cache for Systran/faster-whisper-* models
+    that have no .incomplete files (fully downloaded).
+    """
+    from pathlib import Path
+    
+    cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+    if not cache_dir.exists():
+        return []
+    
+    installed = []
+    for model_dir in cache_dir.glob("models--Systran--faster-whisper-*"):
+        # Extract model name from directory (e.g., "models--Systran--faster-whisper-base.en" -> "base.en")
+        dir_name = model_dir.name
+        if not dir_name.startswith("models--Systran--faster-whisper-"):
+            continue
+        model_id = dir_name.replace("models--Systran--faster-whisper-", "")
+        
+        # Check if model is fully downloaded (no .incomplete files)
+        blobs_dir = model_dir / "blobs"
+        if blobs_dir.exists():
+            incomplete_files = list(blobs_dir.glob("*.incomplete"))
+            if not incomplete_files:
+                installed.append(model_id)
+    
+    return sorted(installed)
 
 
 def get_available_whisper_models() -> list[str]:
-    """Return list of available Whisper model IDs from faster-whisper."""
-    return available_models()
+    """Return list of Whisper model IDs that are installed locally."""
+    return _get_locally_installed_models()
+
+
+def _load_whisper_model_metadata() -> dict[str, dict]:
+    """Load whisper model metadata from data/whisper_models.json."""
+    import json
+    from pathlib import Path
+    
+    # Try data folder relative to app directory (deployed structure)
+    app_dir = Path(__file__).parent.parent.parent  # app/services/transcription -> app
+    data_path = app_dir.parent / "data" / "whisper_models.json"
+    
+    if data_path.exists():
+        try:
+            with open(data_path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
 
 
 def get_whisper_model_info() -> dict[str, dict]:
-    """Return model info for all available models.
+    """Return model info for locally installed models only.
     
-    Filters WHISPER_MODEL_INFO to only include models that are
-    actually available in the installed faster-whisper version.
+    Loads metadata from data/whisper_models.json and filters to only
+    include models that are fully downloaded locally.
     """
-    available = set(available_models())
+    model_metadata = _load_whisper_model_metadata()
+    installed = set(_get_locally_installed_models())
     return {
         model_id: info
-        for model_id, info in WHISPER_MODEL_INFO.items()
-        if model_id in available
+        for model_id, info in model_metadata.items()
+        if model_id in installed
     }
 
 

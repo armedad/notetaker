@@ -513,12 +513,8 @@ async function loadTranscriptionSettings() {
     if (data.final_model_size) {
       document.getElementById("final-model-size").value = data.final_model_size;
     }
-    document.getElementById("live-transcribe").checked =
-      data.live_transcribe ?? true;
-    document.getElementById("consolidation-max-duration").value =
-      data.consolidation_max_duration ?? 15;
-    document.getElementById("consolidation-max-gap").value =
-      data.consolidation_max_gap ?? 2;
+    document.getElementById("live-chunk-seconds").value =
+      data.live_chunk_seconds ?? 5;
   } catch (error) {
     setGlobalError(`Failed to load transcription settings: ${error.message}`);
   }
@@ -616,9 +612,7 @@ async function saveTranscriptionSettings() {
   const payload = {
     live_model_size: document.getElementById("live-model-size").value,
     final_model_size: document.getElementById("final-model-size").value,
-    live_transcribe: document.getElementById("live-transcribe").checked,
-    consolidation_max_duration: parseFloat(document.getElementById("consolidation-max-duration").value) || 15,
-    consolidation_max_gap: parseFloat(document.getElementById("consolidation-max-gap").value) || 2,
+    live_chunk_seconds: parseFloat(document.getElementById("live-chunk-seconds").value) || 5,
   };
   setTranscriptionOutput("Saving transcription settings...");
   setGlobalBusy("Saving transcription settings...");
@@ -1022,13 +1016,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     .getElementById("test-final-model")
     .addEventListener("click", () => testWhisperModel("final"));
   document
-    .getElementById("live-transcribe")
-    .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
-  document
-    .getElementById("consolidation-max-duration")
-    .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
-  document
-    .getElementById("consolidation-max-gap")
+    .getElementById("live-chunk-seconds")
     .addEventListener("change", () => scheduleSave(saveTranscriptionSettings));
   document
     .getElementById("model-choice")

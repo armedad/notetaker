@@ -48,4 +48,8 @@ rsync -av --delete \
   --exclude "logs/" \
   "${SRC_DIR}/" "${DEST_DIR}/"
 
+# Copy static data files (not user data) to deployed data folder
+mkdir -p "${DEST_DIR}/data"
+cp "${SRC_DIR}/data/whisper_models.json" "${DEST_DIR}/data/" 2>/dev/null || true
+
 echo "Deployed to ${DEST_DIR}"

@@ -116,15 +116,34 @@ def create_meetings_router(
 
     @router.get("/api/meetings/events")
     def meeting_events() -> StreamingResponse:
+        from app.services.debug import debug_log
         logger.info("Meetings SSE connected")
 
         def event_stream():
+            from app.services.debug import debug_log as dl
             cursor = 0
             # #region agent log
             _buf_size = len(meeting_store._events)
             _event_types = [e.get("type") for e in meeting_store._events[-10:]]
             logger.debug("SSE_STREAM_INIT: cursor=%d buffer_size=%d recent_types=%s", cursor, _buf_size, _event_types)
             # #endregion
+            # Log notification events in buffer at connection time
+            notif_events = [
+                e for e in meeting_store._events
+                if e.get("type") in ("finalization_complete", "finalization_failed")
+            ]
+            if notif_events:
+                dl(
+                    "NOTIFICATIONS",
+                    "SSE_CONNECT_BUFFER_HAS_NOTIF_EVENTS",
+                    count=len(notif_events),
+                    events=[
+                        {"type": e.get("type"), "meeting_id": e.get("meeting_id"), "timestamp": e.get("timestamp")}
+                        for e in notif_events
+                    ],
+                    buffer_size=_buf_size,
+                    starting_cursor=cursor,
+                )
             while True:
                 events, cursor = meeting_store.wait_for_events(cursor, timeout=5.0)
                 # #region agent log
@@ -132,6 +151,22 @@ def create_meetings_router(
                     _etypes = [e.get("type") for e in events]
                     logger.debug("SSE_EVENTS_SENT: count=%d types=%s new_cursor=%d", len(events), _etypes, cursor)
                 # #endregion
+                # Log notification events being sent
+                notif_in_batch = [
+                    e for e in events
+                    if e.get("type") in ("finalization_complete", "finalization_failed")
+                ]
+                if notif_in_batch:
+                    dl(
+                        "NOTIFICATIONS",
+                        "SSE_SENDING_NOTIF_EVENTS",
+                        count=len(notif_in_batch),
+                        events=[
+                            {"type": e.get("type"), "meeting_id": e.get("meeting_id"), "timestamp": e.get("timestamp")}
+                            for e in notif_in_batch
+                        ],
+                        new_cursor=cursor,
+                    )
                 for event in events:
                     yield f"data: {json.dumps(event)}\n\n"
                 if not events:
