@@ -688,10 +688,17 @@ class MeetingStore:
     def add_summary(
         self,
         meeting_id: str,
-        summary: str,
-        action_items: list[dict],
-        provider: str,
+        *,
+        summary_data: Optional[dict] = None,
+        summary: Optional[str] = None,
+        action_items: Optional[list] = None,
+        provider: str = "default",
     ) -> Optional[dict]:
+        """Persist a meeting summary.
+
+        Accepts either structured ``summary_data`` (from ``parse_structured_summary``)
+        or legacy ``summary`` + ``action_items`` strings.
+        """
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
@@ -699,22 +706,64 @@ class MeetingStore:
             meeting = self._read_meeting_file(path)
             if not meeting:
                 return None
-            normalized_items: list[dict] = []
-            for item in action_items:
-                if isinstance(item, str):
-                    normalized_items.append({"description": item})
-                    continue
-                if isinstance(item, dict):
-                    normalized_items.append(item)
-            meeting["summary"] = {
-                "text": summary,
-                "provider": provider,
-                "updated_at": datetime.utcnow().isoformat(),
-            }
-            meeting["action_items"] = normalized_items
+
+            now = datetime.utcnow().isoformat()
+
+            if summary_data is not None:
+                normalized_items: list[dict] = []
+                for item in summary_data.get("action_items", []):
+                    if isinstance(item, str):
+                        normalized_items.append({"description": item})
+                    elif isinstance(item, dict):
+                        normalized_items.append(item)
+                meeting["summary"] = {
+                    "text": summary_data.get("overview", ""),
+                    "title": summary_data.get("title", ""),
+                    "key_points": summary_data.get("key_points", []),
+                    "decisions": summary_data.get("decisions", []),
+                    "action_items": normalized_items,
+                    "provider": provider,
+                    "updated_at": now,
+                }
+                meeting["action_items"] = normalized_items
+            else:
+                normalized_items = []
+                for item in (action_items or []):
+                    if isinstance(item, str):
+                        normalized_items.append({"description": item})
+                    elif isinstance(item, dict):
+                        normalized_items.append(item)
+                meeting["summary"] = {
+                    "text": summary or "",
+                    "provider": provider,
+                    "updated_at": now,
+                }
+                meeting["action_items"] = normalized_items
+
             self._write_meeting_file(path, meeting)
             self._logger.info("Summary saved: id=%s", meeting_id)
             self.update_manifest_entry(meeting_id)
+            return meeting
+
+    def set_title_from_summary(self, meeting_id: str, title: str) -> Optional[dict]:
+        """Set a title that was extracted from the structured summary JSON.
+
+        Only updates if the title hasn't been manually set.
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            if meeting.get("title_source") == "manual":
+                return meeting
+            meeting["title"] = title
+            meeting["title_source"] = "auto"
+            meeting["title_generated_at"] = datetime.utcnow().isoformat()
+            self._write_meeting_file(path, meeting)
+            self._logger.info("Title from summary saved: id=%s title=%s", meeting_id, title[:50])
             return meeting
 
     def maybe_auto_title(

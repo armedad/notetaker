@@ -480,30 +480,32 @@ class TranscriptionPipeline:
             
             self._meeting_store.add_summary(
                 meeting_id,
-                summary=result.get("summary", ""),
-                action_items=result.get("action_items", []),
+                summary_data=result,
                 provider="default",
             )
-            
-            # #region agent log
-            try:
-                dbg(
-                    self._logger,
-                    location="transcription_pipeline.py:finalize_meeting",
-                    message="finalize_auto_title_start",
-                    data={"meeting_id": meeting_id, "summary_for_title_len": len(result.get("summary", ""))},
-                    run_id="bugs-debug",
-                    hypothesis_id="H1b",
+
+            if result.get("title"):
+                self._meeting_store.set_title_from_summary(meeting_id, result["title"])
+            elif result.get("overview", "").strip():
+                # #region agent log
+                try:
+                    dbg(
+                        self._logger,
+                        location="transcription_pipeline.py:finalize_meeting",
+                        message="finalize_auto_title_start",
+                        data={"meeting_id": meeting_id, "summary_for_title_len": len(result.get("overview", ""))},
+                        run_id="bugs-debug",
+                        hypothesis_id="H1b",
+                    )
+                except Exception:
+                    pass
+                # #endregion
+                self._meeting_store.maybe_auto_title(
+                    meeting_id,
+                    result.get("overview", ""),
+                    self._summarization,
+                    force=True,
                 )
-            except Exception:
-                pass
-            # #endregion
-            self._meeting_store.maybe_auto_title(
-                meeting_id,
-                result.get("summary", ""),
-                self._summarization,
-                force=True,
-            )
             # #region agent log
             try:
                 dbg(
@@ -837,88 +839,66 @@ class TranscriptionPipeline:
                     _dbg("summary_stream_done", {"total_tokens": token_count, "final_len": len(accumulated_summary)})
                     # #endregion
                     
-                    # Parse the final result (may be JSON with summary + action_items)
-                    final_text = accumulated_summary.strip()
-                    
-                    # Try to parse as JSON for structured response
-                    import json
-                    try:
-                        parsed = json.loads(final_text)
-                        result = {
-                            "summary": str(parsed.get("summary", final_text)).strip(),
-                            "action_items": parsed.get("action_items", []) or [],
-                        }
-                    except json.JSONDecodeError:
-                        result = {"summary": final_text, "action_items": []}
-                    
-                    # Emit summary_complete event
+                    from app.services.summarization import SummarizationService as _SS
+                    result = _SS.parse_structured_summary(accumulated_summary)
+
                     self._meeting_store.publish_event(
                         "summary_complete",
                         meeting_id,
-                        {"text": result.get("summary", "")}
+                        {"structured": result}
                     )
-                    
-                    # Emit summary output to status log
                     self._meeting_store.publish_status_log(
                         meeting_id, "summary", "output",
                         {
-                            "summary": result.get("summary", ""),
+                            "overview": result.get("overview", ""),
                             "action_items": result.get("action_items", []),
                         }
                     )
-                    
-                    # Save to meeting store
+
                     self._meeting_store.add_summary(
                         meeting_id,
-                        summary=result.get("summary", ""),
-                        action_items=result.get("action_items", []),
+                        summary_data=result,
                         provider="default",
                     )
-                    # Mark summary stage complete
                     self._meeting_store.mark_finalization_stage(meeting_id, "summary")
                     self._meeting_store.publish_status_log(
                         meeting_id, "summary", "completed"
                     )
-                    
-                    # Auto-generate title
-                    # #region agent log
-                    _dbg_logger.debug("SUMMARY_SAVED: meeting_id=%s summary_len=%d", meeting_id, len(result.get("summary","")))
-                    # #endregion
+
+                    # Title — extract from structured result or fall back to LLM call
                     self._meeting_store.publish_finalization_status(
                         meeting_id, "Title...", 0.9
                     )
                     self._meeting_store.publish_status_log(
                         meeting_id, "title", "started"
                     )
-                    summary_for_title = result.get("summary", "")
-                    self._meeting_store.publish_status_log(
-                        meeting_id, "title", "input",
-                        {"summary_preview": summary_for_title[:200] + ("..." if len(summary_for_title) > 200 else "")}
-                    )
-                    # #region agent log
-                    _dbg_logger.debug("TITLE_GEN_START: meeting_id=%s", meeting_id)
-                    # #endregion
-                    self._meeting_store.maybe_auto_title(
-                        meeting_id,
-                        summary_for_title,
-                        self._summarization,
-                        force=True,
-                    )
-                    # Get the generated title for status log
-                    updated_meeting = self._meeting_store.get_meeting(meeting_id)
-                    generated_title = updated_meeting.get("title", "") if updated_meeting else ""
-                    self._meeting_store.publish_status_log(
-                        meeting_id, "title", "output",
-                        {"title": generated_title}
-                    )
-                    # Mark title stage complete
+                    if result.get("title"):
+                        self._meeting_store.set_title_from_summary(meeting_id, result["title"])
+                        self._meeting_store.publish_event(
+                            "title_updated", meeting_id,
+                            {"title": result["title"], "source": "auto"},
+                        )
+                        self._meeting_store.publish_status_log(
+                            meeting_id, "title", "skipped",
+                            {"reason": "title extracted from summary JSON", "title": result["title"]}
+                        )
+                    elif result.get("overview", "").strip():
+                        self._meeting_store.maybe_auto_title(
+                            meeting_id,
+                            result["overview"],
+                            self._summarization,
+                            force=True,
+                        )
+                        updated_meeting = self._meeting_store.get_meeting(meeting_id)
+                        generated_title = updated_meeting.get("title", "") if updated_meeting else ""
+                        self._meeting_store.publish_status_log(
+                            meeting_id, "title", "output",
+                            {"title": generated_title}
+                        )
                     self._meeting_store.mark_finalization_stage(meeting_id, "title")
                     self._meeting_store.publish_status_log(
                         meeting_id, "title", "completed"
                     )
-                    # #region agent log
-                    _dbg_logger.debug("TITLE_GEN_DONE: meeting_id=%s", meeting_id)
-                    # #endregion
                 except Exception as exc:
                     import traceback
                     tb_str = traceback.format_exc()

@@ -53,25 +53,23 @@ def create_summarization_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         meeting_store.add_summary(
             meeting_id,
-            summary=result.get("summary", ""),
-            action_items=result.get("action_items", []),
+            summary_data=result,
             provider=payload.provider or "default",
         )
-        try:
-            summary_text = result.get("summary", "").strip()
-            if summary_text:
+        if result.get("title"):
+            meeting_store.set_title_from_summary(meeting_id, result["title"])
+        elif result.get("overview", "").strip():
+            try:
                 force_title = meeting.get("status") == "completed"
                 meeting_store.maybe_auto_title(
                     meeting_id,
-                    summary_text,
+                    result["overview"],
                     summarization_service,
                     provider_override=payload.provider,
                     force=force_title,
                 )
-        except LLMProviderError as exc:
-            logger.warning("Auto-title failed: %s", exc)
-        except Exception as exc:
-            logger.exception("Auto-title error: %s", exc)
+            except (LLMProviderError, Exception) as exc:
+                logger.warning("Auto-title fallback failed: %s", exc)
         return result
 
     @router.post("/api/meetings/{meeting_id}/manual-summarize")
@@ -91,40 +89,36 @@ def create_summarization_router(
             logger.exception("Manual summarization error: %s", exc)
             raise HTTPException(status_code=500, detail="Manual summarization failed") from exc
 
-        summary_text = str(result.get("summary", "")).strip()
-        action_items = result.get("action_items", []) or []
-
-        # Persist to meeting summary and attempt one-time title generation.
         meeting_store.add_summary(
             meeting_id,
-            summary=summary_text,
-            action_items=action_items,
+            summary_data=result,
             provider=payload.provider or "default",
         )
-        try:
-            if summary_text:
+
+        if result.get("title"):
+            meeting_store.set_title_from_summary(meeting_id, result["title"])
+        elif result.get("overview", "").strip():
+            try:
                 meeting_store.maybe_auto_title(
                     meeting_id,
-                    summary_text,
+                    result["overview"],
                     summarization_service,
                     provider_override=payload.provider,
                     force=False,
                 )
-        except LLMProviderError as exc:
-            logger.warning("Manual auto-title failed: %s", exc)
-        except Exception as exc:
-            logger.exception("Manual auto-title error: %s", exc)
+            except (LLMProviderError, Exception) as exc:
+                logger.warning("Manual auto-title failed: %s", exc)
 
-        # Also mirror into the manual buffer so the textarea persists even if user edits later.
+        overview_text = result.get("overview", "")
         existing_notes = meeting.get("manual_notes", "") if isinstance(meeting, dict) else ""
-        meeting_store.update_manual_buffers(meeting_id, existing_notes or "", summary_text)
+        meeting_store.update_manual_buffers(meeting_id, existing_notes or "", overview_text)
 
         updated = meeting_store.get_meeting(meeting_id) or {}
         return {
-            "summary_text": summary_text,
+            "summary_text": overview_text,
             "prompt_path": prompt_path,
             "meeting": updated,
-            "action_items": action_items,
+            "action_items": result.get("action_items", []),
         }
 
     @router.post("/api/meetings/{meeting_id}/summarize-stream")
@@ -181,13 +175,21 @@ def create_summarization_router(
                 # Signal completion
                 yield "data: [DONE]\n\n"
                 
-                # After streaming completes, save the accumulated summary
                 if accumulated_text.strip():
                     try:
-                        # Store the raw streaming result as manual summary
+                        from app.services.summarization import SummarizationService
+                        result = SummarizationService.parse_structured_summary(accumulated_text)
+                        meeting_store.add_summary(
+                            meeting_id,
+                            summary_data=result,
+                            provider=payload.provider or "default",
+                        )
+                        if result.get("title"):
+                            meeting_store.set_title_from_summary(meeting_id, result["title"])
+                        overview = result.get("overview", "")
                         existing_notes = meeting.get("manual_notes", "") if isinstance(meeting, dict) else ""
                         meeting_store.update_manual_buffers(
-                            meeting_id, existing_notes or "", accumulated_text.strip()
+                            meeting_id, existing_notes or "", overview
                         )
                     except Exception as save_exc:
                         logger.warning("Failed to save streaming summary: %s", save_exc)
@@ -214,7 +216,6 @@ def create_summarization_router(
             raise HTTPException(status_code=404, detail="Meeting not found")
         
         try:
-            # First save the summary
             meeting_store.add_summary(
                 meeting_id,
                 summary=payload.summary_text,

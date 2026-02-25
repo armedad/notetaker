@@ -577,31 +577,33 @@ function handleMeetingEvent(event) {
       break;
       
     case "summary_token":
-      // Progressive update with accumulated text
-      if (event.data?.text) {
-        if (summaryEl) {
-          summaryEl.value = event.data.text;
-          summaryEl.scrollTop = summaryEl.scrollHeight;
-        }
-        if (summaryOutputEl) {
-          summaryOutputEl.textContent = event.data.text;
-        }
+      // Show progress indicator while JSON accumulates
+      if (summaryOutputEl && !summaryOutputEl.classList.contains("summary-generating")) {
+        summaryOutputEl.innerHTML = '<div class="summary-generating-indicator">Generating summary\u2026</div>';
+        summaryOutputEl.classList.add("summary-generating");
+      }
+      if (summaryEl && event.data?.text) {
+        summaryEl.value = event.data.text;
+        summaryEl.scrollTop = summaryEl.scrollHeight;
       }
       break;
-      
+
     case "summary_complete":
-      // Final summary received
-      if (event.data?.text) {
+      if (summaryOutputEl) summaryOutputEl.classList.remove("summary-generating");
+      if (event.data?.structured) {
+        renderStructuredSummary(event.data.structured);
+        if (summaryEl) {
+          summaryEl.value = event.data.structured.overview || event.data.structured.text || "";
+          summaryEl.scrollTop = summaryEl.scrollHeight;
+        }
+      } else if (event.data?.text) {
+        setSummaryOutput(event.data.text);
         if (summaryEl) {
           summaryEl.value = event.data.text;
           summaryEl.scrollTop = summaryEl.scrollHeight;
-        }
-        if (summaryOutputEl) {
-          summaryOutputEl.textContent = event.data.text;
         }
       }
       setSummaryStatus("Summary complete.");
-      // Refresh to get the complete final meeting state (action items, etc.)
       refreshMeeting();
       break;
     
@@ -699,11 +701,24 @@ function handleMeetingEvent(event) {
       break;
     
     case "finalization_complete":
-      // Finalization finished successfully
+      // Finalization finished successfully - no notification, just refresh UI
       hideFinalizationStatus();
-      NotificationCenter.success(`Finalization complete: ${event.data?.meeting_title || "Meeting"}`);
       updateRefinalizeControls();
       refreshMeeting();
+      break;
+    
+    case "retranscription_complete":
+      // Manual re-transcription finished - no notification, just refresh UI
+      hideFinalizationStatus();
+      updateRefinalizeControls();
+      refreshMeeting();
+      break;
+    
+    case "retranscription_failed":
+      // Manual re-transcription failed
+      hideFinalizationStatus();
+      NotificationCenter.error(`Re-transcription failed: ${event.data?.error || "Unknown error"}`);
+      updateRefinalizeControls();
       break;
     
     case "finalization_failed":
@@ -1646,13 +1661,7 @@ async function triggerRefinalization(stages, buttonEl) {
     }
 
     const data = await res.json();
-    if (data.status === "started") {
-      NotificationCenter.success(`Started ${stageName}...`);
-    } else {
-      const pendingCount = data.pending_stages?.length || 0;
-      NotificationCenter.success(`Re-finalization queued for ${stageName} (${pendingCount} pending)`);
-    }
-
+    // No success notification - progress shows in status panel
     switchTranscriptTab("status");
   } catch (err) {
     console.error("Refinalization error:", err);
@@ -1686,7 +1695,7 @@ async function triggerRetranscribe(buttonEl) {
     }
 
     const data = await res.json();
-    NotificationCenter.success(`Re-transcription started with ${data.model} model`);
+    // No success notification - progress shows in status panel
     switchTranscriptTab("status");
   } catch (err) {
     console.error("Retranscribe error:", err);
@@ -1730,26 +1739,29 @@ function renderStatusLog() {
     const stageLabel = formatStageLabel(entry.stage);
     const phaseClass = getPhaseClass(entry.phase);
     const phaseLabel = formatPhaseLabel(entry.phase);
+    const hasData = entry.data && Object.keys(entry.data).length > 0;
+    const dataId = `status-log-data-${index}`;
     
-    let dataHtml = "";
-    if (entry.data) {
-      const dataId = `status-log-data-${index}`;
-      dataHtml = `
-        <details class="status-log-data">
-          <summary>Show details</summary>
-          <pre id="${dataId}">${escapeHtml(JSON.stringify(entry.data, null, 2))}</pre>
-        </details>
-      `;
+    if (hasData) {
+      // Compact format with inline collapsible details
+      return `
+        <details class="status-log-entry has-data">
+          <summary>
+            <span class="status-log-time">${time}</span>
+            <span class="status-log-stage">${stageLabel}</span>
+            <span class="status-log-phase ${phaseClass}">${phaseLabel}</span>
+          </summary>
+          <pre class="status-log-details" id="${dataId}">${escapeHtml(JSON.stringify(entry.data, null, 2))}</pre>
+        </details>`;
+    } else {
+      // Simple entry without details
+      return `
+        <div class="status-log-entry">
+          <span class="status-log-time">${time}</span>
+          <span class="status-log-stage">${stageLabel}</span>
+          <span class="status-log-phase ${phaseClass}">${phaseLabel}</span>
+        </div>`;
     }
-    
-    return `
-      <div class="status-log-entry">
-        <span class="status-log-time">${time}</span>
-        <span class="status-log-stage">${stageLabel}</span>
-        <span class="status-log-phase ${phaseClass}">${phaseLabel}</span>
-        ${dataHtml}
-      </div>
-    `;
   }).join("");
   
   output.innerHTML = html;
@@ -1822,10 +1834,77 @@ function setSummaryStatus(message) {
 
 function setSummaryOutput(message) {
   const output = document.getElementById("summary-output");
-  if (!output) {
+  if (!output) return;
+  output.textContent = message;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function renderStructuredSummary(summary) {
+  const output = document.getElementById("summary-output");
+  if (!output) return;
+
+  if (!summary) {
+    output.textContent = "No summary yet.";
     return;
   }
-  output.textContent = message;
+
+  // Backward compat: plain-text summary (no key_points)
+  if (typeof summary === "string") {
+    output.textContent = summary;
+    return;
+  }
+
+  const hasKeyPoints = Array.isArray(summary.key_points) && summary.key_points.length > 0;
+  const hasDecisions = Array.isArray(summary.decisions) && summary.decisions.length > 0;
+  const hasActionItems = Array.isArray(summary.action_items) && summary.action_items.length > 0;
+  const overview = summary.text || summary.overview || "";
+
+  // If no structured fields at all, fall back to plain text
+  if (!hasKeyPoints && !hasDecisions && !hasActionItems && !summary.title) {
+    output.textContent = overview || "No summary yet.";
+    return;
+  }
+
+  let html = "";
+
+  if (overview) {
+    html += `<div class="summary-overview">${escapeHtml(overview)}</div>`;
+  }
+
+  if (hasKeyPoints) {
+    html += `<div class="summary-section"><h4>Key Points</h4><ul class="summary-list">`;
+    for (const point of summary.key_points) {
+      html += `<li>${escapeHtml(point)}</li>`;
+    }
+    html += `</ul></div>`;
+  }
+
+  if (hasDecisions) {
+    html += `<div class="summary-section"><h4>Decisions</h4><ul class="summary-list">`;
+    for (const decision of summary.decisions) {
+      html += `<li>${escapeHtml(decision)}</li>`;
+    }
+    html += `</ul></div>`;
+  }
+
+  if (hasActionItems) {
+    html += `<div class="summary-section"><h4>Action Items</h4><ul class="summary-list summary-action-items">`;
+    for (const item of summary.action_items) {
+      const desc = typeof item === "string" ? item : (item.description || "");
+      let meta = "";
+      if (item.assignee) meta += `<span class="action-item-assignee">${escapeHtml(item.assignee)}</span>`;
+      if (item.due_date) meta += `<span class="action-item-due">${escapeHtml(item.due_date)}</span>`;
+      html += `<li>${escapeHtml(desc)}${meta ? " " + meta : ""}</li>`;
+    }
+    html += `</ul></div>`;
+  }
+
+  output.innerHTML = html;
 }
 
 function setManualSummaryStatus(message) {
@@ -1889,14 +1968,15 @@ async function manualSummarize() {
   setManualSummaryStatus("Summarizing…");
   setGlobalBusy("Summarizing...");
 
-  // Clear both summary areas before streaming
   const summaryEl = document.getElementById("manual-summary");
   const summaryOutputEl = document.getElementById("summary-output");
   if (summaryEl) summaryEl.value = "";
-  if (summaryOutputEl) summaryOutputEl.textContent = "";
+  if (summaryOutputEl) {
+    summaryOutputEl.innerHTML = '<div class="summary-generating-indicator">Generating summary\u2026</div>';
+    summaryOutputEl.classList.add("summary-generating");
+  }
 
   try {
-    // Use streaming endpoint
     const response = await fetch(`/api/meetings/${state.meetingId}/summarize-stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1913,32 +1993,27 @@ async function manualSummarize() {
     let accumulatedText = "";
     let buffer = "";
     while (true) {
-      const { done, value } = await reader.read();      if (done) break;
+      const { done, value } = await reader.read();
+      if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
-      buffer = lines.pop() || ""; // Keep incomplete line in buffer
+      buffer = lines.pop() || "";
 
       for (const line of lines) {
         const trimmedLine = line.trim();
         if (!trimmedLine || !trimmedLine.startsWith("data: ")) continue;
 
-        const dataStr = trimmedLine.slice(6); // Remove "data: " prefix
-        if (dataStr === "[DONE]") {
-          // Stream completed
-          continue;
-        }
+        const dataStr = trimmedLine.slice(6);
+        if (dataStr === "[DONE]") continue;
 
         try {
           const data = JSON.parse(dataStr);
           if (data.token) {
-            accumulatedText += data.token;            // Update both textareas progressively
+            accumulatedText += data.token;
             if (summaryEl) {
               summaryEl.value = accumulatedText;
               summaryEl.scrollTop = summaryEl.scrollHeight;
-            }
-            if (summaryOutputEl) {
-              summaryOutputEl.textContent = accumulatedText;
             }
             setManualSummaryStatus("Receiving summary...");
           } else if (data.error) {
@@ -1948,15 +2023,22 @@ async function manualSummarize() {
           if (parseError.message && !parseError.message.includes("JSON")) {
             throw parseError;
           }
-          // Ignore JSON parse errors for incomplete data
         }
       }
     }
+
+    // Parse and render the structured JSON result
+    if (summaryOutputEl) summaryOutputEl.classList.remove("summary-generating");
+    try {
+      const structured = JSON.parse(accumulatedText.trim());
+      renderStructuredSummary(structured);
+      if (summaryEl) summaryEl.value = structured.overview || structured.text || accumulatedText;
+    } catch (_) {
+      setSummaryOutput(accumulatedText);
+    }
+
     setManualSummaryStatus("Summary complete.");
-    // Schedule a save to persist the streamed summary
     scheduleManualBuffersSave();
-    // Don't refresh meeting here - it would overwrite the textarea with stale data
-    // before the scheduled save completes. The streamed content is already displayed.
   } catch (error) {
     setManualSummaryStatus(`Summarize failed: ${error.message}`);
     debugError("Streaming summarization failed", error);
@@ -2016,12 +2098,16 @@ async function refreshMeeting() {
       }
     }
     
-    if (meeting.summary?.text) {
+    if (meeting.summary?.text || meeting.summary?.overview) {
       const summaryUpdated = meeting.summary?.updated_at
         ? `Last updated ${meeting.summary.updated_at}`
         : "Summary ready";
       setSummaryStatus(`${statusLabel} • ${summaryUpdated}`);
-      setSummaryOutput(meeting.summary.text);
+      const summaryForRender = { ...meeting.summary };
+      if (!summaryForRender.action_items && meeting.action_items?.length) {
+        summaryForRender.action_items = meeting.action_items;
+      }
+      renderStructuredSummary(summaryForRender);
     } else {
       setSummaryStatus(`${statusLabel} • No summary yet.`);
       setSummaryOutput("No summary yet.");

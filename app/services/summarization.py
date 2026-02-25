@@ -182,6 +182,74 @@ class SummarizationService:
         
         return "\n".join(lines)
 
+    @staticmethod
+    def _strip_markdown_fences(text: str) -> str:
+        """Remove markdown code block wrappers from text."""
+        text = text.strip()
+        if not text.startswith("```"):
+            return text
+        lines = text.split("\n")
+        return "\n".join(line for line in lines if not line.startswith("```")).strip()
+
+    @staticmethod
+    def parse_structured_summary(raw_text: str) -> dict:
+        """Parse a structured JSON summary from LLM output.
+
+        Returns a dict with keys: title, overview, key_points, decisions, action_items.
+        Falls back gracefully if JSON parsing fails — the raw text becomes the overview
+        so no summary content is ever lost.
+        """
+        text = SummarizationService._strip_markdown_fences(raw_text)
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return {
+                "title": "",
+                "overview": raw_text.strip(),
+                "key_points": [],
+                "decisions": [],
+                "action_items": [],
+            }
+
+        if not isinstance(parsed, dict):
+            return {
+                "title": "",
+                "overview": raw_text.strip(),
+                "key_points": [],
+                "decisions": [],
+                "action_items": [],
+            }
+
+        action_items = parsed.get("action_items", []) or []
+        normalized_items = []
+        for item in action_items:
+            if isinstance(item, str):
+                normalized_items.append({"description": item, "assignee": None, "due_date": None})
+            elif isinstance(item, dict):
+                normalized_items.append(item)
+
+        return {
+            "title": str(parsed.get("title", "")).strip(),
+            "overview": str(parsed.get("overview", "")).strip(),
+            "key_points": parsed.get("key_points", []) or [],
+            "decisions": parsed.get("decisions", []) or [],
+            "action_items": normalized_items,
+        }
+
+    def _build_summary_prompt(self, transcript: str, user_notes: Optional[list] = None) -> str:
+        """Load the summary prompt template and fill in placeholders."""
+        prompt_path = os.path.join(self._prompts_dir, "summary_prompt.txt")
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                template = f.read()
+        except OSError as exc:
+            raise LLMProviderError(f"Missing summary prompt file: {prompt_path}") from exc
+
+        user_notes_section = self._format_user_notes_section(user_notes) if user_notes else ""
+        prompt = template.replace("{{transcript}}", transcript)
+        prompt = prompt.replace("{{user_notes_section}}", user_notes_section)
+        return prompt
+
     def summarize(
         self, transcript: str, provider_override: Optional[str] = None, user_notes: Optional[list] = None
     ) -> dict:
@@ -190,39 +258,15 @@ class SummarizationService:
         provider = self._get_provider(provider_override)
         self._logger.info("Summarization using provider=%s", provider.__class__.__name__)
 
-        prompt_path = os.path.join(self._prompts_dir, "summary_prompt.txt")
-        try:
-            with open(prompt_path, "r", encoding="utf-8") as f:
-                template = f.read()
-        except OSError as exc:
-            raise LLMProviderError(f"Missing summary prompt file: {prompt_path}") from exc
-
-        # Format user notes section if notes are provided
-        user_notes_section = self._format_user_notes_section(user_notes) if user_notes else ""
-        
-        prompt = template.replace("{{transcript}}", transcript)
-        prompt = prompt.replace("{{user_notes_section}}", user_notes_section)
-        # Use raw prompt and parse JSON here so both manual + final share the same prompt file.
+        prompt = self._build_summary_prompt(transcript, user_notes)
         content = provider.prompt(prompt)
-        # Providers based on BaseLLMProvider may wrap JSON in markdown fences; strip if present.
-        text = content.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            stripped = []
-            for line in lines:
-                if line.startswith("```"):
-                    continue
-                stripped.append(line)
-            text = "\n".join(stripped).strip()
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            self._logger.warning("Non-JSON response for summarize prompt file, using raw text")
-            return {"summary": content.strip(), "action_items": []}
-        return {
-            "summary": str(parsed.get("summary", "")).strip(),
-            "action_items": parsed.get("action_items", []) or [],
-        }
+        result = self.parse_structured_summary(content)
+        self._logger.info(
+            "Structured summary parsed: title=%r overview_len=%d key_points=%d action_items=%d",
+            result.get("title", "")[:40], len(result.get("overview", "")),
+            len(result.get("key_points", [])), len(result.get("action_items", [])),
+        )
+        return result
 
     def generate_title(
         self, summary: str, provider_override: Optional[str] = None
@@ -278,46 +322,17 @@ class SummarizationService:
         self, transcript: str, provider_override: Optional[str] = None, user_notes: Optional[list] = None
     ) -> Generator[str, None, None]:
         """Stream summary tokens as they are generated.
-        
-        Uses the summary prompt template and streams the LLM response token by token.
-        
-        Args:
-            transcript: The transcript to summarize
-            provider_override: Optional override for the LLM provider
-            user_notes: Optional list of user notes to include in the summary
-            
-        Yields:
-            Token strings as they arrive from the LLM
+
+        Yields raw tokens from the LLM. Callers should accumulate them and
+        then call ``parse_structured_summary()`` on the final text.
         """
-        # #region agent log
-        _dbg_logger = logging.getLogger("notetaker.debug")
-        _dbg_logger.debug("SUMMARIZE_STREAM_ENTER: transcript_len=%d notes_count=%d",
-                        len(transcript), len(user_notes) if user_notes else 0)
-        # #endregion
         if not transcript.strip():
             raise LLMProviderError("Transcript is empty")
-        
+
         provider = self._get_provider(provider_override)
         self._logger.info("Streaming summarization using provider=%s", provider.__class__.__name__)
-        # #region agent log
-        _dbg_logger.debug("SUMMARIZE_STREAM_GOT_PROVIDER: provider=%s", provider.__class__.__name__)
-        # #endregion
 
-        prompt_path = os.path.join(self._prompts_dir, "summary_prompt.txt")
-        try:
-            with open(prompt_path, "r", encoding="utf-8") as f:
-                template = f.read()
-        except OSError as exc:
-            raise LLMProviderError(f"Missing summary prompt file: {prompt_path}") from exc
-
-        # Format user notes section if notes are provided
-        user_notes_section = self._format_user_notes_section(user_notes) if user_notes else ""
-        
-        prompt = template.replace("{{transcript}}", transcript)
-        prompt = prompt.replace("{{user_notes_section}}", user_notes_section)
-        # #region agent log
-        _dbg_logger.debug("SUMMARIZE_STREAM_CALLING_LLM: prompt_len=%d", len(prompt))
-        # #endregion
+        prompt = self._build_summary_prompt(transcript, user_notes)
         yield from provider.prompt_stream(prompt)
 
     def identify_speaker_name(

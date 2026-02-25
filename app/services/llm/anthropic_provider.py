@@ -25,6 +25,11 @@ class AnthropicProvider(BaseLLMProvider):
         json_mode: bool = False,
     ) -> str:
         """Make a call to the Anthropic API and return the response text."""
+        effective_system = system_prompt or ""
+        if json_mode:
+            json_instruction = "You must respond with valid JSON only. No markdown, no explanation."
+            effective_system = f"{json_instruction}\n\n{effective_system}" if effective_system else json_instruction
+
         request_body = {
             "model": self._model,
             "max_tokens": 2048,
@@ -32,8 +37,8 @@ class AnthropicProvider(BaseLLMProvider):
             "messages": [{"role": "user", "content": prompt}],
         }
         
-        if system_prompt:
-            request_body["system"] = system_prompt
+        if effective_system:
+            request_body["system"] = effective_system
         
         try:
             response = requests.post(

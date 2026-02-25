@@ -34,17 +34,26 @@ class GeminiProvider(BaseLLMProvider):
         url = f"{self._base_url}/v1/{model_name}:generateContent?key={self._api_key}"
         
         # Build the prompt with optional system instructions
+        effective_system = system_prompt or ""
+        if json_mode:
+            json_instruction = "You must respond with valid JSON only. No markdown, no explanation."
+            effective_system = f"{json_instruction}\n\n{effective_system}" if effective_system else json_instruction
+
         full_prompt = prompt
-        if system_prompt:
-            full_prompt = f"{system_prompt}\n\n{prompt}"
-        
+        if effective_system:
+            full_prompt = f"{effective_system}\n\n{prompt}"
+
+        generation_config = {"temperature": temperature}
+        if json_mode:
+            generation_config["responseMimeType"] = "application/json"
+
         try:
             response = requests.post(
                 url,
                 headers={"Content-Type": "application/json"},
                 json={
                     "contents": [{"parts": [{"text": full_prompt}]}],
-                    "generationConfig": {"temperature": temperature},
+                    "generationConfig": generation_config,
                 },
                 timeout=timeout,
             )
