@@ -707,20 +707,6 @@ function handleMeetingEvent(event) {
       refreshMeeting();
       break;
     
-    case "retranscription_complete":
-      // Manual re-transcription finished - no notification, just refresh UI
-      hideFinalizationStatus();
-      updateRefinalizeControls();
-      refreshMeeting();
-      break;
-    
-    case "retranscription_failed":
-      // Manual re-transcription failed
-      hideFinalizationStatus();
-      NotificationCenter.error(`Re-transcription failed: ${event.data?.error || "Unknown error"}`);
-      updateRefinalizeControls();
-      break;
-    
     case "finalization_failed":
       // Finalization had errors
       hideFinalizationStatus();
@@ -1589,7 +1575,7 @@ function initRefinalizeControls() {
     btnAll.addEventListener("click", () => triggerRefinalization(null, btnAll));
   }
   if (btnTranscribe) {
-    btnTranscribe.addEventListener("click", () => triggerRetranscribe(btnTranscribe));
+    btnTranscribe.addEventListener("click", () => triggerRefinalization(["transcription"], btnTranscribe));
   }
   if (btnDiarize) {
     btnDiarize.addEventListener("click", () => triggerRefinalization(["diarization"], btnDiarize));
@@ -1661,40 +1647,6 @@ async function triggerRefinalization(stages, buttonEl) {
   } catch (err) {
     console.error("Refinalization error:", err);
     NotificationCenter.error(`Failed to start re-finalization: ${err.message}`);
-  } finally {
-    if (buttonEl) buttonEl.classList.remove("loading");
-    updateRefinalizeControls();
-  }
-}
-
-async function triggerRetranscribe(buttonEl) {
-  if (!state.meetingId) {
-    NotificationCenter.error("No meeting loaded");
-    return;
-  }
-
-  const allButtons = document.querySelectorAll(".refinalize-controls .btn");
-  allButtons.forEach(btn => btn.disabled = true);
-  if (buttonEl) buttonEl.classList.add("loading");
-
-  try {
-    const res = await fetch(`/api/transcribe/retranscribe/${state.meetingId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.detail || `HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    // No success notification - progress shows in status panel
-    switchTranscriptTab("status");
-  } catch (err) {
-    console.error("Retranscribe error:", err);
-    NotificationCenter.error(`Failed to start re-transcription: ${err.message}`);
   } finally {
     if (buttonEl) buttonEl.classList.remove("loading");
     updateRefinalizeControls();

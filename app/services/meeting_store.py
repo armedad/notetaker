@@ -1853,22 +1853,28 @@ class MeetingStore:
     FINALIZATION_COMPLETED = "completed"
     FINALIZATION_FAILED = "failed"
     
-    # Stage key to human-readable label mapping
+    # Stage key to human-readable label mapping (in execution order)
     FINALIZATION_STAGE_LABELS = {
+        "transcription": "Transcription",
         "diarization": "Diarization",
         "speaker_names": "Speaker Names",
         "summary": "Summary",
+        "title": "Title",
     }
 
     def _default_finalization_state(self) -> dict:
         """Default finalization tracking (all stages pending)."""
         return {
+            "transcription": self.FINALIZATION_PENDING,
+            "transcription_error": None,
             "diarization": self.FINALIZATION_PENDING,
             "diarization_error": None,
             "speaker_names": self.FINALIZATION_PENDING,
             "speaker_names_error": None,
             "summary": self.FINALIZATION_PENDING,
             "summary_error": None,
+            "title": self.FINALIZATION_PENDING,
+            "title_error": None,
         }
 
     def _migrate_finalization_state(self, finalization: dict) -> dict:
@@ -1879,11 +1885,24 @@ class MeetingStore:
         """
         # Check if already in new format
         if "diarization" in finalization:
-            # Ensure error fields exist
+            # Ensure error fields exist for all stages
             for stage in self.FINALIZATION_STAGE_LABELS.keys():
                 error_key = f"{stage}_error"
                 if error_key not in finalization:
                     finalization[error_key] = None
+            
+            # For existing meetings without transcription stage, assume it's completed
+            # (they were transcribed before this migration)
+            if "transcription" not in finalization:
+                finalization["transcription"] = self.FINALIZATION_COMPLETED
+                finalization["transcription_error"] = None
+            
+            # For existing meetings without title stage, assume it's completed
+            # (title was set by summary or not needed)
+            if "title" not in finalization:
+                finalization["title"] = self.FINALIZATION_COMPLETED
+                finalization["title_error"] = None
+            
             return finalization
         
         # Migrate from old boolean format
@@ -1902,6 +1921,14 @@ class MeetingStore:
                 migrated[new_key] = self.FINALIZATION_PENDING
             # Add error field
             migrated[f"{new_key}_error"] = None
+        
+        # For migrated meetings, assume transcription is already done
+        migrated["transcription"] = self.FINALIZATION_COMPLETED
+        migrated["transcription_error"] = None
+        
+        # For migrated meetings, assume title is already set or not needed
+        migrated["title"] = self.FINALIZATION_COMPLETED
+        migrated["title_error"] = None
         
         return migrated
 

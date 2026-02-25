@@ -8,6 +8,7 @@ at a time to avoid CPU overload.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -53,6 +54,7 @@ class BackgroundFinalizer:
         summarization_service: "SummarizationService",
         diarization_service: "DiarizationService",
         *,
+        config_path: Optional[str] = None,
         delay_between_meetings: float = 30.0,
         idle_check_interval: float = 300.0,
     ) -> None:
@@ -62,12 +64,14 @@ class BackgroundFinalizer:
             meeting_store: Meeting store instance
             summarization_service: Summarization service for summary/title generation
             diarization_service: Diarization service for speaker analysis
+            config_path: Path to config.json for reading transcription settings
             delay_between_meetings: Seconds to wait between finalizing meetings
             idle_check_interval: Seconds to wait before checking again when no work
         """
         self._meeting_store = meeting_store
         self._summarization = summarization_service
         self._diarization = diarization_service
+        self._config_path = config_path
         self._delay_between_meetings = delay_between_meetings
         self._idle_check_interval = idle_check_interval
         
@@ -94,6 +98,17 @@ class BackgroundFinalizer:
             if meeting_id not in self._meeting_locks:
                 self._meeting_locks[meeting_id] = threading.Lock()
             return self._meeting_locks[meeting_id]
+    
+    def _load_config(self) -> dict:
+        """Load config from file."""
+        if not self._config_path or not os.path.exists(self._config_path):
+            return {}
+        try:
+            with open(self._config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as exc:
+            _logger.warning("BackgroundFinalizer: failed to load config: %s", exc)
+            return {}
     
     def start(self) -> None:
         """Start the background finalizer thread."""
@@ -132,12 +147,12 @@ class BackgroundFinalizer:
         
         Args:
             meeting_id: The meeting ID
-            stages: List of stage keys ('diarization', 'speaker_names', 'summary')
+            stages: List of stage keys ('transcription', 'diarization', 'speaker_names', 'summary', 'title')
         """
         import threading
         
         # Define the correct dependency order
-        STAGE_ORDER = ["diarization", "speaker_names", "summary"]
+        STAGE_ORDER = ["transcription", "diarization", "speaker_names", "summary", "title"]
         
         # Sort requested stages by dependency order
         ordered_stages = [s for s in STAGE_ORDER if s in stages]
@@ -165,12 +180,16 @@ class BackgroundFinalizer:
                     segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
                     
                     try:
-                        if stage == "diarization":
+                        if stage == "transcription":
+                            self._run_transcription_stage(meeting_id, audio_path)
+                        elif stage == "diarization":
                             self._run_diarization_stage(meeting_id, audio_path, segments)
                         elif stage == "speaker_names":
                             self._run_speaker_names_stage(meeting_id, segments)
                         elif stage == "summary":
                             self._run_summary_stage(meeting_id)
+                        elif stage == "title":
+                            self._run_title_stage(meeting_id)
                         else:
                             _logger.warning("run_stages_now: unknown stage %s", stage)
                     except Exception as exc:
@@ -189,6 +208,64 @@ class BackgroundFinalizer:
         )
         thread.start()
         _logger.info("run_stages_now: started thread for meeting %s stages %s", meeting_id, ordered_stages)
+    
+    def _run_transcription_stage(self, meeting_id: str, audio_path: str) -> None:
+        """Run transcription stage using final model from config."""
+        from app.services.transcription_pipeline import TranscriptionPipeline
+        from app.services.transcription.whisper_local import FasterWhisperProvider, WhisperConfig
+        
+        self._meeting_store.publish_finalization_status(meeting_id, "Transcription...", 0.0)
+        self._meeting_store.publish_status_log(meeting_id, "transcription", "started", {"audio_path": audio_path})
+        
+        if not audio_path:
+            self._meeting_store.mark_finalization_stage(meeting_id, "transcription")
+            self._meeting_store.publish_status_log(meeting_id, "transcription", "skipped",
+                {"reason": "no audio file"})
+            return
+        
+        config = self._load_config()
+        transcription_config = config.get("transcription", {})
+        model_size = transcription_config.get("final_model_size", "medium")
+        device = transcription_config.get("final_device", "cpu")
+        compute_type = transcription_config.get("final_compute_type", "int8")
+        
+        if model_size == "none":
+            self._meeting_store.mark_finalization_stage(meeting_id, "transcription")
+            self._meeting_store.publish_status_log(meeting_id, "transcription", "skipped",
+                {"reason": "final model set to none"})
+            return
+        
+        try:
+            _logger.info("_run_transcription_stage: meeting=%s model=%s device=%s compute=%s",
+                meeting_id, model_size, device, compute_type)
+            
+            whisper_config = WhisperConfig(model_size=model_size, device=device, compute_type=compute_type)
+            provider = FasterWhisperProvider(config=whisper_config, diarization=None)
+            pipeline = TranscriptionPipeline(
+                provider=provider,
+                diarization_service=None,
+                meeting_store=self._meeting_store,
+                summarization_service=self._summarization,
+            )
+            
+            segments, language = pipeline.transcribe_and_format(audio_path)
+            if segments:
+                self._meeting_store.replace_transcript_segments(meeting_id, segments, language)
+                _logger.info("_run_transcription_stage: meeting=%s saved %d segments", meeting_id, len(segments))
+            
+            self._meeting_store.mark_finalization_stage(meeting_id, "transcription")
+            self._meeting_store.publish_status_log(meeting_id, "transcription", "completed",
+                {"segments_count": len(segments) if segments else 0, "language": language})
+            self._meeting_store.publish_event("meeting_updated", meeting_id)
+        except Exception as exc:
+            import traceback
+            error_detail = f"{type(exc).__name__}: {str(exc)}"
+            _logger.warning("_run_transcription_stage failed: meeting=%s error=%s\n%s",
+                meeting_id, error_detail, traceback.format_exc())
+            self._meeting_store.mark_finalization_stage_failed(meeting_id, "transcription", error_detail)
+            self._meeting_store.publish_status_log(meeting_id, "transcription", "failed", 
+                {"error": error_detail, "traceback": traceback.format_exc()})
+            raise
     
     def _run_diarization_stage(self, meeting_id: str, audio_path: str, segments: list) -> None:
         """Run diarization stage."""
@@ -296,6 +373,59 @@ class BackgroundFinalizer:
             error_detail = f"{type(exc).__name__}: {str(exc)}"
             self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary", error_detail)
             self._meeting_store.publish_status_log(meeting_id, "summary", "failed", {"error": error_detail})
+            raise
+    
+    def _run_title_stage(self, meeting_id: str) -> None:
+        """Run title generation stage (standalone, when not produced by summary)."""
+        self._meeting_store.publish_finalization_status(meeting_id, "Title...", 0.9)
+        self._meeting_store.publish_status_log(meeting_id, "title", "started")
+        
+        meeting = self._meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            return
+        
+        # Check if title already exists (may have been set by summary stage)
+        existing_title = meeting.get("title")
+        if existing_title and existing_title != meeting_id[:8] and not existing_title.startswith("Untitled"):
+            self._meeting_store.mark_finalization_stage(meeting_id, "title")
+            self._meeting_store.publish_status_log(meeting_id, "title", "skipped",
+                {"reason": "title already exists", "title": existing_title})
+            return
+        
+        # Need summary text to generate title
+        summary = meeting.get("summary")
+        if not summary:
+            self._meeting_store.mark_finalization_stage(meeting_id, "title")
+            self._meeting_store.publish_status_log(meeting_id, "title", "skipped",
+                {"reason": "no summary available"})
+            return
+        
+        summary_text = ""
+        if isinstance(summary, dict):
+            summary_text = summary.get("overview", "") or summary.get("raw", "")
+        elif isinstance(summary, str):
+            summary_text = summary
+        
+        if not summary_text.strip():
+            self._meeting_store.mark_finalization_stage(meeting_id, "title")
+            self._meeting_store.publish_status_log(meeting_id, "title", "skipped",
+                {"reason": "empty summary"})
+            return
+        
+        try:
+            title = self._summarization.generate_title(summary_text)
+            if title:
+                self._meeting_store.set_title_from_summary(meeting_id, title)
+                self._meeting_store.publish_event("title_updated", meeting_id,
+                    {"title": title, "source": "auto"})
+            self._meeting_store.mark_finalization_stage(meeting_id, "title")
+            self._meeting_store.publish_status_log(meeting_id, "title", "completed",
+                {"title": title if title else "(no title generated)"})
+            self._meeting_store.publish_event("meeting_updated", meeting_id)
+        except Exception as exc:
+            error_detail = f"{type(exc).__name__}: {str(exc)}"
+            self._meeting_store.mark_finalization_stage_failed(meeting_id, "title", error_detail)
+            self._meeting_store.publish_status_log(meeting_id, "title", "failed", {"error": error_detail})
             raise
     
     def wake(self) -> None:
@@ -456,9 +586,11 @@ class BackgroundFinalizer:
             segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
             
             # Check which stages need to run (only pending, not failed)
+            needs_transcription = finalization.get("transcription") == MeetingStore.FINALIZATION_PENDING
             needs_diarization = finalization.get("diarization") == MeetingStore.FINALIZATION_PENDING
             needs_speaker_names = finalization.get("speaker_names") == MeetingStore.FINALIZATION_PENDING
             needs_summary = finalization.get("summary") == MeetingStore.FINALIZATION_PENDING
+            needs_title = finalization.get("title") == MeetingStore.FINALIZATION_PENDING
             
             pending_stages = self._meeting_store.get_pending_finalization_stages(meeting)
             failed_stages = self._meeting_store.get_failed_finalization_stages(meeting)
@@ -468,6 +600,24 @@ class BackgroundFinalizer:
                 pending_stages,
                 failed_stages,
             )
+            
+            # Stage 0: Transcription (final model)
+            if needs_transcription:
+                self._set_current_work(meeting_id, "transcription")
+                try:
+                    self._run_transcription_stage(meeting_id, audio_path)
+                    # Refresh segments after transcription
+                    meeting = self._meeting_store.get_meeting(meeting_id)
+                    if meeting:
+                        transcript = meeting.get("transcript", {})
+                        segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
+                except Exception as exc:
+                    _logger.warning(
+                        "BackgroundFinalizer: transcription failed for %s: %s",
+                        meeting_id, exc,
+                    )
+                    errors_occurred.append(("transcription", str(exc)))
+            
             # Stage 1: Diarization
             diarization_segments = []
             if needs_diarization and audio_path and self._diarization.is_enabled():
@@ -634,6 +784,18 @@ class BackgroundFinalizer:
                             meeting_id, "summary", "skipped",
                             {"reason": "no transcript text"}
                         )
+            
+            # Stage 4: Title generation (if not produced by summary)
+            if needs_title:
+                self._set_current_work(meeting_id, "title")
+                try:
+                    self._run_title_stage(meeting_id)
+                except Exception as exc:
+                    _logger.warning(
+                        "BackgroundFinalizer: title generation failed for %s: %s",
+                        meeting_id, exc,
+                    )
+                    errors_occurred.append(("title", str(exc)))
             
             # Mark meeting as completed if it wasn't already
             meeting = self._meeting_store.get_meeting(meeting_id)
