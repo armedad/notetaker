@@ -28,6 +28,7 @@
     MEETINGS: { default: false, desc: 'Meeting CRUD operations' },
     LLM: { default: false, desc: 'LLM provider calls' },
     API: { default: false, desc: 'API request/response' },
+    NOTIFICATIONS: { default: false, desc: 'Notification events and staleness filtering' },
   };
 
   const STORAGE_KEY = 'notetaker_debug_flags';

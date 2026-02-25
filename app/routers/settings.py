@@ -78,9 +78,7 @@ class ProviderSettingsRequest(BaseModel):
 class TranscriptionSettingsRequest(BaseModel):
     live_model_size: str
     final_model_size: str
-    live_transcribe: bool
-    consolidation_max_duration: float = 15.0
-    consolidation_max_gap: float = 2.0
+    live_chunk_seconds: float = 5.0
 
 
 class WhisperModelTestRequest(BaseModel):
@@ -546,10 +544,13 @@ def create_settings_router(ctx) -> APIRouter:
                 "description": info.get("description", ""),
             }
         
-        live_models = [build_model_entry(m) for m in models]
+        model_entries = [build_model_entry(m) for m in models]
+        live_models = [
+            {"id": "none", "name": "None (off)", "params": "", "speed": "", "description": "Disable live transcription during recording."}
+        ] + model_entries
         final_models = [
             {"id": "none", "name": "None", "params": "", "speed": "", "description": "Skip final transcription pass. Use live transcription as-is."}
-        ] + live_models
+        ] + model_entries
         
         return {
             "live_models": live_models,
@@ -654,9 +655,7 @@ def create_settings_router(ctx) -> APIRouter:
         transcription = data.get("transcription", {})
         transcription["live_model_size"] = payload.live_model_size
         transcription["final_model_size"] = payload.final_model_size
-        transcription["live_transcribe"] = payload.live_transcribe
-        transcription["consolidation_max_duration"] = payload.consolidation_max_duration
-        transcription["consolidation_max_gap"] = payload.consolidation_max_gap
+        transcription["live_chunk_seconds"] = payload.live_chunk_seconds
         data["transcription"] = transcription
         with open(config_path, "w", encoding="utf-8") as config_file:
             json.dump(data, config_file, indent=2)

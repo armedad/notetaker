@@ -50,6 +50,8 @@ class AudioCaptureService:
             "samplerate": 48000,
             "channels": 2,
         }
+        self._meeting_id: Optional[str] = None
+        self._meeting_store = None
 
     def list_devices(self) -> list[dict]:
         self._logger.debug("Listing audio input devices")
@@ -85,6 +87,18 @@ class AudioCaptureService:
     def has_buffered_audio(self) -> bool:
         """Check if there is audio buffered in the live queue."""
         return not self._live_queue.empty()
+
+    def set_meeting_context(self, meeting_id: str, meeting_store) -> None:
+        """Set the meeting context for audio level publishing."""
+        with self._lock:
+            self._meeting_id = meeting_id
+            self._meeting_store = meeting_store
+
+    def clear_meeting_context(self) -> None:
+        """Clear the meeting context."""
+        with self._lock:
+            self._meeting_id = None
+            self._meeting_store = None
 
     def enable_live_tap(self) -> None:
         with self._lock:
@@ -385,6 +399,10 @@ class AudioCaptureService:
             final_state = self.current_status()
             self._logger.info("Recording stop: id=%s file=%s", final_state["recording_id"], final_state["file_path"])
 
+            # Clear meeting context for audio level publishing
+            self._meeting_id = None
+            self._meeting_store = None
+
             self._state = RecordingState()
             return final_state
 
@@ -509,6 +527,21 @@ class AudioCaptureService:
                         run_id="pre-fix",
                         hypothesis_id="M5",
                     )
+
+        # Publish audio level for real-time meter (throttled to ~10-12 Hz)
+        if self._callback_counter % 4 == 0 and self._meeting_store and self._meeting_id:
+            try:
+                samples = np.frombuffer(payload, dtype=np.int16)
+                if samples.size:
+                    rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+                    level = min(1.0, rms / 8000.0)
+                    self._meeting_store.publish_event(
+                        "audio_level",
+                        self._meeting_id,
+                        {"level": round(level, 3)}
+                    )
+            except Exception:
+                pass  # Don't let meter errors affect recording
 
     def _writer_loop(self) -> None:
         file_path = self._state.file_path

@@ -35,6 +35,7 @@ FLAG_DEFINITIONS = {
     'MEETINGS': {'default': False, 'desc': 'Meeting CRUD operations'},
     'LLM': {'default': False, 'desc': 'LLM provider calls'},
     'API': {'default': False, 'desc': 'API request/response'},
+    'NOTIFICATIONS': {'default': False, 'desc': 'Notification events and staleness filtering'},
 }
 
 # Master switch - when False, all debug logging is disabled regardless of individual flags

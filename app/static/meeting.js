@@ -534,6 +534,9 @@ function subscribeToMeetingEvents() {
       if (data.type === 'status_log' || data.type === 'finalization_status') {
         fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:SSE:onmessage',message:'SSE event before filter',data:{type:data.type,eventMeetingId:data.meeting_id,stateMeetingId:state.meetingId,matches:data.meeting_id===state.meetingId},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
       }
+      if (data.type === 'transcript_segment') {
+        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:SSE:transcript_segment_received',message:'transcript_segment SSE arrived',data:{eventMeetingId:data.meeting_id,stateMeetingId:state.meetingId,matches:data.meeting_id===state.meetingId,serverTimestamp:data.timestamp,textPreview:(data.data?.segment?.text||'').substring(0,50)},timestamp:Date.now(),hypothesisId:'H5'})}).catch(()=>{});
+      }
       // #endregion
       
       // Only handle events for this meeting
@@ -614,6 +617,7 @@ function handleMeetingEvent(event) {
           state.meeting.ended_at = event.data.ended_at;
         }
         updateTranscriptionControls();
+        updateRefinalizeControls();
         // Update UI status displays using resolved state
         const statusLabel = getMeetingStatusLabel();
         const transcriptCount = state.meeting?.transcript?.segments?.length || 0;
@@ -651,6 +655,9 @@ function handleMeetingEvent(event) {
     case "transcript_segment":
       // Single new transcript segment added (unified for both mic and file modes)
       if (event.data?.segment && state.meeting) {
+        // #region agent log
+        const _tSegRenderStart = performance.now();
+        // #endregion
         if (!state.meeting.transcript) {
           state.meeting.transcript = { segments: [] };
         }
@@ -662,6 +669,10 @@ function handleMeetingEvent(event) {
         updateSummaryDebugPanel(state.meeting);
         const statusLabel = getMeetingStatusLabel();
         setTranscriptStatus(`${statusLabel} • Transcript (${state.meeting.transcript.segments.length} segments)`);
+        // #region agent log
+        const _tSegRenderEnd = performance.now();
+        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:handleMeetingEvent:transcript_segment_rendered',message:'transcript_segment rendered',data:{renderMs:Math.round(_tSegRenderEnd-_tSegRenderStart),totalSegments:state.meeting.transcript.segments.length,textPreview:(event.data.segment.text||'').substring(0,50)},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
+        // #endregion
       }
       break;
     
@@ -684,12 +695,14 @@ function handleMeetingEvent(event) {
       // Finalization progress — show in the progress bar UI
       showFinalizationStatus(event.status_text, event.progress);
       updateTranscriptionControls();
+      updateRefinalizeControls();
       break;
     
     case "finalization_complete":
       // Finalization finished successfully
       hideFinalizationStatus();
       NotificationCenter.success(`Finalization complete: ${event.data?.meeting_title || "Meeting"}`);
+      updateRefinalizeControls();
       refreshMeeting();
       break;
     
@@ -723,8 +736,41 @@ function handleMeetingEvent(event) {
       // #endregion
       appendStatusLog(event);
       break;
+    
+    case "audio_level":
+      // Real-time audio level for meter visualization
+      if (event.data?.level !== undefined) {
+        updateAudioLevelMeter(event.data.level);
+      }
+      break;
   }
 }
+
+// =============================================================================
+// Audio Level Meter
+// =============================================================================
+
+function updateAudioLevelMeter(level) {
+  const bar = document.getElementById("audio-level-bar");
+  if (bar) {
+    bar.style.width = `${Math.min(100, level * 100)}%`;
+  }
+}
+
+function setAudioLevelMeterActive(active) {
+  const meter = document.getElementById("audio-level-meter");
+  if (meter) {
+    meter.classList.toggle("active", active);
+    if (!active) {
+      const bar = document.getElementById("audio-level-bar");
+      if (bar) bar.style.width = "0%";
+    }
+  }
+}
+
+// =============================================================================
+// Debug Logging
+// =============================================================================
 
 function debugLog(message, data = {}) {
   console.debug(`[Meeting] ${message}`, data);
@@ -1514,6 +1560,140 @@ function switchTranscriptTab(tabName) {
 }
 
 // =============================================================================
+// Re-finalization Controls
+// =============================================================================
+
+function initRefinalizeControls() {
+  const btnAll = document.getElementById("btn-refinalize-all");
+  const btnTranscribe = document.getElementById("btn-retranscribe");
+  const btnDiarize = document.getElementById("btn-rediarize");
+  const btnSpeakers = document.getElementById("btn-speaker-names");
+  const btnSummary = document.getElementById("btn-resummarize");
+  const btnTitle = document.getElementById("btn-retitle");
+
+  if (btnAll) {
+    btnAll.addEventListener("click", () => triggerRefinalization(null, btnAll));
+  }
+  if (btnTranscribe) {
+    btnTranscribe.addEventListener("click", () => triggerRetranscribe(btnTranscribe));
+  }
+  if (btnDiarize) {
+    btnDiarize.addEventListener("click", () => triggerRefinalization(["diarization"], btnDiarize));
+  }
+  if (btnSpeakers) {
+    btnSpeakers.addEventListener("click", () => triggerRefinalization(["speaker_names"], btnSpeakers));
+  }
+  if (btnSummary) {
+    btnSummary.addEventListener("click", () => triggerRefinalization(["summary"], btnSummary));
+  }
+  if (btnTitle) {
+    btnTitle.addEventListener("click", () => triggerRefinalization(["title"], btnTitle));
+  }
+
+  updateRefinalizeControls();
+}
+
+function updateRefinalizeControls() {
+  const buttons = document.querySelectorAll(".refinalize-controls .btn");
+  if (!buttons.length) return;
+
+  const resolvedState = getMeetingResolvedState();
+  const busy = resolvedState === "recording"
+    || resolvedState === "finalizing"
+    || resolvedState === "background_finalizing"
+    || resolvedState === "in_progress";
+
+  buttons.forEach(btn => {
+    btn.disabled = busy;
+    if (busy) {
+      btn.title = `Unavailable while ${getMeetingStatusLabel().toLowerCase()}`;
+    }
+  });
+
+  if (!busy) {
+    document.getElementById("btn-refinalize-all")?.setAttribute("title", "Re-run all finalization stages");
+    document.getElementById("btn-retranscribe")?.setAttribute("title", "Re-transcribe with final model");
+    document.getElementById("btn-rediarize")?.setAttribute("title", "Re-run diarization");
+    document.getElementById("btn-speaker-names")?.setAttribute("title", "Re-identify speaker names");
+    document.getElementById("btn-resummarize")?.setAttribute("title", "Re-generate summary");
+    document.getElementById("btn-retitle")?.setAttribute("title", "Re-generate title");
+  }
+}
+
+async function triggerRefinalization(stages, buttonEl) {
+  if (!state.meetingId) {
+    NotificationCenter.error("No meeting loaded");
+    return;
+  }
+
+  const allButtons = document.querySelectorAll(".refinalize-controls .btn");
+  allButtons.forEach(btn => btn.disabled = true);
+  if (buttonEl) buttonEl.classList.add("loading");
+
+  const stageName = stages ? stages.join(", ") : "all stages";
+
+  try {
+    const body = stages ? { stages } : {};
+    const res = await fetch(`/api/meetings/${state.meetingId}/retry-finalization`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    const pendingCount = data.pending_stages?.length || 0;
+    NotificationCenter.success(`Re-finalization queued for ${stageName} (${pendingCount} pending)`);
+
+    switchTranscriptTab("status");
+  } catch (err) {
+    console.error("Refinalization error:", err);
+    NotificationCenter.error(`Failed to queue re-finalization: ${err.message}`);
+  } finally {
+    if (buttonEl) buttonEl.classList.remove("loading");
+    updateRefinalizeControls();
+  }
+}
+
+async function triggerRetranscribe(buttonEl) {
+  if (!state.meetingId) {
+    NotificationCenter.error("No meeting loaded");
+    return;
+  }
+
+  const allButtons = document.querySelectorAll(".refinalize-controls .btn");
+  allButtons.forEach(btn => btn.disabled = true);
+  if (buttonEl) buttonEl.classList.add("loading");
+
+  try {
+    const res = await fetch(`/api/transcribe/retranscribe/${state.meetingId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    NotificationCenter.success(`Re-transcription started with ${data.model} model`);
+    switchTranscriptTab("status");
+  } catch (err) {
+    console.error("Retranscribe error:", err);
+    NotificationCenter.error(`Failed to start re-transcription: ${err.message}`);
+  } finally {
+    if (buttonEl) buttonEl.classList.remove("loading");
+    updateRefinalizeControls();
+  }
+}
+
+// =============================================================================
 // Status Log Rendering
 // =============================================================================
 
@@ -1576,6 +1756,7 @@ function renderStatusLog() {
 
 function formatStageLabel(stage) {
   const labels = {
+    retranscription: "Re-transcription",
     diarization: "Diarization",
     speaker_names: "Speaker Names",
     summary: "Summary",
@@ -1589,8 +1770,10 @@ function formatPhaseLabel(phase) {
     started: "Started",
     input: "Input",
     output: "Output",
+    progress: "In Progress",
     completed: "Completed",
     failed: "Failed",
+    skipped: "Skipped",
   };
   return labels[phase] || phase;
 }
@@ -1600,8 +1783,10 @@ function getPhaseClass(phase) {
     started: "phase-started",
     input: "phase-input",
     output: "phase-output",
+    progress: "phase-started",
     completed: "phase-completed",
     failed: "phase-failed",
+    skipped: "phase-input",
   };
   return classes[phase] || "";
 }
@@ -1861,6 +2046,7 @@ async function refreshMeeting() {
 
   // Update transcription controls on initial load (not just on SSE events)
   await updateTranscriptionControls();
+  updateRefinalizeControls();
 }
 
 async function saveMeetingTitle() {
@@ -2573,6 +2759,7 @@ async function updateTranscriptionControls() {
     resumeBtn.style.display = "none";
     statusBadge.textContent = "Recording";
     statusBadge.className = "status-badge in-progress";
+    setAudioLevelMeterActive(true);
   } else if (liveState === "finalizing") {
     // Finalization is actively running in the backend thread.
     // Detailed step text arrives via SSE finalization_status events.
@@ -2581,6 +2768,7 @@ async function updateTranscriptionControls() {
     resumeBtn.style.display = "none";
     statusBadge.textContent = "Finalizing...";
     statusBadge.className = "status-badge in-progress";
+    setAudioLevelMeterActive(false);
   } else if (meetingStatus === "in_progress") {
     // Backend says idle but meeting file still says in_progress —
     // stale state from a crashed/restarted server.  Show as completed.
@@ -2589,6 +2777,7 @@ async function updateTranscriptionControls() {
     resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
     statusBadge.textContent = "Completed";
     statusBadge.className = "status-badge completed";
+    setAudioLevelMeterActive(false);
     // Fix the stale file in the background
     fetch(`/api/meetings/${state.meetingId}/status`, {
       method: "PATCH",
@@ -2602,10 +2791,12 @@ async function updateTranscriptionControls() {
     resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
     statusBadge.textContent = isAnyActive ? "Completed (another active)" : "Completed";
     statusBadge.className = isAnyActive ? "status-badge blocked" : "status-badge completed";
+    setAudioLevelMeterActive(false);
   } else {
     // No audio path or other state
     logToServer("else branch - hiding all", { meetingStatus, audioPath: meeting.audio_path });
     stopBtn.style.display = "none";
+    setAudioLevelMeterActive(false);
     resumeBtn.style.display = "none";
     statusBadge.textContent = meetingStatus === "completed" ? "Completed" : "";
     statusBadge.className = "status-badge completed";
@@ -2815,6 +3006,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   
   // Initialize transcript/status tab switching
   initTranscriptPanelTabs();
+  
+  // Initialize re-finalization controls
+  initRefinalizeControls();
   
   // Initialize user notes panel
   initNotesPanel();

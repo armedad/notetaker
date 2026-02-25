@@ -15,7 +15,6 @@ const state = {
   transcriptionSettings: {
     live_model_size: "base",
     final_model_size: "medium",
-    live_transcribe: true,
   },
   meetingsEvents: null,
   recordingSource: "device",
@@ -455,6 +454,24 @@ function setRecordingToggleLabel(recording) {
   button.textContent = recording ? "Stop recording" : "Start recording";
 }
 
+function setAudioLevelMeterActive(active) {
+  const meter = document.getElementById("audio-level-meter");
+  if (meter) {
+    meter.classList.toggle("active", active);
+    if (!active) {
+      const bar = document.getElementById("audio-level-bar");
+      if (bar) bar.style.width = "0%";
+    }
+  }
+}
+
+function updateAudioLevelMeter(level) {
+  const bar = document.getElementById("audio-level-bar");
+  if (bar) {
+    bar.style.width = `${Math.min(100, level * 100)}%`;
+  }
+}
+
 function updateGoToMeetingButton() {
   const btn = document.getElementById("go-to-meeting");
   if (!btn) return;
@@ -563,14 +580,20 @@ function setGlobalBusy(message) {
 }
 
 function startMeetingsEventStream() {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startMeetingsEventStream',message:'SSE_CONNECT_ATTEMPT',data:{alreadyHasConnection:!!state.meetingsEvents},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
-  // #endregion
+  if (window.NotetakerDebug?.isEnabled("NOTIFICATIONS")) {
+    console.log(`[NOTIFICATIONS] SSE_CONNECT_ATTEMPT`, {
+      alreadyHasConnection: !!state.meetingsEvents,
+      timestamp: new Date().toISOString(),
+    });
+  }
   if (state.meetingsEvents) {
     return;
   }
   const source = new EventSource("/api/meetings/events");
   state.meetingsEvents = source;
+  if (window.NotetakerDebug?.isEnabled("NOTIFICATIONS")) {
+    console.log(`[NOTIFICATIONS] SSE_CONNECTED`, { timestamp: new Date().toISOString() });
+  }
   source.onmessage = (event) => {
     if (!event.data) {
       return;
@@ -608,15 +631,27 @@ function startMeetingsEventStream() {
       delete state.finalizingMeetings[payload.meeting_id];
       const title = payload.data?.meeting_title || "Meeting";
       const eventAge = payload.timestamp ? (Date.now() - new Date(payload.timestamp).getTime()) : null;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_complete',message:'NOTIFY_TRIGGERED',data:{title,eventTimestamp:payload.timestamp,eventAgeMs:eventAge,isStale:eventAge>30000},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-      // #endregion
+      const nowIso = new Date().toISOString();
+      // Debug logging under NOTIFICATIONS flag
+      if (window.NotetakerDebug?.isEnabled("NOTIFICATIONS")) {
+        console.log(`[NOTIFICATIONS] finalization_complete received`, {
+          meeting_id: payload.meeting_id,
+          title,
+          eventTimestamp: payload.timestamp,
+          nowTimestamp: nowIso,
+          eventAgeMs: eventAge,
+          willSkip: eventAge !== null && eventAge > 30000,
+        });
+      }
       // Skip stale events (older than 30 seconds) to avoid duplicate notifications on reconnect
       if (eventAge !== null && eventAge > 30000) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_complete',message:'SKIPPED_STALE_EVENT',data:{title,eventAgeMs:eventAge},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-        // #endregion
+        if (window.NotetakerDebug?.isEnabled("NOTIFICATIONS")) {
+          console.log(`[NOTIFICATIONS] SKIPPED stale finalization_complete`, { title, eventAgeMs: eventAge });
+        }
       } else {
+        if (window.NotetakerDebug?.isEnabled("NOTIFICATIONS")) {
+          console.log(`[NOTIFICATIONS] SHOWING notification for finalization_complete`, { title, eventAgeMs: eventAge });
+        }
         NotificationCenter.success(`Finalization complete: ${title}`);
       }
     } else if (payload.type === "finalization_failed") {
@@ -625,20 +660,33 @@ function startMeetingsEventStream() {
       const errors = payload.data?.errors || [];
       const errorCount = errors.length || 1;
       const eventAge = payload.timestamp ? (Date.now() - new Date(payload.timestamp).getTime()) : null;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_failed',message:'NOTIFY_TRIGGERED',data:{title,errorCount,eventTimestamp:payload.timestamp,eventAgeMs:eventAge,isStale:eventAge>30000},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-      // #endregion
+      const nowIso = new Date().toISOString();
+      // Debug logging under NOTIFICATIONS flag
+      if (window.NotetakerDebug?.isEnabled("NOTIFICATIONS")) {
+        console.log(`[NOTIFICATIONS] finalization_failed received`, {
+          meeting_id: payload.meeting_id,
+          title,
+          errorCount,
+          eventTimestamp: payload.timestamp,
+          nowTimestamp: nowIso,
+          eventAgeMs: eventAge,
+          willSkip: eventAge !== null && eventAge > 30000,
+        });
+      }
       // Skip stale events (older than 30 seconds) to avoid duplicate notifications on reconnect
       if (eventAge !== null && eventAge > 30000) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:finalization_failed',message:'SKIPPED_STALE_EVENT',data:{title,eventAgeMs:eventAge},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-        // #endregion
+        if (window.NotetakerDebug?.isEnabled("NOTIFICATIONS")) {
+          console.log(`[NOTIFICATIONS] SKIPPED stale finalization_failed`, { title, eventAgeMs: eventAge });
+        }
       } else {
         // Build detailed error message with stage and error info
         let errorMsg = `Finalization failed: ${title}`;
         if (errors.length > 0) {
           const firstError = errors[0];
           errorMsg += ` — ${firstError.stage}: ${firstError.error}`;
+        }
+        if (window.NotetakerDebug?.isEnabled("NOTIFICATIONS")) {
+          console.log(`[NOTIFICATIONS] SHOWING notification for finalization_failed`, { title, errorMsg, eventAgeMs: eventAge });
         }
         NotificationCenter.error(errorMsg, 15000);  // Show for 15 seconds
         // Log full error details to console for debugging
@@ -648,6 +696,14 @@ function startMeetingsEventStream() {
           errors,
         });
       }
+    }
+    
+    // Handle audio level events for real-time meter (skip refreshMeetings for these high-frequency events)
+    if (payload.type === "audio_level") {
+      if (payload.data?.level !== undefined) {
+        updateAudioLevelMeter(payload.data.level);
+      }
+      return;
     }
     
     refreshMeetings();
@@ -812,8 +868,6 @@ async function loadTranscriptionSettings() {
       live_model_size: data.live_model_size || state.transcriptionSettings.live_model_size,
       final_model_size:
         data.final_model_size || state.transcriptionSettings.final_model_size,
-      live_transcribe:
-        data.live_transcribe ?? state.transcriptionSettings.live_transcribe,
     };
   } catch (error) {
     setGlobalError("Transcription settings load failed.");
@@ -827,7 +881,20 @@ async function refreshRecordingStatus() {
     if (data.file_path) {
       state.lastRecordingPath = data.file_path;
     }
-    setRecordingToggleLabel(state.recording || state.testTranscribing);
+    // If recording is active, fetch the active meeting ID from the transcription layer
+    if (data.recording && !state.selectedMeetingId) {
+      try {
+        const activeData = await fetchJson("/api/transcribe/active");
+        if (activeData.active && activeData.meeting_id) {
+          state.selectedMeetingId = activeData.meeting_id;
+        }
+      } catch (_) {
+        // Ignore errors fetching active transcription
+      }
+    }
+    const isRecording = state.recording || state.testTranscribing;
+    setRecordingToggleLabel(isRecording);
+    setAudioLevelMeterActive(isRecording);
     if (state.testTranscribing) {
       setStatus("Recording from file");
     } else if (data.recording) {
@@ -864,6 +931,7 @@ async function startFileRecording() {
   setOutput(`Transcribing file: ${state.testAudioName || state.testAudioPath}`);
   state.testTranscribing = true;
   setRecordingToggleLabel(true);
+  setAudioLevelMeterActive(true);
   try {
     const response = await fetchJson("/api/transcribe/simulate", {
       method: "POST",
@@ -883,6 +951,7 @@ async function startFileRecording() {
       setOutput("Stop the current transcription first, or wait for it to finish.");
       state.testTranscribing = false;
       setRecordingToggleLabel(false);
+      setAudioLevelMeterActive(false);
       return;
     }
     state.fileMeetingId = response.meeting_id || null;
@@ -968,6 +1037,7 @@ async function stopFileRecording() {
     
     state.testTranscribing = false;
     setRecordingToggleLabel(state.recording);
+    setAudioLevelMeterActive(state.recording);
     setOutput("File transcription complete.");
     setStatus("Not recording");
     await refreshMeetings();
@@ -979,6 +1049,7 @@ async function stopFileRecording() {
     if (toggleBtn) {
       toggleBtn.disabled = false;
       setRecordingToggleLabel(false);
+      setAudioLevelMeterActive(false);
     }
   }
 }
@@ -1070,12 +1141,14 @@ async function syncTestTranscriptionStatus() {
         state.recordingSource = "file";
         state.fileMeetingId = active.meeting_id || state.fileMeetingId;
         setRecordingToggleLabel(true);
+        setAudioLevelMeterActive(true);
         setStatus("Recording from file");
         return;
       }
     }
     state.testTranscribing = false;
     setRecordingToggleLabel(state.recording);
+    setAudioLevelMeterActive(state.recording);
   } catch (error) {
     debugError("syncTestTranscriptionStatus failed", error);
     logClientError("Test transcription status check failed", {
@@ -1348,6 +1421,7 @@ async function refreshMeetings() {
       if (meeting && resolvedState === "completed") {
         state.testTranscribing = false;
         setRecordingToggleLabel(false);
+        setAudioLevelMeterActive(false);
         setTranscriptStatus("File transcription completed.");
       }
     }
@@ -1660,7 +1734,13 @@ function buildTranscriptText(segments) {
 }
 
 async function stopRecording() {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:stopRecording',message:'STOP_RECORDING_ENTER',data:{stopInFlight:state.stopInFlight,recordingSource:state.recordingSource,selectedMeetingId:state.selectedMeetingId||null,recording:state.recording},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+  // #endregion
   if (state.stopInFlight) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:stopRecording',message:'STOP_RECORDING_EARLY_RETURN_INFLIGHT',data:{},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+    // #endregion
     return;
   }
   state.stopInFlight = true;
@@ -1672,12 +1752,21 @@ async function stopRecording() {
     fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/static/app.js:stopRecording',message:'stopRecording enter',data:{recordingSource:state.recordingSource,selectedMeetingId:state.selectedMeetingId||null},timestamp:Date.now(),runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
     // #endregion
     if (state.recordingSource === "file") {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:stopRecording',message:'STOP_RECORDING_FILE_BRANCH',data:{},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+      // #endregion
       await stopFileRecording();
       return;
     }
 
     const meetingId = state.selectedMeetingId;
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:stopRecording',message:'STOP_RECORDING_MIC_BRANCH',data:{meetingId:meetingId||null},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+    // #endregion
     if (!meetingId) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:stopRecording',message:'STOP_RECORDING_NO_MEETING_ID',data:{},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+      // #endregion
       setOutput("No active meeting to stop.");
       return;
     }
@@ -1708,7 +1797,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   const recordingToggle = document.getElementById("recording-toggle");
   if (recordingToggle) {
     recordingToggle.addEventListener("click", async () => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:recording-toggle-click',message:'TOGGLE_CLICKED',data:{recording:state.recording,testTranscribing:state.testTranscribing,recordingSource:state.recordingSource,stopInFlight:state.stopInFlight},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
       const isRecording = state.recording || state.testTranscribing;
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:recording-toggle-click',message:'IS_RECORDING_CHECK',data:{isRecording,willStop:isRecording,willStart:!isRecording},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
       if (isRecording) {
         await stopRecording();
       } else {

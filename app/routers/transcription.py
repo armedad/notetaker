@@ -208,11 +208,15 @@ def create_transcription_router(
         2. Transcribes and saves segments via meeting_store (publishes events)
         3. Runs until audio source is complete (recording stopped or file exhausted)
         4. Finalizes meeting with diarization and summarization
+        
+        If model_size is "none", live transcription is skipped but audio is still
+        recorded and finalization will run with the final model.
         """
         segments: list[dict] = []
         language = None
+        skip_live_transcription = (model_size == "none")
         # #region agent log
-        _dbg_logger.debug("THREAD_ENTER: meeting_id=%s model_size=%s audio_source_type=%s", meeting_id, model_size, type(audio_source).__name__)
+        _dbg_logger.debug("THREAD_ENTER: meeting_id=%s model_size=%s audio_source_type=%s skip_live=%s", meeting_id, model_size, type(audio_source).__name__, skip_live_transcription)
         # #endregion
         
         try:
@@ -222,21 +226,25 @@ def create_transcription_router(
             bytes_per_second = int(samplerate * channels * 2)  # 16-bit audio
             
             # Model-specific chunk duration
-            chunk_seconds = transcription_config.get("chunk_seconds", 30.0)
+            chunk_seconds = transcription_config.get("live_chunk_seconds", 5.0)
             
-            pipeline = get_pipeline(model_size, live_device, live_compute)
+            # Skip pipeline creation if live transcription is disabled
+            pipeline = None if skip_live_transcription else get_pipeline(model_size, live_device, live_compute)
             # #region agent log
             _dbg_logger.debug("pipeline_created: meeting_id=%s samplerate=%d channels=%d bytes_per_second=%d chunk_seconds=%f", 
                              meeting_id, samplerate, channels, bytes_per_second, chunk_seconds)
             # #endregion
             
-            # Create per-session real-time diarization
-            session_rt_diarization = RealtimeDiarizationService(realtime_diar_cfg)
-            rt_diarization_active = session_rt_diarization.start(samplerate, channels)
+            # Create per-session real-time diarization (only if live transcription is enabled)
+            session_rt_diarization = None
+            rt_diarization_active = False
+            if not skip_live_transcription:
+                session_rt_diarization = RealtimeDiarizationService(realtime_diar_cfg)
+                rt_diarization_active = session_rt_diarization.start(samplerate, channels)
             
             logger.info(
-                "Transcription thread started: meeting_id=%s samplerate=%s channels=%s rt_diar=%s",
-                meeting_id, samplerate, channels, rt_diarization_active
+                "Transcription thread started: meeting_id=%s samplerate=%s channels=%s rt_diar=%s live_transcription=%s",
+                meeting_id, samplerate, channels, rt_diarization_active, not skip_live_transcription
             )
             
             # Emit meta event
@@ -249,6 +257,7 @@ def create_transcription_router(
             _dbg_logger.debug("transcription_started: meeting_id=%s samplerate=%d channels=%d bytes_per_second=%d chunk_seconds=%f buffer_threshold=%f", 
                              meeting_id, samplerate, channels, bytes_per_second, chunk_seconds, bytes_per_second * chunk_seconds)
             chunk_count = 0
+            _t_buffer_start = time.time()
             process_count = 0
             last_segment_end = 0.0
             loop_iter = 0
@@ -272,6 +281,12 @@ def create_transcription_router(
                 
                 # Process when we have enough audio
                 if len(buffer) >= bytes_per_second * chunk_seconds:
+                    # If live transcription is disabled, just track offset and clear buffer
+                    if skip_live_transcription:
+                        offset_seconds += len(buffer) / bytes_per_second
+                        buffer.clear()
+                        continue
+                    
                     audio_bytes = bytes(buffer)
                     temp_path = None
                     try:
@@ -281,11 +296,25 @@ def create_transcription_router(
                                          len(audio_bytes), offset_seconds, temp_duration, len(audio_bytes) / bytes_per_second)
                         # #endregion
                         
+                        # #region agent log
+                        _t_buffer_ready = time.time()
+                        _buffer_fill_ms = round((_t_buffer_ready - _t_buffer_start) * 1000)
+                        try:
+                            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_lat:
+                                _f_lat.write(json.dumps({"location":"transcription.py:buffer_ready","message":"buffer_threshold_reached","data":{"meeting_id":meeting_id,"buffer_fill_ms":_buffer_fill_ms,"buffer_bytes":len(audio_bytes),"chunk_seconds":chunk_seconds},"timestamp":int(time.time()*1000),"hypothesisId":"H1"})+"\n")
+                        except Exception: pass
+                        _t_buffer_start = time.time()
+                        # #endregion
                         # Transcribe chunk
+                        # #region agent log
+                        _t_whisper_start = time.time()
+                        # #endregion
                         chunk_segments, chunk_language, chunk_duration = pipeline.transcribe_chunk(
                             temp_path, offset_seconds
                         )
                         # #region agent log
+                        _t_whisper_end = time.time()
+                        _whisper_ms = round((_t_whisper_end - _t_whisper_start) * 1000)
                         process_count += 1
                         first_seg_start = chunk_segments[0].get("start") if chunk_segments else None
                         last_seg_end_in_chunk = max((s.get("end", 0) for s in chunk_segments), default=0) if chunk_segments else 0
@@ -296,6 +325,10 @@ def create_transcription_router(
                                          first_seg_start, last_seg_end_in_chunk, gap_from_previous)
                         if chunk_segments:
                             last_segment_end = last_seg_end_in_chunk
+                        try:
+                            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_lat:
+                                _f_lat.write(json.dumps({"location":"transcription.py:whisper_done","message":"whisper_transcribe_chunk_done","data":{"meeting_id":meeting_id,"process_count":process_count,"whisper_ms":_whisper_ms,"num_segments":len(chunk_segments),"chunk_audio_seconds":actual_chunk_duration,"offset":offset_seconds},"timestamp":int(time.time()*1000),"hypothesisId":"H1"})+"\n")
+                        except Exception: pass
                         # #endregion
                         
                         if chunk_language and not language:
@@ -304,10 +337,25 @@ def create_transcription_router(
                         
                         # Feed audio to real-time diarization
                         new_rt_annotations = []
+                        # #region agent log
+                        _t_diar_start = time.time()
+                        # #endregion
                         if rt_diarization_active and session_rt_diarization.is_active():
                             new_rt_annotations = session_rt_diarization.feed_audio(audio_bytes)
+                        # #region agent log
+                        _t_diar_end = time.time()
+                        _diar_ms = round((_t_diar_end - _t_diar_start) * 1000)
+                        try:
+                            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_lat:
+                                _f_lat.write(json.dumps({"location":"transcription.py:rt_diarization","message":"rt_diarization_feed_done","data":{"meeting_id":meeting_id,"diar_ms":_diar_ms,"rt_active":rt_diarization_active,"annotations":len(new_rt_annotations)},"timestamp":int(time.time()*1000),"hypothesisId":"H3"})+"\n")
+                        except Exception: pass
+                        # #endregion
                         
                         # Process each segment
+                        # #region agent log
+                        _t_publish_start = time.time()
+                        _seg_timings = []
+                        # #endregion
                         for segment in chunk_segments:
                             # Try to get speaker from real-time diarization
                             if rt_diarization_active and session_rt_diarization.is_active():
@@ -320,8 +368,23 @@ def create_transcription_router(
                                     segment["speaker"] = speaker
                             
                             segments.append(segment)
-                            # This saves segment AND publishes event to all subscribers
+                            # #region agent log
+                            _t_seg_start = time.time()
+                            # #endregion
                             meeting_store.append_live_segment(meeting_id, segment, language or chunk_language)
+                            # #region agent log
+                            _seg_timings.append(round((time.time() - _t_seg_start) * 1000))
+                            # #endregion
+                        
+                        # #region agent log
+                        _t_publish_end = time.time()
+                        _publish_ms = round((_t_publish_end - _t_publish_start) * 1000)
+                        _total_pipeline_ms = round((_t_publish_end - _t_whisper_start) * 1000)
+                        try:
+                            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_lat:
+                                _f_lat.write(json.dumps({"location":"transcription.py:segments_published","message":"all_segments_published","data":{"meeting_id":meeting_id,"process_count":process_count,"whisper_ms":_whisper_ms,"diar_ms":_diar_ms,"publish_ms":_publish_ms,"total_pipeline_ms":_total_pipeline_ms,"num_segments":len(chunk_segments),"per_segment_ms":_seg_timings},"timestamp":int(time.time()*1000),"hypothesisId":"H1,H2"})+"\n")
+                        except Exception: pass
+                        # #endregion
                         
                         # Reconcile: if new diarization annotations cover previously-
                         # stored segments with a different speaker, update them.
@@ -343,8 +406,8 @@ def create_transcription_router(
                     
                     buffer.clear()
             
-            # Process remaining buffer
-            if buffer:
+            # Process remaining buffer (only if live transcription is enabled)
+            if buffer and not skip_live_transcription:
                 audio_bytes = bytes(buffer)
                 temp_path = None
                 try:
@@ -373,7 +436,7 @@ def create_transcription_router(
                         os.unlink(temp_path)
             
             # Stop real-time diarization
-            if session_rt_diarization.is_active():
+            if session_rt_diarization and session_rt_diarization.is_active():
                 session_rt_diarization.stop()
             
             # Unregister from job registry BEFORE finalization.
@@ -623,6 +686,9 @@ def create_transcription_router(
             audio_service.stop_recording()
             raise HTTPException(status_code=500, detail="Failed to create meeting")
         meeting_store.update_status(meeting_id, "in_progress")
+        
+        # Set meeting context for audio level publishing
+        audio_service.set_meeting_context(meeting_id, meeting_store)
         model_size = payload.model_size or live_default_size
 
         if not active_tracker.register(
@@ -863,5 +929,61 @@ def create_transcription_router(
             "status": "ok",
             "realtime_enabled": payload.provider.lower() == "diart" and payload.enabled,
         }
+
+    class RetranscribeRequest(BaseModel):
+        model_size: Optional[str] = None
+
+    @router.post("/api/transcribe/retranscribe/{meeting_id}")
+    def retranscribe_meeting(meeting_id: str, payload: RetranscribeRequest = None) -> dict:
+        """Manually re-transcribe a meeting's audio with the final model."""
+        meeting = meeting_store.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        audio_path = meeting.get("audio_path")
+        if not audio_path or not os.path.isfile(audio_path):
+            raise HTTPException(status_code=400, detail=f"Audio file not available: {audio_path}")
+
+        model = (payload.model_size if payload and payload.model_size else final_default_size) or "medium"
+        if model == "none":
+            raise HTTPException(status_code=400, detail="Final model is set to 'none'")
+
+        def _run():
+            try:
+                meeting_store.publish_status_log(meeting_id, "retranscription", "started",
+                    {"model": model, "audio_path": audio_path})
+                meeting_store.publish_finalization_status(meeting_id, f"Re-transcribing with {model} model...", 0.05)
+                debug_log('TRANSCRIPTION', 'Manual re-transcription: meeting=%s model=%s wav=%s', meeting_id, model, audio_path)
+
+                meeting_store.publish_status_log(meeting_id, "retranscription", "progress",
+                    {"step": "loading_model", "model": model, "device": final_device, "compute_type": final_compute})
+                pipe = get_pipeline(model, final_device, final_compute)
+
+                meeting_store.publish_status_log(meeting_id, "retranscription", "progress",
+                    {"step": "transcribing", "audio_path": audio_path})
+                retrans_start = time.time()
+                new_segments, new_language = pipe.transcribe_and_format(audio_path)
+                elapsed = round(time.time() - retrans_start, 2)
+
+                if new_segments:
+                    meeting_store.replace_transcript_segments(meeting_id, new_segments, new_language)
+                    meeting_store.publish_status_log(meeting_id, "retranscription", "output",
+                        {"segments_count": len(new_segments), "language": new_language, "elapsed_seconds": elapsed})
+                    logger.info("Manual re-transcription complete: meeting_id=%s segments=%d elapsed=%.2fs", meeting_id, len(new_segments), elapsed)
+                else:
+                    meeting_store.publish_status_log(meeting_id, "retranscription", "output",
+                        {"segments_count": 0, "note": "No segments returned", "elapsed_seconds": elapsed})
+
+                meeting_store.publish_status_log(meeting_id, "retranscription", "completed")
+                meeting_store.publish_finalization_status(meeting_id, "Re-transcription complete", 0.10)
+            except Exception as exc:
+                logger.warning("Manual re-transcription failed: meeting_id=%s error=%s", meeting_id, exc)
+                meeting_store.publish_status_log(meeting_id, "retranscription", "failed",
+                    {"error": f"{type(exc).__name__}: {str(exc)[:200]}"})
+                meeting_store.publish_finalization_status(meeting_id, f"Re-transcription failed: {type(exc).__name__}", 0.10)
+
+        thread = threading.Thread(target=_run, name=f"retranscribe-{meeting_id}", daemon=True)
+        thread.start()
+        return {"status": "started", "meeting_id": meeting_id, "model": model}
 
     return router

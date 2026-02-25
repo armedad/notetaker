@@ -371,6 +371,7 @@ class MeetingStore:
     def publish_event(
         self, event_type: str, meeting_id: Optional[str], data: Optional[dict] = None
     ) -> None:
+        from app.services.debug import debug_log
         with self._events_condition:
             payload = {
                 "type": event_type,
@@ -380,8 +381,21 @@ class MeetingStore:
             if data:
                 payload["data"] = data
             self._events.append(payload)
-            if len(self._events) > 200:
+            buffer_len = len(self._events)
+            if buffer_len > 200:
                 self._events = self._events[-100:]
+                buffer_len = 100
+            # Debug logging for notification-related events
+            if event_type in ("finalization_complete", "finalization_failed"):
+                debug_log(
+                    "NOTIFICATIONS",
+                    "EVENT_PUBLISHED",
+                    type=event_type,
+                    meeting_id=meeting_id,
+                    timestamp=payload["timestamp"],
+                    buffer_index=buffer_len - 1,
+                    buffer_size=buffer_len,
+                )
             # Wake up any waiting SSE connections immediately
             self._events_condition.notify_all()
 
@@ -423,8 +437,8 @@ class MeetingStore:
         
         Args:
             meeting_id: The meeting being processed
-            stage: "diarization", "speaker_names", "summary", "title"
-            phase: "started", "input", "output", "completed", "failed"
+            stage: "retranscription", "diarization", "speaker_names", "summary", "title"
+            phase: "started", "input", "output", "progress", "completed", "failed", "skipped"
             data: Raw input/output data to display (optional)
         """
         # #region agent log

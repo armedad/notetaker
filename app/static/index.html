@@ -19,7 +19,6 @@
           <span id="search-count" class="search-count"></span>
           <button id="search-close" class="icon-btn search-close-btn" title="Close search">&#10005;</button>
         </div>
-        <span class="recording-status-text" id="recording-status">Not recording</span>
         <span class="status error inline" id="global-error"></span>
         <span class="status inline" id="global-busy"></span>
         <div class="header-actions">
@@ -29,6 +28,9 @@
           </div>
           <select id="recording-source" class="header-select"></select>
           <button id="go-to-meeting" class="secondary" style="display:none">Go to meeting</button>
+          <div class="audio-level-meter" id="audio-level-meter">
+            <div class="audio-level-bar" id="audio-level-bar"></div>
+          </div>
           <button id="recording-toggle">Start recording</button>
           <button id="settings-button" class="secondary">Settings</button>
           <div class="notification-center">

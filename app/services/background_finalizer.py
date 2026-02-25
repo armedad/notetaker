@@ -268,12 +268,20 @@ class BackgroundFinalizer:
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Diarization...", 0.1
                 )
+                self._meeting_store.publish_status_log(
+                    meeting_id, "diarization", "started",
+                    {"audio_path": audio_path}
+                )
                 try:
                     diarization_segments = self._diarization.run(audio_path)
                     if diarization_segments:
                         segments = apply_diarization(segments, diarization_segments)
                         self._meeting_store.update_transcript_speakers(meeting_id, segments)
                     self._meeting_store.mark_finalization_stage(meeting_id, "diarization")
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "diarization", "completed",
+                        {"segments_count": len(diarization_segments)}
+                    )
                     _logger.info(
                         "BackgroundFinalizer: diarization complete for %s (%d segments)",
                         meeting_id, len(diarization_segments),
@@ -283,14 +291,22 @@ class BackgroundFinalizer:
                         "BackgroundFinalizer: diarization failed for %s: %s",
                         meeting_id, exc,
                     )
-                    # Mark as failed so it won't be retried
+                    error_detail = f"{type(exc).__name__}: {str(exc)}"
                     self._meeting_store.mark_finalization_stage_failed(
-                        meeting_id, "diarization", f"{type(exc).__name__}: {str(exc)}"
+                        meeting_id, "diarization", error_detail
+                    )
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "diarization", "failed",
+                        {"error": error_detail}
                     )
                     errors_occurred.append(("diarization", str(exc)))
             elif needs_diarization:
                 # No audio or diarization disabled, mark as done
                 self._meeting_store.mark_finalization_stage(meeting_id, "diarization")
+                self._meeting_store.publish_status_log(
+                    meeting_id, "diarization", "skipped",
+                    {"reason": "no audio or diarization disabled"}
+                )
             
             # Stage 2: Speaker name identification
             if needs_speaker_names and diarization_segments:
@@ -298,27 +314,46 @@ class BackgroundFinalizer:
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Speaker Names...", 0.3
                 )
+                self._meeting_store.publish_status_log(
+                    meeting_id, "speaker_names", "started",
+                    {"speakers_count": len(set(s.get("speaker") for s in diarization_segments if s.get("speaker")))}
+                )
                 try:
                     self._identify_speaker_names(meeting_id, segments)
                     self._meeting_store.mark_finalization_stage(meeting_id, "speaker_names")
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "speaker_names", "completed"
+                    )
                 except Exception as exc:
                     _logger.warning(
                         "BackgroundFinalizer: speaker identification failed for %s: %s",
                         meeting_id, exc,
                     )
+                    error_detail = f"{type(exc).__name__}: {str(exc)}"
                     self._meeting_store.mark_finalization_stage_failed(
-                        meeting_id, "speaker_names", f"{type(exc).__name__}: {str(exc)}"
+                        meeting_id, "speaker_names", error_detail
+                    )
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "speaker_names", "failed",
+                        {"error": error_detail}
                     )
                     errors_occurred.append(("speaker_names", str(exc)))
             elif needs_speaker_names:
                 # No diarization segments to identify, mark as done
                 self._meeting_store.mark_finalization_stage(meeting_id, "speaker_names")
+                self._meeting_store.publish_status_log(
+                    meeting_id, "speaker_names", "skipped",
+                    {"reason": "no diarization segments"}
+                )
             
             # Stage 3: Summary generation
             if needs_summary:
                 self._set_current_work(meeting_id, "summary")
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Summary...", 0.6
+                )
+                self._meeting_store.publish_status_log(
+                    meeting_id, "summary", "started"
                 )
                 # Refresh meeting to get latest segments
                 meeting = self._meeting_store.get_meeting(meeting_id)
@@ -332,6 +367,10 @@ class BackgroundFinalizer:
                     )
                     
                     if summary_text.strip():
+                        self._meeting_store.publish_status_log(
+                            meeting_id, "summary", "input",
+                            {"transcript_length": len(summary_text)}
+                        )
                         try:
                             # Use streaming summarization
                             accumulated_summary = ""
@@ -364,6 +403,10 @@ class BackgroundFinalizer:
                                 "summary_complete", meeting_id, {"text": result.get("summary", "")}
                             )
                             self._meeting_store.mark_finalization_stage(meeting_id, "summary")
+                            self._meeting_store.publish_status_log(
+                                meeting_id, "summary", "completed",
+                                {"summary_length": len(result.get("summary", ""))}
+                            )
                             _logger.info(
                                 "BackgroundFinalizer: summary generated for %s",
                                 meeting_id,
@@ -373,13 +416,22 @@ class BackgroundFinalizer:
                                 "BackgroundFinalizer: summary generation failed for %s: %s",
                                 meeting_id, exc,
                             )
+                            error_detail = f"{type(exc).__name__}: {str(exc)}"
                             self._meeting_store.mark_finalization_stage_failed(
-                                meeting_id, "summary", f"{type(exc).__name__}: {str(exc)}"
+                                meeting_id, "summary", error_detail
+                            )
+                            self._meeting_store.publish_status_log(
+                                meeting_id, "summary", "failed",
+                                {"error": error_detail}
                             )
                             errors_occurred.append(("summary", str(exc)))
                     else:
                         # No transcript text, mark as complete (nothing to summarize)
                         self._meeting_store.mark_finalization_stage(meeting_id, "summary")
+                        self._meeting_store.publish_status_log(
+                            meeting_id, "summary", "skipped",
+                            {"reason": "no transcript text"}
+                        )
             
             # Stage 4: Title generation
             if needs_title:
@@ -387,11 +439,18 @@ class BackgroundFinalizer:
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Title...", 0.9
                 )
+                self._meeting_store.publish_status_log(
+                    meeting_id, "title", "started"
+                )
                 meeting = self._meeting_store.get_meeting(meeting_id)
                 if meeting:
                     summary = meeting.get("summary", {})
                     summary_text = summary.get("text", "") if isinstance(summary, dict) else ""
                     if summary_text:
+                        self._meeting_store.publish_status_log(
+                            meeting_id, "title", "input",
+                            {"summary_preview": summary_text[:200] + ("..." if len(summary_text) > 200 else "")}
+                        )
                         try:
                             self._meeting_store.maybe_auto_title(
                                 meeting_id,
@@ -400,6 +459,13 @@ class BackgroundFinalizer:
                                 force=True,
                             )
                             self._meeting_store.mark_finalization_stage(meeting_id, "title")
+                            # Get the generated title for status log
+                            updated_meeting = self._meeting_store.get_meeting(meeting_id)
+                            generated_title = updated_meeting.get("title", "") if updated_meeting else ""
+                            self._meeting_store.publish_status_log(
+                                meeting_id, "title", "completed",
+                                {"title": generated_title}
+                            )
                             _logger.info(
                                 "BackgroundFinalizer: title generated for %s",
                                 meeting_id,
@@ -409,13 +475,22 @@ class BackgroundFinalizer:
                                 "BackgroundFinalizer: title generation failed for %s: %s",
                                 meeting_id, exc,
                             )
+                            error_detail = f"{type(exc).__name__}: {str(exc)}"
                             self._meeting_store.mark_finalization_stage_failed(
-                                meeting_id, "title", f"{type(exc).__name__}: {str(exc)}"
+                                meeting_id, "title", error_detail
+                            )
+                            self._meeting_store.publish_status_log(
+                                meeting_id, "title", "failed",
+                                {"error": error_detail}
                             )
                             errors_occurred.append(("title", str(exc)))
                     else:
                         # No summary text, mark as complete (can't generate title without summary)
                         self._meeting_store.mark_finalization_stage(meeting_id, "title")
+                        self._meeting_store.publish_status_log(
+                            meeting_id, "title", "skipped",
+                            {"reason": "no summary text available"}
+                        )
             
             # Mark meeting as completed if it wasn't already
             meeting = self._meeting_store.get_meeting(meeting_id)
