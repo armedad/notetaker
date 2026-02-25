@@ -483,7 +483,14 @@ If you cannot determine the name, respond with:
 
     @router.post("/api/meetings/{meeting_id}/retry-finalization")
     def retry_finalization(meeting_id: str, payload: RetryFinalizationRequest = None) -> dict:
-        """Clear failed stages and re-queue meeting for background finalization."""
+        """Re-run finalization stages for a meeting.
+        
+        If specific stages are provided, runs them immediately in a background
+        thread (not queued). If no stages specified, clears failed stages and
+        wakes the background finalizer queue.
+        """
+        from app.services.background_finalizer import get_background_finalizer
+        
         meeting = meeting_store.get_meeting(meeting_id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
@@ -491,41 +498,64 @@ If you cannot determine the name, respond with:
         # Map human-readable labels back to stage keys
         label_to_key = {v: k for k, v in meeting_store.FINALIZATION_STAGE_LABELS.items()}
         
-        stages_to_clear = None
+        stages_to_retry = None
         if payload and payload.stages:
-            stages_to_clear = []
+            stages_to_retry = []
             for stage in payload.stages:
                 # Accept either the key or the label
                 if stage in label_to_key:
-                    stages_to_clear.append(label_to_key[stage])
+                    stages_to_retry.append(label_to_key[stage])
                 elif stage in meeting_store.FINALIZATION_STAGE_LABELS:
-                    stages_to_clear.append(stage)
+                    stages_to_retry.append(stage)
                 else:
                     raise HTTPException(
                         status_code=400, 
                         detail=f"Unknown stage: {stage}. Valid stages: {list(meeting_store.FINALIZATION_STAGE_LABELS.keys())}"
                     )
         
-        updated = meeting_store.clear_failed_stages(meeting_id, stages_to_clear)
-        if not updated:
-            raise HTTPException(status_code=500, detail="Failed to clear stages")
+        bg_finalizer = get_background_finalizer()
         
-        # Get updated state
-        pending = meeting_store.get_pending_finalization_stages(updated)
-        failed = meeting_store.get_failed_finalization_stages(updated)
-        
-        logger.info(
-            "Retry finalization: meeting_id=%s stages_cleared=%s pending=%s",
-            meeting_id, stages_to_clear or "all", pending
-        )
-        
-        return {
-            "status": "ok",
-            "meeting_id": meeting_id,
-            "pending_stages": pending,
-            "failed_stages": failed,
-            "needs_finalization": meeting_store.needs_finalization(updated),
-        }
+        # If specific stages requested, run them immediately (not queued)
+        if stages_to_retry and bg_finalizer:
+            # Force stages to pending first
+            updated = meeting_store.force_retry_stages(meeting_id, stages_to_retry)
+            if not updated:
+                raise HTTPException(status_code=500, detail="Failed to update stages")
+            
+            # Run all requested stages in a single thread, serially in dependency order
+            # This ensures stages that depend on each other run correctly
+            bg_finalizer.run_stages_now(meeting_id, stages_to_retry)
+            
+            logger.info(
+                "Started immediate re-run: meeting_id=%s stages=%s",
+                meeting_id, stages_to_retry
+            )
+            
+            return {
+                "status": "started",
+                "meeting_id": meeting_id,
+                "stages_started": stages_to_retry,
+            }
+        else:
+            # No specific stages - clear failed and wake queue
+            updated = meeting_store.clear_failed_stages(meeting_id, None)
+            if not updated:
+                raise HTTPException(status_code=500, detail="Failed to update stages")
+            
+            pending = meeting_store.get_pending_finalization_stages(updated)
+            failed = meeting_store.get_failed_finalization_stages(updated)
+            
+            if bg_finalizer:
+                bg_finalizer.wake()
+                logger.info("Woke background finalizer for meeting %s", meeting_id)
+            
+            return {
+                "status": "queued",
+                "meeting_id": meeting_id,
+                "pending_stages": pending,
+                "failed_stages": failed,
+                "needs_finalization": meeting_store.needs_finalization(updated),
+            }
 
     @router.post("/api/meetings/{meeting_id}/auto-fix-finalization")
     def auto_fix_finalization(meeting_id: str) -> StreamingResponse:
