@@ -537,24 +537,20 @@ If you cannot determine the name, respond with:
                 "stages_started": stages_to_retry,
             }
         else:
-            # No specific stages - clear failed and wake queue
-            updated = meeting_store.clear_failed_stages(meeting_id, None)
+            # No specific stages - re-run ALL finalization stages
+            all_stages = ["diarization", "speaker_names", "summary", "title"]
+            updated = meeting_store.force_retry_stages(meeting_id, all_stages)
             if not updated:
                 raise HTTPException(status_code=500, detail="Failed to update stages")
             
-            pending = meeting_store.get_pending_finalization_stages(updated)
-            failed = meeting_store.get_failed_finalization_stages(updated)
-            
             if bg_finalizer:
-                bg_finalizer.wake()
-                logger.info("Woke background finalizer for meeting %s", meeting_id)
+                bg_finalizer.run_stages_now(meeting_id, all_stages)
+                logger.info("Started re-finalization of all stages for meeting %s", meeting_id)
             
             return {
-                "status": "queued",
+                "status": "started",
                 "meeting_id": meeting_id,
-                "pending_stages": pending,
-                "failed_stages": failed,
-                "needs_finalization": meeting_store.needs_finalization(updated),
+                "stages_started": all_stages,
             }
 
     @router.post("/api/meetings/{meeting_id}/auto-fix-finalization")

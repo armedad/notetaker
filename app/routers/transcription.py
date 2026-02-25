@@ -975,12 +975,18 @@ def create_transcription_router(
                         {"segments_count": 0, "note": "No segments returned", "elapsed_seconds": elapsed})
 
                 meeting_store.publish_status_log(meeting_id, "retranscription", "completed")
-                meeting_store.publish_finalization_status(meeting_id, "Re-transcription complete", 0.10)
+                # Hide the finalization status bar and trigger UI refresh
+                meeting_store.publish_event("retranscription_complete", meeting_id, {
+                    "segments_count": len(new_segments) if new_segments else 0,
+                    "elapsed_seconds": elapsed,
+                })
             except Exception as exc:
                 logger.warning("Manual re-transcription failed: meeting_id=%s error=%s", meeting_id, exc)
                 meeting_store.publish_status_log(meeting_id, "retranscription", "failed",
                     {"error": f"{type(exc).__name__}: {str(exc)[:200]}"})
-                meeting_store.publish_finalization_status(meeting_id, f"Re-transcription failed: {type(exc).__name__}", 0.10)
+                meeting_store.publish_event("retranscription_failed", meeting_id, {
+                    "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+                })
 
         thread = threading.Thread(target=_run, name=f"retranscribe-{meeting_id}", daemon=True)
         thread.start()
