@@ -1584,7 +1584,6 @@ function initRefinalizeControls() {
   const btnDiarize = document.getElementById("btn-rediarize");
   const btnSpeakers = document.getElementById("btn-speaker-names");
   const btnSummary = document.getElementById("btn-resummarize");
-  const btnTitle = document.getElementById("btn-retitle");
 
   if (btnAll) {
     btnAll.addEventListener("click", () => triggerRefinalization(null, btnAll));
@@ -1600,9 +1599,6 @@ function initRefinalizeControls() {
   }
   if (btnSummary) {
     btnSummary.addEventListener("click", () => triggerRefinalization(["summary"], btnSummary));
-  }
-  if (btnTitle) {
-    btnTitle.addEventListener("click", () => triggerRefinalization(["title"], btnTitle));
   }
 
   updateRefinalizeControls();
@@ -1631,7 +1627,6 @@ function updateRefinalizeControls() {
     document.getElementById("btn-rediarize")?.setAttribute("title", "Re-run diarization");
     document.getElementById("btn-speaker-names")?.setAttribute("title", "Re-identify speaker names");
     document.getElementById("btn-resummarize")?.setAttribute("title", "Re-generate summary");
-    document.getElementById("btn-retitle")?.setAttribute("title", "Re-generate title");
   }
 }
 
@@ -2103,11 +2098,7 @@ async function refreshMeeting() {
         ? `Last updated ${meeting.summary.updated_at}`
         : "Summary ready";
       setSummaryStatus(`${statusLabel} • ${summaryUpdated}`);
-      const summaryForRender = { ...meeting.summary };
-      if (!summaryForRender.action_items && meeting.action_items?.length) {
-        summaryForRender.action_items = meeting.action_items;
-      }
-      renderStructuredSummary(summaryForRender);
+      renderStructuredSummary(meeting.summary);
     } else {
       setSummaryStatus(`${statusLabel} • No summary yet.`);
       setSummaryOutput("No summary yet.");
