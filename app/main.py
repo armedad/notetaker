@@ -269,6 +269,7 @@ def create_app() -> FastAPI:
                 meeting_store=meeting_store,
                 summarization_service=summarization_service,
                 diarization_service=diarization_service,
+                config_path=config_path,
             )
             background_finalizer.start()
             set_background_finalizer(background_finalizer)  # Set global singleton

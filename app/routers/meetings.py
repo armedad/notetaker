@@ -538,7 +538,7 @@ If you cannot determine the name, respond with:
             }
         else:
             # No specific stages - re-run ALL finalization stages
-            all_stages = ["diarization", "speaker_names", "summary"]
+            all_stages = ["transcription", "diarization", "speaker_names", "summary", "title"]
             updated = meeting_store.force_retry_stages(meeting_id, all_stages)
             if not updated:
                 raise HTTPException(status_code=500, detail="Failed to update stages")
