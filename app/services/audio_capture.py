@@ -1,10 +1,11 @@
 import os
 import queue
+import subprocess
 import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import logging
 import sounddevice as sd
@@ -13,6 +14,9 @@ import numpy as np
 
 from app.services.file_read_service import FileReadService
 from app.services.ndjson_debug import dbg as nd_dbg
+
+if TYPE_CHECKING:
+    from app.services.meeting_store import MeetingStore
 
 
 @dataclass
@@ -399,12 +403,120 @@ class AudioCaptureService:
             final_state = self.current_status()
             self._logger.info("Recording stop: id=%s file=%s", final_state["recording_id"], final_state["file_path"])
 
+            # Capture meeting context before clearing for compression callback
+            meeting_id = self._meeting_id
+            meeting_store = self._meeting_store
+            wav_path = final_state.get("file_path")
+
             # Clear meeting context for audio level publishing
             self._meeting_id = None
             self._meeting_store = None
 
             self._state = RecordingState()
+            
+            # Start background compression to Opus (non-blocking)
+            if wav_path and os.path.isfile(wav_path):
+                self._compress_to_opus_async(wav_path, meeting_id, meeting_store)
+            
             return final_state
+
+    def _compress_to_opus_async(
+        self,
+        wav_path: str,
+        meeting_id: Optional[str],
+        meeting_store: Optional["MeetingStore"],
+    ) -> None:
+        """Start background thread to compress WAV to Opus."""
+        def _compress():
+            try:
+                opus_path = self._convert_wav_to_opus(wav_path)
+                if opus_path and meeting_id and meeting_store:
+                    meeting_store.update_audio_path(meeting_id, opus_path)
+                    self._logger.info(
+                        "Opus compression complete: meeting=%s opus=%s",
+                        meeting_id, opus_path
+                    )
+                    # Delete original WAV after successful compression
+                    try:
+                        os.remove(wav_path)
+                        self._logger.debug("Deleted original WAV: %s", wav_path)
+                    except OSError as e:
+                        self._logger.warning("Failed to delete WAV %s: %s", wav_path, e)
+            except Exception as exc:
+                self._logger.error(
+                    "Opus compression failed for %s: %s (keeping WAV)",
+                    wav_path, exc
+                )
+        
+        thread = threading.Thread(target=_compress, name="opus-compress", daemon=True)
+        thread.start()
+
+    def _convert_wav_to_opus(self, wav_path: str) -> Optional[str]:
+        """Convert WAV file to Opus using ffmpeg.
+        
+        Uses Opus at 32kbps which is excellent for speech (85-90% smaller than WAV).
+        
+        Returns:
+            Path to the Opus file, or None if conversion failed.
+        """
+        opus_path = wav_path.rsplit(".", 1)[0] + ".opus"
+        
+        cmd = [
+            "ffmpeg",
+            "-y",  # Overwrite output
+            "-i", wav_path,
+            "-c:a", "libopus",
+            "-b:a", "32k",  # 32kbps is excellent for speech
+            "-application", "voip",  # Optimized for speech
+            "-vbr", "on",
+            opus_path,
+        ]
+        
+        self._logger.info("Converting to Opus: %s -> %s", wav_path, opus_path)
+        start_time = datetime.utcnow()
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+            )
+            
+            if result.returncode != 0:
+                self._logger.error(
+                    "ffmpeg failed (code %d): %s",
+                    result.returncode,
+                    result.stderr[:500] if result.stderr else "no stderr"
+                )
+                return None
+            
+            elapsed = (datetime.utcnow() - start_time).total_seconds()
+            
+            # Log size reduction
+            wav_size = os.path.getsize(wav_path)
+            opus_size = os.path.getsize(opus_path)
+            reduction = (1 - opus_size / wav_size) * 100 if wav_size > 0 else 0
+            
+            self._logger.info(
+                "Opus conversion complete: %.1fs, %.1f MB -> %.1f MB (%.0f%% smaller)",
+                elapsed,
+                wav_size / 1024 / 1024,
+                opus_size / 1024 / 1024,
+                reduction,
+            )
+            
+            return opus_path
+            
+        except subprocess.TimeoutExpired:
+            self._logger.error("ffmpeg timed out converting %s", wav_path)
+            return None
+        except FileNotFoundError:
+            self._logger.error("ffmpeg not found - install ffmpeg to enable Opus compression")
+            return None
+        except Exception as exc:
+            self._logger.exception("Opus conversion error: %s", exc)
+            return None
 
     def start_file_playback(
         self,

@@ -117,7 +117,10 @@ class DiarizationService:
         )
         provider = self._load_provider()
         try:
-            return provider.diarize(audio_path)
+            # Convert any audio format to WAV for consistent provider input
+            from app.services.audio_utils import as_wav_file
+            with as_wav_file(audio_path) as wav_path:
+                return provider.diarize(wav_path)
         except Exception as exc:
             _dbg(
                 "app/services/diarization/__init__.py:run",

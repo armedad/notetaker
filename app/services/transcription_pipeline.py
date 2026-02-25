@@ -142,50 +142,55 @@ class TranscriptionPipeline:
         """Transcribe audio and format segments to standard dict format.
         
         Args:
-            audio_path: Path to audio file
+            audio_path: Path to audio file (any format - will be converted to WAV)
             cancel_event: Optional threading.Event to check for cancellation
             
         Returns:
             Tuple of (formatted segments, detected language)
         """
+        from app.services.audio_utils import as_wav_file
+        
         # #region agent log
         _dbg_logger.debug("TRANSCRIBE_FORMAT_START: audio_path=%s provider=%s", audio_path, type(self._provider).__name__)
         # #endregion
-        segments_iter, info = self._provider.stream_segments(audio_path)
-        # #region agent log
-        _dbg_logger.debug("TRANSCRIBE_FORMAT_GOT_ITER: audio_path=%s info_type=%s", audio_path, type(info).__name__)
-        # #endregion
-        language = getattr(info, "language", None)
         
-        segments: list[dict] = []
-        seg_count = 0
-        # #region agent log
-        _dbg_logger.debug("TRANSCRIBE_FORMAT_ITERATING_SEGMENTS: audio_path=%s starting segment iteration", audio_path)
-        # #endregion
-        for segment in segments_iter:
-            seg_count += 1
+        # Convert any audio format to WAV for consistent provider input
+        with as_wav_file(audio_path) as wav_path:
+            segments_iter, info = self._provider.stream_segments(wav_path)
             # #region agent log
-            if seg_count <= 3 or seg_count % 10 == 0:
-                _dbg_logger.debug("TRANSCRIBE_FORMAT_SEG: seg_count=%d start=%.2f end=%.2f text_len=%d",
-                                 seg_count, segment.start, segment.end, len(segment.text.strip()))
+            _dbg_logger.debug("TRANSCRIBE_FORMAT_GOT_ITER: audio_path=%s info_type=%s", audio_path, type(info).__name__)
             # #endregion
-            # Check for cancellation after each segment
-            if cancel_event and cancel_event.is_set():
-                self._logger.info("Transcription cancelled during processing")
+            language = getattr(info, "language", None)
+            
+            segments: list[dict] = []
+            seg_count = 0
+            # #region agent log
+            _dbg_logger.debug("TRANSCRIBE_FORMAT_ITERATING_SEGMENTS: audio_path=%s starting segment iteration", audio_path)
+            # #endregion
+            for segment in segments_iter:
+                seg_count += 1
                 # #region agent log
-                _dbg_logger.debug("TRANSCRIBE_FORMAT_CANCELLED: audio_path=%s seg_count=%d", audio_path, seg_count)
+                if seg_count <= 3 or seg_count % 10 == 0:
+                    _dbg_logger.debug("TRANSCRIBE_FORMAT_SEG: seg_count=%d start=%.2f end=%.2f text_len=%d",
+                                     seg_count, segment.start, segment.end, len(segment.text.strip()))
                 # #endregion
-                break
-            segments.append({
-                "type": "segment",
-                "start": float(segment.start),
-                "end": float(segment.end),
-                "text": segment.text.strip(),
-                "speaker": None,
-            })
-        # #region agent log
-        _dbg_logger.debug("TRANSCRIBE_FORMAT_DONE: audio_path=%s segments=%d language=%s", audio_path, len(segments), language)
-        # #endregion
+                # Check for cancellation after each segment
+                if cancel_event and cancel_event.is_set():
+                    self._logger.info("Transcription cancelled during processing")
+                    # #region agent log
+                    _dbg_logger.debug("TRANSCRIBE_FORMAT_CANCELLED: audio_path=%s seg_count=%d", audio_path, seg_count)
+                    # #endregion
+                    break
+                segments.append({
+                    "type": "segment",
+                    "start": float(segment.start),
+                    "end": float(segment.end),
+                    "text": segment.text.strip(),
+                    "speaker": None,
+                })
+            # #region agent log
+            _dbg_logger.debug("TRANSCRIBE_FORMAT_DONE: audio_path=%s segments=%d language=%s", audio_path, len(segments), language)
+            # #endregion
         
         return segments, language
     
@@ -197,27 +202,31 @@ class TranscriptionPipeline:
         """Stream transcription segments one at a time for live updates.
         
         Args:
-            audio_path: Path to audio file
+            audio_path: Path to audio file (any format - will be converted to WAV)
             cancel_event: Optional threading.Event to check for cancellation
             
         Yields:
             Tuples of (segment dict, detected language)
         """
-        segments_iter, info = self._provider.stream_segments(audio_path)
-        language = getattr(info, "language", None)
+        from app.services.audio_utils import as_wav_file
         
-        for segment in segments_iter:
-            # Check for cancellation after each segment
-            if cancel_event and cancel_event.is_set():
-                self._logger.info("Transcription cancelled during streaming")
-                return
-            yield {
-                "type": "segment",
-                "start": float(segment.start),
-                "end": float(segment.end),
-                "text": segment.text.strip(),
-                "speaker": None,
-            }, language
+        # Convert any audio format to WAV for consistent provider input
+        with as_wav_file(audio_path) as wav_path:
+            segments_iter, info = self._provider.stream_segments(wav_path)
+            language = getattr(info, "language", None)
+            
+            for segment in segments_iter:
+                # Check for cancellation after each segment
+                if cancel_event and cancel_event.is_set():
+                    self._logger.info("Transcription cancelled during streaming")
+                    return
+                yield {
+                    "type": "segment",
+                    "start": float(segment.start),
+                    "end": float(segment.end),
+                    "text": segment.text.strip(),
+                    "speaker": None,
+                }, language
 
     def run_diarization(
         self,
@@ -227,7 +236,7 @@ class TranscriptionPipeline:
         """Apply diarization to segments if enabled.
         
         Args:
-            audio_path: Path to audio file (needed for diarization)
+            audio_path: Path to audio file (any format supported)
             segments: List of transcript segments
             
         Returns:
@@ -255,6 +264,7 @@ class TranscriptionPipeline:
             except Exception:
                 pass
             # #endregion
+            # DiarizationService handles audio format conversion internally
             diarization_segments = self._diarization.run(audio_path)
             segments = apply_diarization(segments, diarization_segments)
             speaker_count = len(set(s.get("speaker") for s in segments if s.get("speaker")))
@@ -374,51 +384,55 @@ class TranscriptionPipeline:
         Does NOT apply diarization (not possible until full audio available).
         
         Args:
-            audio_path: Path to audio chunk file
+            audio_path: Path to audio chunk file (any format - will be converted to WAV)
             offset_seconds: Time offset to add to segment timestamps
             
         Returns:
             Tuple of (formatted segments, detected language, chunk duration)
         """
-        segments_iter, info = self._provider.stream_segments(audio_path)
-        language = getattr(info, "language", None)
+        from app.services.audio_utils import as_wav_file
         
-        # #region agent log
-        import soundfile as _sf
-        try:
-            with _sf.SoundFile(audio_path) as f:
-                actual_audio_duration = f.frames / f.samplerate
-        except:
-            actual_audio_duration = -1
-        raw_segments = []
-        # #endregion
-        
-        segments: list[dict] = []
-        max_end = 0.0
-        for segment in segments_iter:
-            seg_end = float(segment.end)
-            if seg_end > max_end:
-                max_end = seg_end
+        # Convert any audio format to WAV for consistent provider input
+        with as_wav_file(audio_path) as wav_path:
+            segments_iter, info = self._provider.stream_segments(wav_path)
+            language = getattr(info, "language", None)
+            
             # #region agent log
-            raw_segments.append({"raw_start": float(segment.start), "raw_end": seg_end})
+            import soundfile as _sf
+            try:
+                with _sf.SoundFile(wav_path) as f:
+                    actual_audio_duration = f.frames / f.samplerate
+            except:
+                actual_audio_duration = -1
+            raw_segments = []
             # #endregion
-            segments.append({
-                "type": "segment",
-                "start": float(segment.start) + offset_seconds,
-                "end": seg_end + offset_seconds,
-                "text": segment.text.strip(),
-                "speaker": None,
-            })
-        
-        # #region agent log
-        first_raw_start = raw_segments[0]["raw_start"] if raw_segments else None
-        last_raw_end = raw_segments[-1]["raw_end"] if raw_segments else None
-        gap_at_start = first_raw_start if first_raw_start is not None else None
-        gap_at_end = actual_audio_duration - max_end if actual_audio_duration > 0 else None
-        _dbg_logger.debug("whisper_raw_output: path=%s offset=%f actual_dur=%f max_end=%f raw_segs=%d first=%s last=%s gap_start=%s gap_end=%s",
-                         audio_path, offset_seconds, actual_audio_duration, max_end, len(raw_segments),
-                         first_raw_start, last_raw_end, gap_at_start, gap_at_end)
-        # #endregion
+            
+            segments: list[dict] = []
+            max_end = 0.0
+            for segment in segments_iter:
+                seg_end = float(segment.end)
+                if seg_end > max_end:
+                    max_end = seg_end
+                # #region agent log
+                raw_segments.append({"raw_start": float(segment.start), "raw_end": seg_end})
+                # #endregion
+                segments.append({
+                    "type": "segment",
+                    "start": float(segment.start) + offset_seconds,
+                    "end": seg_end + offset_seconds,
+                    "text": segment.text.strip(),
+                    "speaker": None,
+                })
+            
+            # #region agent log
+            first_raw_start = raw_segments[0]["raw_start"] if raw_segments else None
+            last_raw_end = raw_segments[-1]["raw_end"] if raw_segments else None
+            gap_at_start = first_raw_start if first_raw_start is not None else None
+            gap_at_end = actual_audio_duration - max_end if actual_audio_duration > 0 else None
+            _dbg_logger.debug("whisper_raw_output: path=%s offset=%f actual_dur=%f max_end=%f raw_segs=%d first=%s last=%s gap_start=%s gap_end=%s",
+                             audio_path, offset_seconds, actual_audio_duration, max_end, len(raw_segments),
+                             first_raw_start, last_raw_end, gap_at_start, gap_at_end)
+            # #endregion
         
         return segments, language, max_end
 
@@ -666,6 +680,7 @@ class TranscriptionPipeline:
                 _dbg_logger.debug("DIARIZATION_START: meeting_id=%s", meeting_id)
                 # #endregion
                 try:
+                    # DiarizationService handles audio format conversion internally
                     diarization_segments = self._diarization.run(audio_path)
                     self._logger.info(
                         "Diarization complete: meeting_id=%s segments=%d",

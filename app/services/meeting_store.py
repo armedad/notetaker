@@ -1007,6 +1007,30 @@ class MeetingStore:
             )
             return meeting
 
+    def update_audio_path(self, meeting_id: str, audio_path: str) -> Optional[dict]:
+        """Update the audio file path for a meeting.
+        
+        Used after audio compression (e.g., WAV -> Opus) to point to the new file.
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                self._logger.warning("update_audio_path: meeting not found: %s", meeting_id)
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            old_path = meeting.get("audio_path")
+            meeting["audio_path"] = audio_path
+            self._write_meeting_file(path, meeting)
+            self._logger.info(
+                "Audio path updated: meeting=%s old=%s new=%s",
+                meeting_id,
+                os.path.basename(old_path) if old_path else None,
+                os.path.basename(audio_path),
+            )
+            return meeting
+
     def update_transcript_speakers(
         self, meeting_id: str, segments: list[dict]
     ) -> Optional[dict]:

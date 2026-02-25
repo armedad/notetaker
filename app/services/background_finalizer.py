@@ -248,7 +248,9 @@ class BackgroundFinalizer:
                 summarization_service=self._summarization,
             )
             
+            # Pipeline handles audio format conversion internally
             segments, language = pipeline.transcribe_and_format(audio_path)
+            
             if segments:
                 self._meeting_store.replace_transcript_segments(meeting_id, segments, language)
                 _logger.info("_run_transcription_stage: meeting=%s saved %d segments", meeting_id, len(segments))
@@ -281,6 +283,7 @@ class BackgroundFinalizer:
             return
         
         try:
+            # DiarizationService handles audio format conversion internally
             diarization_segments = self._diarization.run(audio_path)
             # #region agent log
             _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
@@ -640,6 +643,7 @@ class BackgroundFinalizer:
                     {"audio_path": audio_path}
                 )
                 try:
+                    # DiarizationService handles audio format conversion internally
                     diarization_segments = self._diarization.run(audio_path)
                     if diarization_segments:
                         segments = apply_diarization(segments, diarization_segments)
