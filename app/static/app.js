@@ -1470,8 +1470,9 @@ async function loadMeeting(meetingId) {
       ? buildTranscriptText(meeting.transcript.segments)
       : "No transcript";
     const summary = meeting.summary?.text || "No summary";
-    const actions = meeting.action_items?.length
-      ? meeting.action_items.map((item) => `- ${item.description}`).join("\n")
+    const actionItems = meeting.summary?.action_items || [];
+    const actions = actionItems.length
+      ? actionItems.map((item) => `- ${item.description}`).join("\n")
       : "No action items";
     setMeetingDetail(
       `Title: ${meeting.title}\n\nSummary:\n${summary}\n\nAction Items:\n${actions}\n\nTranscript:\n${transcript}`

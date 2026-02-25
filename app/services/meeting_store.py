@@ -437,7 +437,7 @@ class MeetingStore:
         
         Args:
             meeting_id: The meeting being processed
-            stage: "retranscription", "diarization", "speaker_names", "summary", "title"
+            stage: "retranscription", "diarization", "speaker_names", "summary"
             phase: "started", "input", "output", "progress", "completed", "failed", "skipped"
             data: Raw input/output data to display (optional)
         """
@@ -606,7 +606,6 @@ class MeetingStore:
                 "attendees": [],
                 "transcript": None,
                 "summary": None,
-                "action_items": [],
                 "summary_state": self._default_summary_state(),
                 "manual_notes": "",
                 "manual_summary": "",
@@ -648,7 +647,6 @@ class MeetingStore:
                     "attendees": [],
                     "transcript": None,
                     "summary": None,
-                    "action_items": [],
                     "summary_state": self._default_summary_state(),
                     "manual_notes": "",
                     "manual_summary": "",
@@ -725,7 +723,8 @@ class MeetingStore:
                     "provider": provider,
                     "updated_at": now,
                 }
-                meeting["action_items"] = normalized_items
+                # Remove legacy top-level action_items if present
+                meeting.pop("action_items", None)
             else:
                 normalized_items = []
                 for item in (action_items or []):
@@ -735,10 +734,12 @@ class MeetingStore:
                         normalized_items.append(item)
                 meeting["summary"] = {
                     "text": summary or "",
+                    "action_items": normalized_items,
                     "provider": provider,
                     "updated_at": now,
                 }
-                meeting["action_items"] = normalized_items
+                # Remove legacy top-level action_items if present
+                meeting.pop("action_items", None)
 
             self._write_meeting_file(path, meeting)
             self._logger.info("Summary saved: id=%s", meeting_id)
@@ -1711,8 +1712,9 @@ class MeetingStore:
             return None
         title = meeting.get("title") or "Meeting"
         created_at = meeting.get("created_at") or ""
-        summary_text = meeting.get("summary", {}).get("text") if meeting.get("summary") else ""
-        action_items = meeting.get("action_items") or []
+        summary_obj = meeting.get("summary") or {}
+        summary_text = summary_obj.get("text") or ""
+        action_items = summary_obj.get("action_items") or []
         attendees = meeting.get("attendees") or []
         attendee_lookup = {attendee.get("id"): attendee for attendee in attendees}
         transcript_segments = (
@@ -1856,7 +1858,6 @@ class MeetingStore:
         "diarization": "Diarization",
         "speaker_names": "Speaker Names",
         "summary": "Summary",
-        "title": "Title",
     }
 
     def _default_finalization_state(self) -> dict:
@@ -1868,8 +1869,6 @@ class MeetingStore:
             "speaker_names_error": None,
             "summary": self.FINALIZATION_PENDING,
             "summary_error": None,
-            "title": self.FINALIZATION_PENDING,
-            "title_error": None,
         }
 
     def _migrate_finalization_state(self, finalization: dict) -> dict:
@@ -1892,7 +1891,6 @@ class MeetingStore:
             "diarization_completed": "diarization",
             "speaker_names_completed": "speaker_names",
             "summary_completed": "summary",
-            "title_completed": "title",
         }
         
         migrated = {}

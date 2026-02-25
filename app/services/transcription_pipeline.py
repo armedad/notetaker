@@ -5,7 +5,7 @@ This service centralizes:
 - Segment formatting (whisper output → standard dict format)
 - Diarization application (speaker identification)
 - Meeting store updates
-- Summarization and auto-title generation
+- Summarization and title extraction
 
 All transcription endpoints should use this pipeline after obtaining audio.
 """
@@ -307,7 +307,7 @@ class TranscriptionPipeline:
         Behavior:
         - Optionally applies batch diarization (if enabled) and updates stored speakers
         - Saves transcript to storage
-        - Finalizes meeting (status=completed, summary, auto-title) via enhanced pipeline
+        - Finalizes meeting (status=completed, summary, title) via enhanced pipeline
         """
         if apply_diarization:
             segments = self.run_diarization(audio_path, segments)
@@ -385,7 +385,7 @@ class TranscriptionPipeline:
         meeting_id: str,
         segments: list[dict],
     ) -> Optional[dict]:
-        """Finalize a meeting after transcription: summarize and auto-title.
+        """Finalize a meeting after transcription: summarize and set title.
         
         Args:
             meeting_id: Meeting ID to finalize
@@ -486,39 +486,6 @@ class TranscriptionPipeline:
 
             if result.get("title"):
                 self._meeting_store.set_title_from_summary(meeting_id, result["title"])
-            elif result.get("overview", "").strip():
-                # #region agent log
-                try:
-                    dbg(
-                        self._logger,
-                        location="transcription_pipeline.py:finalize_meeting",
-                        message="finalize_auto_title_start",
-                        data={"meeting_id": meeting_id, "summary_for_title_len": len(result.get("overview", ""))},
-                        run_id="bugs-debug",
-                        hypothesis_id="H1b",
-                    )
-                except Exception:
-                    pass
-                # #endregion
-                self._meeting_store.maybe_auto_title(
-                    meeting_id,
-                    result.get("overview", ""),
-                    self._summarization,
-                    force=True,
-                )
-            # #region agent log
-            try:
-                dbg(
-                    self._logger,
-                    location="transcription_pipeline.py:finalize_meeting",
-                    message="finalize_auto_title_done",
-                    data={"meeting_id": meeting_id},
-                    run_id="bugs-debug",
-                    hypothesis_id="H1b",
-                )
-            except Exception:
-                pass
-            # #endregion
             
             self._logger.info("Finalize complete: meeting_id=%s", meeting_id)
             return result
@@ -562,10 +529,8 @@ class TranscriptionPipeline:
         5. Use LLM to identify speaker names (if available)
         6. Update attendee names
         7. Publish status: "Summary..."
-        8. Run summarization
-        9. Publish status: "Title..."
-        10. Generate auto-title
-        11. Publish status: "Complete"
+        8. Run summarization (title extracted from structured JSON)
+        9. Publish status: "Complete"
         
         Args:
             meeting_id: Meeting ID to finalize
@@ -865,40 +830,12 @@ class TranscriptionPipeline:
                         meeting_id, "summary", "completed"
                     )
 
-                    # Title — extract from structured result or fall back to LLM call
-                    self._meeting_store.publish_finalization_status(
-                        meeting_id, "Title...", 0.9
-                    )
-                    self._meeting_store.publish_status_log(
-                        meeting_id, "title", "started"
-                    )
                     if result.get("title"):
                         self._meeting_store.set_title_from_summary(meeting_id, result["title"])
                         self._meeting_store.publish_event(
                             "title_updated", meeting_id,
                             {"title": result["title"], "source": "auto"},
                         )
-                        self._meeting_store.publish_status_log(
-                            meeting_id, "title", "skipped",
-                            {"reason": "title extracted from summary JSON", "title": result["title"]}
-                        )
-                    elif result.get("overview", "").strip():
-                        self._meeting_store.maybe_auto_title(
-                            meeting_id,
-                            result["overview"],
-                            self._summarization,
-                            force=True,
-                        )
-                        updated_meeting = self._meeting_store.get_meeting(meeting_id)
-                        generated_title = updated_meeting.get("title", "") if updated_meeting else ""
-                        self._meeting_store.publish_status_log(
-                            meeting_id, "title", "output",
-                            {"title": generated_title}
-                        )
-                    self._meeting_store.mark_finalization_stage(meeting_id, "title")
-                    self._meeting_store.publish_status_log(
-                        meeting_id, "title", "completed"
-                    )
                 except Exception as exc:
                     import traceback
                     tb_str = traceback.format_exc()
@@ -913,22 +850,13 @@ class TranscriptionPipeline:
                         f"Summary failed: {error_detail[:120]}",
                         0.7,
                     )
-                    # Mark summary and title as failed (title depends on summary)
                     self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary", error_detail)
-                    self._meeting_store.mark_finalization_stage_failed(
-                        meeting_id, "title", "Summary generation failed (required for title)"
-                    )
-                    # Include full traceback in status log for debugging
                     self._meeting_store.publish_status_log(
                         meeting_id, "summary", "failed",
                         {
                             "error": error_detail,
                             "traceback": tb_str,
                         }
-                    )
-                    self._meeting_store.publish_status_log(
-                        meeting_id, "title", "failed",
-                        {"error": "Summary generation failed (required for title)"}
                     )
                     # #region agent log
                     _dbg_logger.debug("SUMMARIZATION_ERROR: meeting_id=%s error=%s traceback=%s", meeting_id, str(exc)[:500], tb_str[:1000])
