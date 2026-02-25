@@ -1,5 +1,11 @@
 # Cursor Rules for Notetaker
 
+## Git Commits
+
+When creating git commits in this project:
+- Do NOT include `Co-authored-by` trailers (e.g., `Co-authored-by: Cursor <noreply@cursor.com>`)
+- Keep commit messages concise and focused on the changes
+
 ## Debug Logging
 
 When adding debug instrumentation to this codebase:
