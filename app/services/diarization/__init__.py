@@ -115,7 +115,20 @@ class DiarizationService:
             run_id="pre-fix",
             hypothesis_id="H3",
         )
+        # #region agent log
+        _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
+        import json as _json
+        with open(_logpath, "a") as _f:
+            _f.write(_json.dumps({"location": "diarization/__init__.py:run:before_load_provider", "message": "loading_diarization_provider", "hypothesisId": "H2", "data": {"provider_name": self.get_provider_name(), "model": self._config.model}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
+        # #endregion
+        
         provider = self._load_provider()
+        
+        # #region agent log
+        with open(_logpath, "a") as _f:
+            _f.write(_json.dumps({"location": "diarization/__init__.py:run:after_load_provider", "message": "provider_loaded_calling_diarize", "hypothesisId": "H2", "data": {"provider_type": type(provider).__name__}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
+        # #endregion
+        
         try:
             # Convert any audio format to WAV for consistent provider input
             from app.services.audio_utils import as_wav_file

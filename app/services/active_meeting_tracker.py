@@ -53,7 +53,10 @@ class ActiveMeeting:
     """Audio source type: 'microphone', 'file', etc."""
     
     audio_path: Optional[str] = None
-    """Path to the audio file being processed."""
+    """Path to the audio file being processed (new WAV for current session)."""
+    
+    existing_audio_path: Optional[str] = None
+    """Path to existing audio file for resumed meetings (for concatenation on stop)."""
     
     def to_dict(self) -> dict:
         """Convert to JSON-serializable dict."""
@@ -64,6 +67,7 @@ class ActiveMeeting:
             "stage": self.stage,
             "audio_source": self.audio_source,
             "audio_path": self.audio_path,
+            "existing_audio_path": self.existing_audio_path,
         }
 
 
@@ -95,6 +99,7 @@ class ActiveMeetingTracker:
         stage: Optional[str] = None,
         audio_source: Optional[str] = None,
         audio_path: Optional[str] = None,
+        existing_audio_path: Optional[str] = None,
     ) -> bool:
         """Register a meeting as actively processing.
         
@@ -106,7 +111,8 @@ class ActiveMeetingTracker:
             state: The processing state
             stage: Optional current finalization stage
             audio_source: Optional audio source type
-            audio_path: Optional audio file path
+            audio_path: Optional audio file path (new WAV for current session)
+            existing_audio_path: Optional existing audio path for resumed meetings
             
         Returns:
             True if registration succeeded, False if meeting was already active
@@ -129,11 +135,13 @@ class ActiveMeetingTracker:
                 stage=stage,
                 audio_source=audio_source,
                 audio_path=audio_path,
+                existing_audio_path=existing_audio_path,
             )
             _logger.info(
-                "ActiveMeetingTracker: registered meeting %s with state %s",
+                "ActiveMeetingTracker: registered meeting %s with state %s (existing_audio=%s)",
                 meeting_id,
                 state.value,
+                existing_audio_path is not None,
             )
             return True
     

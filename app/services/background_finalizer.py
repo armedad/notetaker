@@ -168,6 +168,24 @@ class BackgroundFinalizer:
                     meeting_id, ordered_stages
                 )
                 
+                # Determine trigger label based on stages
+                if len(ordered_stages) == 5:
+                    trigger = "manual_all"
+                    trigger_label = "Manual Re-finalization (All)"
+                elif len(ordered_stages) == 1:
+                    trigger = f"manual_{ordered_stages[0]}"
+                    trigger_label = f"Manual {ordered_stages[0].replace('_', ' ').title()}"
+                else:
+                    trigger = "manual_partial"
+                    trigger_label = f"Manual ({', '.join(ordered_stages)})"
+                
+                # Publish finalization group header
+                self._meeting_store.publish_status_log(
+                    meeting_id, "finalization", "started",
+                    data={"stages": ordered_stages, "label": trigger_label},
+                    trigger=trigger
+                )
+                
                 for stage in ordered_stages:
                     # Refresh meeting data before each stage
                     meeting = self._meeting_store.get_meeting(meeting_id)
@@ -199,6 +217,12 @@ class BackgroundFinalizer:
                         )
                         # Continue to next stage even if one fails
                 
+                # Publish finalization group completion
+                self._meeting_store.publish_status_log(
+                    meeting_id, "finalization", "completed",
+                    data={"stages": ordered_stages},
+                    trigger=trigger
+                )
                 _logger.info("run_stages_now: completed for meeting %s", meeting_id)
         
         thread = threading.Thread(
@@ -213,6 +237,13 @@ class BackgroundFinalizer:
         """Run transcription stage using final model from config."""
         from app.services.transcription_pipeline import TranscriptionPipeline
         from app.services.transcription.whisper_local import FasterWhisperProvider, WhisperConfig
+        
+        # #region agent log
+        _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
+        import json as _json
+        with open(_logpath, "a") as _f:
+            _f.write(_json.dumps({"location": "background_finalizer.py:_run_transcription_stage:enter", "message": "transcription_stage_enter", "hypothesisId": "H1", "data": {"meeting_id": meeting_id, "audio_path": audio_path}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
+        # #endregion
         
         self._meeting_store.publish_finalization_status(meeting_id, "Transcription...", 0.0)
         self._meeting_store.publish_status_log(meeting_id, "transcription", "started", {"audio_path": audio_path})
@@ -239,14 +270,30 @@ class BackgroundFinalizer:
             _logger.info("_run_transcription_stage: meeting=%s model=%s device=%s compute=%s",
                 meeting_id, model_size, device, compute_type)
             
+            # #region agent log
+            with open(_logpath, "a") as _f:
+                _f.write(_json.dumps({"location": "background_finalizer.py:_run_transcription_stage:before_provider", "message": "creating_whisper_provider", "hypothesisId": "H1", "data": {"meeting_id": meeting_id, "model_size": model_size, "device": device, "compute_type": compute_type}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
+            # #endregion
+            
             whisper_config = WhisperConfig(model_size=model_size, device=device, compute_type=compute_type)
             provider = FasterWhisperProvider(config=whisper_config, diarization=None)
+            
+            # #region agent log
+            with open(_logpath, "a") as _f:
+                _f.write(_json.dumps({"location": "background_finalizer.py:_run_transcription_stage:after_provider", "message": "provider_created_starting_pipeline", "hypothesisId": "H1", "data": {"meeting_id": meeting_id}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
+            # #endregion
+            
             pipeline = TranscriptionPipeline(
                 provider=provider,
                 diarization_service=None,
                 meeting_store=self._meeting_store,
                 summarization_service=self._summarization,
             )
+            
+            # #region agent log
+            with open(_logpath, "a") as _f:
+                _f.write(_json.dumps({"location": "background_finalizer.py:_run_transcription_stage:before_transcribe", "message": "calling_transcribe_and_format", "hypothesisId": "H1", "data": {"meeting_id": meeting_id, "audio_path": audio_path}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
+            # #endregion
             
             # Pipeline handles audio format conversion internally
             segments, language = pipeline.transcribe_and_format(audio_path)
@@ -273,6 +320,13 @@ class BackgroundFinalizer:
         """Run diarization stage."""
         from app.services.transcription_pipeline import apply_diarization
         
+        # #region agent log
+        _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
+        import json as _json
+        with open(_logpath, "a") as _f:
+            _f.write(_json.dumps({"location": "background_finalizer.py:_run_diarization_stage:enter", "message": "diarization_stage_enter", "hypothesisId": "H2", "data": {"meeting_id": meeting_id, "audio_path": audio_path, "diarization_enabled": self._diarization.is_enabled() if self._diarization else False}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
+        # #endregion
+        
         self._meeting_store.publish_finalization_status(meeting_id, "Diarization...", 0.1)
         self._meeting_store.publish_status_log(meeting_id, "diarization", "started", {"audio_path": audio_path})
         
@@ -283,6 +337,11 @@ class BackgroundFinalizer:
             return
         
         try:
+            # #region agent log
+            with open(_logpath, "a") as _f:
+                _f.write(_json.dumps({"location": "background_finalizer.py:_run_diarization_stage:before_run", "message": "calling_diarization_run", "hypothesisId": "H2", "data": {"meeting_id": meeting_id, "audio_path": audio_path}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
+            # #endregion
+            
             # DiarizationService handles audio format conversion internally
             diarization_segments = self._diarization.run(audio_path)
             # #region agent log
@@ -614,6 +673,14 @@ class BackgroundFinalizer:
                 failed_stages,
             )
             
+            # Publish finalization group header for auto-finalization
+            if pending_stages:
+                self._meeting_store.publish_status_log(
+                    meeting_id, "finalization", "started",
+                    data={"stages": pending_stages, "label": "Auto-finalization"},
+                    trigger="auto"
+                )
+            
             # Stage 0: Transcription (final model)
             if needs_transcription:
                 self._set_current_work(meeting_id, "transcription")
@@ -846,6 +913,13 @@ class BackgroundFinalizer:
                 meeting_title = meeting.get("title") or meeting_id[:8]
             
             if errors_occurred:
+                # Publish finalization group failure
+                if pending_stages:
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "finalization", "failed",
+                        data={"stages": pending_stages, "errors": [{"stage": s, "error": e} for s, e in errors_occurred]},
+                        trigger="auto"
+                    )
                 self._meeting_store.publish_event(
                     "finalization_failed",
                     meeting_id,
@@ -855,6 +929,13 @@ class BackgroundFinalizer:
                     },
                 )
             else:
+                # Publish finalization group completion
+                if pending_stages:
+                    self._meeting_store.publish_status_log(
+                        meeting_id, "finalization", "completed",
+                        data={"stages": pending_stages},
+                        trigger="auto"
+                    )
                 self._meeting_store.publish_event(
                     "finalization_complete",
                     meeting_id,

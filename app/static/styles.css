@@ -1933,6 +1933,16 @@ body.meeting-layout {
   background: var(--bg-elevated);
 }
 
+/* Indented sub-events within a finalization group */
+.status-log-entry.indented {
+  padding-left: 16px;
+  border-left-color: var(--text-muted);
+}
+
+details.status-log-entry.indented > summary {
+  padding-left: 16px;
+}
+
 /* Collapsible entry (details element) - must be block, not flex */
 details.status-log-entry {
   display: block;

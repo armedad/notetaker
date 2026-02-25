@@ -43,6 +43,11 @@ class PyannoteProvider(DiarizationProvider):
         # #region agent log
         _dbg_logger.debug("PYANNOTE_DIARIZE_ENTER: audio_path=%s model=%s device=%s",
                         audio_path, self._config.model, self._config.device)
+        _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
+        import json as _json
+        import os as _os
+        with open(_logpath, "a") as _f:
+            _f.write(_json.dumps({"location": "pyannote_provider.py:diarize:enter", "message": "pyannote_diarize_enter", "hypothesisId": "H2", "data": {"audio_path": audio_path, "model": self._config.model, "device": self._config.device, "HF_HUB_OFFLINE": _os.environ.get("HF_HUB_OFFLINE", "not_set")}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
         # #endregion
         if not self._config.hf_token:
             raise RuntimeError("Missing Hugging Face token for diarization")
@@ -66,6 +71,10 @@ class PyannoteProvider(DiarizationProvider):
             # HF_HUB_OFFLINE is set globally at boot (main.py).
             # No per-call override needed — the settings UI handles downloads.
             try:
+                # #region agent log
+                with open(_logpath, "a") as _f:
+                    _f.write(_json.dumps({"location": "pyannote_provider.py:before_from_pretrained", "message": "about_to_call_Pipeline_from_pretrained", "hypothesisId": "H2", "data": {"model": self._config.model, "HF_HUB_OFFLINE": _os.environ.get("HF_HUB_OFFLINE", "not_set")}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
+                # #endregion
                 self._pipeline = Pipeline.from_pretrained(
                     self._config.model,
                     use_auth_token=self._config.hf_token,
@@ -84,6 +93,8 @@ class PyannoteProvider(DiarizationProvider):
             except Exception as exc:
                 # #region agent log
                 _dbg_logger.debug("PYANNOTE_MODEL_LOAD_ERROR: exc_type=%s exc=%s", type(exc).__name__, str(exc)[:500])
+                with open(_logpath, "a") as _f:
+                    _f.write(_json.dumps({"location": "pyannote_provider.py:from_pretrained_exception", "message": "Pipeline_from_pretrained_failed", "hypothesisId": "H2", "data": {"exc_type": type(exc).__name__, "exc_str": str(exc)[:500], "model": self._config.model}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
                 # #endregion
                 error_str = str(exc).lower()
                 if "403" in error_str or "forbidden" in error_str or "gated" in error_str:
