@@ -200,6 +200,7 @@ def create_transcription_router(
         meeting_id: str,
         audio_source: AudioDataSource,
         model_size: str,
+        audio_offset: float = 0.0,
     ) -> None:
         """Run transcription from any audio source in background thread.
         
@@ -211,12 +212,18 @@ def create_transcription_router(
         
         If model_size is "none", live transcription is skipped but audio is still
         recorded and finalization will run with the final model.
+        
+        Args:
+            meeting_id: The meeting ID to transcribe
+            audio_source: Audio data source (mic or file)
+            model_size: Whisper model size for live transcription
+            audio_offset: Offset in seconds for resumed meetings (timestamps start here)
         """
         segments: list[dict] = []
         language = None
         skip_live_transcription = (model_size == "none")
         # #region agent log
-        _dbg_logger.debug("THREAD_ENTER: meeting_id=%s model_size=%s audio_source_type=%s skip_live=%s", meeting_id, model_size, type(audio_source).__name__, skip_live_transcription)
+        _dbg_logger.debug("THREAD_ENTER: meeting_id=%s model_size=%s audio_source_type=%s skip_live=%s audio_offset=%f", meeting_id, model_size, type(audio_source).__name__, skip_live_transcription, audio_offset)
         # #endregion
         
         try:
@@ -243,15 +250,15 @@ def create_transcription_router(
                 rt_diarization_active = session_rt_diarization.start(samplerate, channels)
             
             logger.info(
-                "Transcription thread started: meeting_id=%s samplerate=%s channels=%s rt_diar=%s live_transcription=%s",
-                meeting_id, samplerate, channels, rt_diarization_active, not skip_live_transcription
+                "Transcription thread started: meeting_id=%s samplerate=%s channels=%s rt_diar=%s live_transcription=%s audio_offset=%s",
+                meeting_id, samplerate, channels, rt_diarization_active, not skip_live_transcription, audio_offset
             )
             
             # Emit meta event
             meeting_store.append_live_meta(meeting_id, None)
             
             buffer = bytearray()
-            offset_seconds = 0.0
+            offset_seconds = audio_offset  # Initialize with resume offset (0.0 for new recordings)
             
             # #region agent log
             _dbg_logger.debug("transcription_started: meeting_id=%s samplerate=%d channels=%d bytes_per_second=%d chunk_seconds=%f buffer_threshold=%f", 
@@ -830,7 +837,17 @@ def create_transcription_router(
 
     @router.post("/api/transcribe/resume/{meeting_id}")
     def resume_transcription(meeting_id: str) -> dict:
-        """Resume transcription for a meeting that was stopped."""
+        """Resume recording for a meeting that was stopped.
+        
+        This continues the meeting by:
+        1. Getting the duration of the existing audio (for timestamp offset)
+        2. Starting a new mic recording (new WAV file)
+        3. Recording a pause marker
+        4. Running transcription with the offset so timestamps are additive
+        5. On stop, the new audio will be concatenated with the existing audio
+        """
+        from app.services.audio_utils import get_audio_duration
+        
         # Check if any transcription is already running (use tracker)
         recording = active_tracker.get_by_state(MeetingState.RECORDING)
         if recording:
@@ -844,39 +861,72 @@ def create_transcription_router(
                 status_code=409,
                 detail="A live recording is already in progress"
             )
+        
         # Get meeting and its audio path
         meeting = meeting_store.get_meeting(meeting_id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
-        audio_path = meeting.get("audio_path")
-        if not audio_path:
+        existing_audio_path = meeting.get("audio_path")
+        if not existing_audio_path:
             raise HTTPException(status_code=400, detail="Meeting has no audio file")
-        if not os.path.exists(audio_path):
+        if not os.path.exists(existing_audio_path):
             raise HTTPException(status_code=400, detail="Audio file not found")
+        
+        # Get duration of existing audio = offset for new segments
+        audio_offset = get_audio_duration(existing_audio_path)
+        if audio_offset is None:
+            raise HTTPException(status_code=400, detail="Could not determine audio duration")
+        
+        # Get audio device settings
+        audio_config = audio_service.get_config()
+        device_index = audio_config.get("device_index")
+        if device_index is None:
+            raise HTTPException(status_code=400, detail="No audio device configured. Please configure in Settings.")
+        samplerate = audio_config.get("samplerate", 48000)
+        channels = audio_config.get("channels", 2)
+        
+        # Record pause marker (paused_at from meeting.ended_at, resumed_at = now)
+        paused_at = meeting.get("ended_at") or datetime.utcnow().isoformat()
+        resumed_at = datetime.utcnow().isoformat()
+        meeting_store.add_pause_marker(
+            meeting_id,
+            audio_position=audio_offset,
+            paused_at=paused_at,
+            resumed_at=resumed_at,
+        )
+        
+        # Start NEW mic recording (creates new WAV file)
+        try:
+            result = audio_service.start_recording(
+                device_index=device_index,
+                samplerate=samplerate,
+                channels=channels,
+            )
+        except Exception as exc:
+            logger.exception("Failed to start mic recording for resume: %s", exc)
+            raise HTTPException(status_code=400, detail=f"Failed to start recording: {exc}")
+        
+        audio_service.enable_live_tap()
+        
+        recording_id = result["recording_id"]
+        new_wav_path = result["file_path"]
+        
+        # Set meeting context for audio level publishing and compression
+        # Include existing_audio_path so compression knows to concatenate
+        audio_service.set_meeting_context(meeting_id, meeting_store, existing_audio_path)
+
         # Update meeting status back to in_progress
         meeting_store.update_status(meeting_id, "in_progress")
         # Clear finalization flags since transcript will change
         meeting_store.clear_finalization_flags(meeting_id)
-        
-        # Stream through the shared AudioCaptureService pipeline (same as mic)
-        try:
-            result = audio_service.start_file_playback(
-                audio_path,
-                speed_percent=0,  # No delay for resume - process as fast as possible
-            )
-        except Exception as exc:
-            logger.exception("Failed to start file playback for resume: %s", exc)
-            raise HTTPException(status_code=400, detail=f"Failed to start file playback: {exc}")
 
-        recording_id = result["recording_id"]
-        new_wav_path = result["file_path"]
-
-        # Register with active tracker
+        # Register with active tracker - store existing audio path for concatenation
         if not active_tracker.register(
             meeting_id,
             MeetingState.RECORDING,
-            audio_source="file",
+            audio_source="mic",
             audio_path=new_wav_path,
+            existing_audio_path=existing_audio_path,  # For concatenation on stop
         ):
             audio_service.stop_recording()
             raise HTTPException(
@@ -884,21 +934,25 @@ def create_transcription_router(
                 detail="Meeting is already being processed"
             )
 
-        audio_source = LiveAudioSource(audio_service, recording_id)
+        audio_source_obj = LiveAudioSource(audio_service, recording_id)
         model_size = transcription_config.get("model_size", "medium")
         thread = threading.Thread(
             target=_run_transcription,
-            args=(meeting_id, audio_source, model_size),
+            args=(meeting_id, audio_source_obj, model_size, audio_offset),
             daemon=True,
         )
         transcription_jobs[meeting_id] = {
             "meeting_id": meeting_id,
-            "audio_source": audio_source,
+            "audio_source": audio_source_obj,
             "audio_path": new_wav_path,
+            "existing_audio_path": existing_audio_path,  # For concatenation on stop
         }
-        logger.info("Resumed transcription: meeting_id=%s audio=%s", meeting_id, audio_path)
+        logger.info(
+            "Resumed recording: meeting_id=%s existing_audio=%s new_wav=%s offset=%.1fs",
+            meeting_id, existing_audio_path, new_wav_path, audio_offset
+        )
         thread.start()
-        return {"status": "resumed", "meeting_id": meeting_id}
+        return {"status": "resumed", "meeting_id": meeting_id, "audio_offset": audio_offset}
 
     @router.post("/api/diarization/settings")
     def update_diarization_settings(payload: DiarizationSettingsRequest) -> dict:

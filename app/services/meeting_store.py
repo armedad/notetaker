@@ -432,22 +432,17 @@ class MeetingStore:
         stage: str,
         phase: str,
         data: Optional[dict] = None,
+        trigger: Optional[str] = None,
     ) -> None:
         """Publish a detailed status log entry for the status panel.
         
         Args:
             meeting_id: The meeting being processed
-            stage: "retranscription", "diarization", "speaker_names", "summary"
+            stage: "finalization", "transcription", "diarization", "speaker_names", "summary", "title"
             phase: "started", "input", "output", "progress", "completed", "failed", "skipped"
             data: Raw input/output data to display (optional)
+            trigger: Optional trigger source ("auto", "manual", "manual_all", "manual_transcription", etc.)
         """
-        # #region agent log
-        import time as _t_sl; import json as _j_sl
-        try:
-            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_sl:
-                _f_sl.write(_j_sl.dumps({"location":"meeting_store.py:publish_status_log","message":"status_log_published","data":{"meeting_id":meeting_id,"stage":stage,"phase":phase,"events_len":len(self._events)},"timestamp":int(_t_sl.time()*1000),"hypothesisId":"H5"})+"\n")
-        except Exception: pass
-        # #endregion
         with self._events_condition:
             payload = {
                 "type": "status_log",
@@ -457,6 +452,8 @@ class MeetingStore:
                 "data": data,
                 "timestamp": datetime.utcnow().isoformat(),
             }
+            if trigger:
+                payload["trigger"] = trigger
             self._events.append(payload)
             if len(self._events) > 200:
                 self._events = self._events[-100:]
@@ -1030,6 +1027,69 @@ class MeetingStore:
                 os.path.basename(audio_path),
             )
             return meeting
+
+    def add_pause_marker(
+        self,
+        meeting_id: str,
+        audio_position: float,
+        paused_at: str,
+        resumed_at: str,
+    ) -> Optional[dict]:
+        """Add a pause marker when resuming a meeting.
+        
+        Pause markers track when a recording was paused and resumed,
+        allowing the UI to show gaps in wall-clock time even though
+        the audio is continuous.
+        
+        Args:
+            meeting_id: The meeting ID
+            audio_position: Position in the audio timeline (seconds) where pause occurred
+            paused_at: ISO timestamp when recording was stopped
+            resumed_at: ISO timestamp when recording was resumed
+            
+        Returns:
+            Updated meeting dict, or None if meeting not found
+        """
+        with self._lock:
+            path = self._find_meeting_path(meeting_id)
+            if not path:
+                self._logger.warning("add_pause_marker: meeting not found: %s", meeting_id)
+                return None
+            meeting = self._read_meeting_file(path)
+            if not meeting:
+                return None
+            
+            if "pause_markers" not in meeting:
+                meeting["pause_markers"] = []
+            
+            meeting["pause_markers"].append({
+                "audio_position": audio_position,
+                "paused_at": paused_at,
+                "resumed_at": resumed_at,
+            })
+            
+            self._write_meeting_file(path, meeting)
+            self._logger.info(
+                "Pause marker added: meeting=%s position=%.1fs paused=%s resumed=%s",
+                meeting_id, audio_position, paused_at, resumed_at,
+            )
+            self.publish_event("pause_marker_added", meeting_id, {
+                "audio_position": audio_position,
+                "paused_at": paused_at,
+                "resumed_at": resumed_at,
+            })
+            return meeting
+
+    def get_pause_markers(self, meeting_id: str) -> list[dict]:
+        """Get pause markers for a meeting.
+        
+        Returns:
+            List of pause marker dicts, or empty list if none
+        """
+        meeting = self.get_meeting(meeting_id)
+        if not meeting:
+            return []
+        return meeting.get("pause_markers", [])
 
     def update_transcript_speakers(
         self, meeting_id: str, segments: list[dict]

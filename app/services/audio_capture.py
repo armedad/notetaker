@@ -56,6 +56,7 @@ class AudioCaptureService:
         }
         self._meeting_id: Optional[str] = None
         self._meeting_store = None
+        self._existing_audio_path: Optional[str] = None  # For resumed meetings
 
     def list_devices(self) -> list[dict]:
         self._logger.debug("Listing audio input devices")
@@ -92,17 +93,30 @@ class AudioCaptureService:
         """Check if there is audio buffered in the live queue."""
         return not self._live_queue.empty()
 
-    def set_meeting_context(self, meeting_id: str, meeting_store) -> None:
-        """Set the meeting context for audio level publishing."""
+    def set_meeting_context(
+        self,
+        meeting_id: str,
+        meeting_store,
+        existing_audio_path: Optional[str] = None,
+    ) -> None:
+        """Set the meeting context for audio level publishing and compression.
+        
+        Args:
+            meeting_id: The meeting ID
+            meeting_store: The MeetingStore instance
+            existing_audio_path: For resumed meetings, path to existing audio to concatenate with
+        """
         with self._lock:
             self._meeting_id = meeting_id
             self._meeting_store = meeting_store
+            self._existing_audio_path = existing_audio_path
 
     def clear_meeting_context(self) -> None:
         """Clear the meeting context."""
         with self._lock:
             self._meeting_id = None
             self._meeting_store = None
+            self._existing_audio_path = None
 
     def enable_live_tap(self) -> None:
         with self._lock:
@@ -406,17 +420,20 @@ class AudioCaptureService:
             # Capture meeting context before clearing for compression callback
             meeting_id = self._meeting_id
             meeting_store = self._meeting_store
+            existing_audio_path = self._existing_audio_path
             wav_path = final_state.get("file_path")
 
             # Clear meeting context for audio level publishing
             self._meeting_id = None
             self._meeting_store = None
+            self._existing_audio_path = None
 
             self._state = RecordingState()
             
             # Start background compression to Opus (non-blocking)
+            # For resumed meetings, this will concatenate existing + new audio
             if wav_path and os.path.isfile(wav_path):
-                self._compress_to_opus_async(wav_path, meeting_id, meeting_store)
+                self._compress_to_opus_async(wav_path, meeting_id, meeting_store, existing_audio_path)
             
             return final_state
 
@@ -425,11 +442,26 @@ class AudioCaptureService:
         wav_path: str,
         meeting_id: Optional[str],
         meeting_store: Optional["MeetingStore"],
+        existing_audio_path: Optional[str] = None,
     ) -> None:
-        """Start background thread to compress WAV to Opus."""
+        """Start background thread to compress WAV to Opus.
+        
+        If existing_audio_path is provided (resumed meeting), concatenates
+        existing audio with new wav before compressing to opus.
+        """
         def _compress():
             try:
-                opus_path = self._convert_wav_to_opus(wav_path)
+                if existing_audio_path and os.path.isfile(existing_audio_path):
+                    # Resumed meeting: concatenate existing + new, then compress
+                    opus_path = self._concat_and_compress(existing_audio_path, wav_path)
+                    self._logger.info(
+                        "Audio concatenation complete: meeting=%s existing=%s new=%s -> %s",
+                        meeting_id, existing_audio_path, wav_path, opus_path
+                    )
+                else:
+                    # Normal single-file compression
+                    opus_path = self._convert_wav_to_opus(wav_path)
+                
                 if opus_path and meeting_id and meeting_store:
                     meeting_store.update_audio_path(meeting_id, opus_path)
                     self._logger.info(
@@ -450,6 +482,87 @@ class AudioCaptureService:
         
         thread = threading.Thread(target=_compress, name="opus-compress", daemon=True)
         thread.start()
+    
+    def _concat_and_compress(self, existing_path: str, new_wav_path: str) -> str:
+        """Concatenate existing audio with new WAV and compress to Opus.
+        
+        Uses ffmpeg's concat filter to handle mixed formats (opus + wav).
+        The result overwrites the existing opus file.
+        
+        Args:
+            existing_path: Path to existing audio file (opus or wav)
+            new_wav_path: Path to new WAV file to append
+            
+        Returns:
+            Path to the output opus file (same as existing_path but with .opus extension)
+        """
+        # Output path is the existing path but ensure .opus extension
+        if existing_path.lower().endswith(".opus"):
+            output_path = existing_path
+        else:
+            output_path = existing_path.rsplit(".", 1)[0] + ".opus"
+        
+        # Use a temp file to avoid overwriting while reading
+        temp_output = output_path + ".tmp"
+        
+        cmd = [
+            "ffmpeg",
+            "-y",  # Overwrite output
+            "-i", existing_path,
+            "-i", new_wav_path,
+            "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+            "-map", "[out]",
+            "-c:a", "libopus",
+            "-b:a", "32k",
+            "-application", "voip",
+            "-vbr", "on",
+            temp_output,
+        ]
+        
+        self._logger.info(
+            "Concatenating audio: %s + %s -> %s",
+            os.path.basename(existing_path),
+            os.path.basename(new_wav_path),
+            os.path.basename(output_path),
+        )
+        start_time = datetime.utcnow()
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=600,  # 10 min timeout for potentially long audio
+            )
+            
+            if result.returncode != 0:
+                stderr = result.stderr.decode("utf-8", errors="replace")[:500]
+                raise RuntimeError(f"ffmpeg concat failed: {stderr}")
+            
+            # Replace original with temp
+            os.replace(temp_output, output_path)
+            
+            elapsed = (datetime.utcnow() - start_time).total_seconds()
+            output_size = os.path.getsize(output_path)
+            
+            self._logger.info(
+                "Audio concatenation complete: %.1fs, output %.1f MB",
+                elapsed,
+                output_size / 1024 / 1024,
+            )
+            
+            return output_path
+            
+        except subprocess.TimeoutExpired:
+            self._logger.error("ffmpeg timed out concatenating audio")
+            # Clean up temp file if exists
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+            raise
+        except Exception as exc:
+            # Clean up temp file if exists
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+            raise
 
     def _convert_wav_to_opus(self, wav_path: str) -> Optional[str]:
         """Convert WAV file to Opus using ffmpeg.

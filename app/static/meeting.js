@@ -1482,21 +1482,86 @@ function setAttendeeEditor(attendees) {
   }
 }
 
+function formatPauseDuration(pausedAt, resumedAt) {
+  // Calculate duration between pause and resume times
+  try {
+    const pauseTime = new Date(pausedAt);
+    const resumeTime = new Date(resumedAt);
+    const diffMs = resumeTime - pauseTime;
+    const diffSec = Math.floor(diffMs / 1000);
+    
+    if (diffSec < 60) {
+      return `${diffSec} seconds`;
+    } else if (diffSec < 3600) {
+      const mins = Math.floor(diffSec / 60);
+      return `${mins} minute${mins !== 1 ? 's' : ''}`;
+    } else {
+      const hours = Math.floor(diffSec / 3600);
+      const mins = Math.floor((diffSec % 3600) / 60);
+      if (mins > 0) {
+        return `${hours} hour${hours !== 1 ? 's' : ''} ${mins} min`;
+      }
+      return `${hours} hour${hours !== 1 ? 's' : ''}`;
+    }
+  } catch (e) {
+    return "unknown duration";
+  }
+}
+
+function formatTimeOfDay(isoString) {
+  // Format ISO timestamp as human-readable time
+  try {
+    const date = new Date(isoString);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (e) {
+    return "";
+  }
+}
+
 function buildTranscriptText(segments) {
   const attendees = state.meeting?.attendees || [];
+  const pauseMarkers = state.meeting?.pause_markers || [];
   const attendeeMap = new Map(
     attendees.filter((attendee) => attendee.id).map((attendee) => [attendee.id, attendee])
   );
 
-  return segments
-    .map((segment) => {
-      const start = segment.start.toFixed(2);
-      const end = segment.end.toFixed(2);
-      const speakerId = segment.speaker_id || segment.speaker || "unknown";
-      const speakerName = attendeeMap.get(speakerId)?.name || speakerId;
-      return `[${start}-${end}] [${speakerName}] ${segment.text}`;
-    })
-    .join("\n");
+  // Sort pause markers by audio_position
+  const sortedMarkers = [...pauseMarkers].sort((a, b) => a.audio_position - b.audio_position);
+  let markerIndex = 0;
+  
+  const lines = [];
+  
+  for (const segment of segments) {
+    // Insert any pause markers that occur before or at this segment's start
+    while (markerIndex < sortedMarkers.length && 
+           sortedMarkers[markerIndex].audio_position <= segment.start) {
+      const marker = sortedMarkers[markerIndex];
+      const duration = formatPauseDuration(marker.paused_at, marker.resumed_at);
+      const pauseTime = formatTimeOfDay(marker.paused_at);
+      const resumeTime = formatTimeOfDay(marker.resumed_at);
+      lines.push(`\n--- Recording paused for ${duration} (${pauseTime} - ${resumeTime}) ---\n`);
+      markerIndex++;
+    }
+    
+    // Add the segment
+    const start = segment.start.toFixed(2);
+    const end = segment.end.toFixed(2);
+    const speakerId = segment.speaker_id || segment.speaker || "unknown";
+    const speakerName = attendeeMap.get(speakerId)?.name || speakerId;
+    lines.push(`[${start}-${end}] [${speakerName}] ${segment.text}`);
+  }
+  
+  // Add any remaining pause markers after all segments
+  while (markerIndex < sortedMarkers.length) {
+    const marker = sortedMarkers[markerIndex];
+    const duration = formatPauseDuration(marker.paused_at, marker.resumed_at);
+    const pauseTime = formatTimeOfDay(marker.paused_at);
+    const resumeTime = formatTimeOfDay(marker.resumed_at);
+    lines.push(`\n--- Recording paused for ${duration} (${pauseTime} - ${resumeTime}) ---\n`);
+    markerIndex++;
+  }
+  
+  return lines.join("\n");
 }
 
 function setTranscriptOutput(segments) {
@@ -1555,6 +1620,8 @@ function switchTranscriptTab(tabName) {
   if (tabName === "status") {
     if (searchBar) searchBar.style.display = "none";
     if (searchToggle) searchToggle.style.display = "none";
+    // Render status log when switching to status tab (shows buffered events)
+    renderStatusLog();
   } else {
     if (searchToggle) searchToggle.style.display = "";
   }
@@ -1663,6 +1730,7 @@ function appendStatusLog(event) {
     stage: event.stage,
     phase: event.phase,
     data: event.data,
+    trigger: event.trigger,  // "auto", "manual_all", "manual_diarization", etc.
   };
   state.statusLog.push(entry);
   
@@ -1681,6 +1749,9 @@ function renderStatusLog() {
     return;
   }
   
+  // Track if we're inside a finalization group for indentation
+  let inGroup = false;
+  
   const html = state.statusLog.map((entry, index) => {
     const time = new Date(entry.timestamp).toLocaleTimeString();
     const stageLabel = formatStageLabel(entry.stage);
@@ -1689,13 +1760,38 @@ function renderStatusLog() {
     const hasData = entry.data && Object.keys(entry.data).length > 0;
     const dataId = `status-log-data-${index}`;
     
+    // Handle finalization group markers
+    const isFinalizationStart = entry.stage === "finalization" && entry.phase === "started";
+    const isFinalizationEnd = entry.stage === "finalization" && (entry.phase === "completed" || entry.phase === "failed");
+    
+    // Determine indentation (sub-events within a finalization group are indented)
+    let indent = "";
+    if (isFinalizationStart) {
+      inGroup = true;
+    } else if (isFinalizationEnd) {
+      // End marker itself is not indented
+    } else if (inGroup) {
+      indent = "indented";
+    }
+    
+    // For finalization events, show the trigger/label
+    let displayStage = stageLabel;
+    if (entry.stage === "finalization") {
+      const label = entry.data?.label || (entry.trigger === "auto" ? "Auto-finalization" : "Manual Finalization");
+      displayStage = label;
+      // Reset group tracking on end
+      if (isFinalizationEnd) {
+        inGroup = false;
+      }
+    }
+    
     if (hasData) {
       // Compact format with inline collapsible details
       return `
-        <details class="status-log-entry has-data">
+        <details class="status-log-entry has-data ${indent}">
           <summary>
             <span class="status-log-time">${time}</span>
-            <span class="status-log-stage">${stageLabel}</span>
+            <span class="status-log-stage">${displayStage}</span>
             <span class="status-log-phase ${phaseClass}">${phaseLabel}</span>
           </summary>
           <pre class="status-log-details" id="${dataId}">${escapeHtml(JSON.stringify(entry.data, null, 2))}</pre>
@@ -1703,9 +1799,9 @@ function renderStatusLog() {
     } else {
       // Simple entry without details
       return `
-        <div class="status-log-entry">
+        <div class="status-log-entry ${indent}">
           <span class="status-log-time">${time}</span>
-          <span class="status-log-stage">${stageLabel}</span>
+          <span class="status-log-stage">${displayStage}</span>
           <span class="status-log-phase ${phaseClass}">${phaseLabel}</span>
         </div>`;
     }
@@ -1719,6 +1815,8 @@ function renderStatusLog() {
 
 function formatStageLabel(stage) {
   const labels = {
+    finalization: "Finalization",
+    transcription: "Transcription",
     retranscription: "Re-transcription",
     diarization: "Diarization",
     speaker_names: "Speaker Names",
