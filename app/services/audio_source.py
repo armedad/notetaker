@@ -159,6 +159,12 @@ class LiveAudioSource(AudioDataSource):
         # #region agent log
         _dbg_logger.debug("IS_COMPLETE: stopped=%s has_buffered=%s result=%s", stopped, has_buffered, result)
         # #endregion
+        # Debug: first few calls only
+        if not hasattr(self, '_is_complete_call_count'):
+            self._is_complete_call_count = 0
+        self._is_complete_call_count += 1
+        if self._is_complete_call_count <= 3:
+            print(f"[RESUME-DBG] is_complete() call #{self._is_complete_call_count}: _stopped={self._stopped} capture_stopped={self._audio_service.is_capture_stopped()} has_buffered={has_buffered} -> result={result}")
         return result
     
     def stop(self) -> None:

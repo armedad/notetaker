@@ -57,6 +57,8 @@ class AudioCaptureService:
         self._meeting_id: Optional[str] = None
         self._meeting_store = None
         self._existing_audio_path: Optional[str] = None  # For resumed meetings
+        self._compression_complete_event: Optional[threading.Event] = None  # Signals when compression/concatenation is done
+        self._compression_result_path: Optional[str] = None  # Path to compressed audio after completion
 
     def list_devices(self) -> list[dict]:
         self._logger.debug("Listing audio input devices")
@@ -127,6 +129,8 @@ class AudioCaptureService:
             self._logger.debug("ENABLE_LIVE_TAP: was_stopped_before_clear=%s", was_stopped)
             # #endregion
             self._capture_stopped.clear()
+            # Debug: visible output
+            print(f"[RESUME-DBG] enable_live_tap() called: _live_enabled={self._live_enabled} capture_stopped_was={was_stopped}")
 
     def disable_live_tap(self) -> None:
         with self._lock:
@@ -443,17 +447,53 @@ class AudioCaptureService:
         meeting_id: Optional[str],
         meeting_store: Optional["MeetingStore"],
         existing_audio_path: Optional[str] = None,
-    ) -> None:
+    ) -> threading.Event:
         """Start background thread to compress WAV to Opus.
         
         If existing_audio_path is provided (resumed meeting), concatenates
         existing audio with new wav before compressing to opus.
+        
+        Returns:
+            threading.Event that is set when compression completes.
+            The result path can be retrieved via get_compression_result().
         """
+        # Create event for this compression operation
+        completion_event = threading.Event()
+        self._compression_complete_event = completion_event
+        self._compression_result_path = None
+        
+        # #region agent log
+        import json as _json_c; import time as _time_c
+        try:
+            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                _f.write(_json_c.dumps({"location":"audio_capture.py:_compress_to_opus_async:entry","message":"Starting compression","data":{"meeting_id":meeting_id,"wav_path":wav_path,"existing_audio_path":existing_audio_path,"is_resumed":bool(existing_audio_path)},"timestamp":int(_time_c.time()*1000),"hypothesisId":"A,D"})+"\n")
+        except: pass
+        # #endregion
+        
         def _compress():
             try:
+                # #region agent log
+                try:
+                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                        _f.write(_json_c.dumps({"location":"audio_capture.py:_compress:thread_start","message":"Compression thread started","data":{"meeting_id":meeting_id,"existing_audio_path":existing_audio_path,"existing_exists":os.path.isfile(existing_audio_path) if existing_audio_path else False},"timestamp":int(_time_c.time()*1000),"hypothesisId":"D"})+"\n")
+                except: pass
+                # #endregion
+                
                 if existing_audio_path and os.path.isfile(existing_audio_path):
                     # Resumed meeting: concatenate existing + new, then compress
+                    # #region agent log
+                    try:
+                        with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                            _f.write(_json_c.dumps({"location":"audio_capture.py:_compress:before_concat","message":"About to concatenate","data":{"meeting_id":meeting_id,"existing_audio_path":existing_audio_path,"wav_path":wav_path},"timestamp":int(_time_c.time()*1000),"hypothesisId":"D"})+"\n")
+                    except: pass
+                    # #endregion
                     opus_path = self._concat_and_compress(existing_audio_path, wav_path)
+                    # #region agent log
+                    try:
+                        with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                            _f.write(_json_c.dumps({"location":"audio_capture.py:_compress:after_concat","message":"Concatenation returned","data":{"meeting_id":meeting_id,"opus_path":opus_path,"opus_exists":os.path.isfile(opus_path) if opus_path else False},"timestamp":int(_time_c.time()*1000),"hypothesisId":"D"})+"\n")
+                    except: pass
+                    # #endregion
                     self._logger.info(
                         "Audio concatenation complete: meeting=%s existing=%s new=%s -> %s",
                         meeting_id, existing_audio_path, wav_path, opus_path
@@ -463,11 +503,25 @@ class AudioCaptureService:
                     opus_path = self._convert_wav_to_opus(wav_path)
                 
                 if opus_path and meeting_id and meeting_store:
+                    # #region agent log
+                    try:
+                        with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                            _f.write(_json_c.dumps({"location":"audio_capture.py:_compress:before_update_path","message":"About to update audio_path","data":{"meeting_id":meeting_id,"opus_path":opus_path},"timestamp":int(_time_c.time()*1000),"hypothesisId":"B"})+"\n")
+                    except: pass
+                    # #endregion
                     meeting_store.update_audio_path(meeting_id, opus_path)
+                    # #region agent log
+                    try:
+                        with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                            _f.write(_json_c.dumps({"location":"audio_capture.py:_compress:after_update_path","message":"audio_path updated","data":{"meeting_id":meeting_id,"opus_path":opus_path},"timestamp":int(_time_c.time()*1000),"hypothesisId":"B"})+"\n")
+                    except: pass
+                    # #endregion
                     self._logger.info(
                         "Opus compression complete: meeting=%s opus=%s",
                         meeting_id, opus_path
                     )
+                    # Store result path for retrieval
+                    self._compression_result_path = opus_path
                     # Delete original WAV after successful compression
                     try:
                         os.remove(wav_path)
@@ -475,13 +529,78 @@ class AudioCaptureService:
                     except OSError as e:
                         self._logger.warning("Failed to delete WAV %s: %s", wav_path, e)
             except Exception as exc:
+                # #region agent log
+                try:
+                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                        _f.write(_json_c.dumps({"location":"audio_capture.py:_compress:exception","message":"Compression failed","data":{"meeting_id":meeting_id,"exc_type":type(exc).__name__,"exc_str":str(exc)[:500]},"timestamp":int(_time_c.time()*1000),"hypothesisId":"D"})+"\n")
+                except: pass
+                # #endregion
                 self._logger.error(
                     "Opus compression failed for %s: %s (keeping WAV)",
                     wav_path, exc
                 )
+                # On failure, result path is the original WAV
+                self._compression_result_path = wav_path
+            finally:
+                # #region agent log
+                try:
+                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                        _f.write(_json_c.dumps({"location":"audio_capture.py:_compress:finally","message":"Setting completion event","data":{"meeting_id":meeting_id,"result_path":self._compression_result_path},"timestamp":int(_time_c.time()*1000),"hypothesisId":"A"})+"\n")
+                except: pass
+                # #endregion
+                # Always signal completion, even on failure
+                completion_event.set()
+                self._logger.debug("Compression complete event set")
         
         thread = threading.Thread(target=_compress, name="opus-compress", daemon=True)
         thread.start()
+        return completion_event
+    
+    def wait_for_compression(self, timeout: Optional[float] = None) -> Optional[str]:
+        """Wait for the background compression to complete.
+        
+        Args:
+            timeout: Maximum time to wait in seconds. None means wait forever.
+            
+        Returns:
+            Path to the compressed audio file, or None if no compression is pending
+            or if timeout expired.
+        """
+        # #region agent log
+        import json as _json_w; import time as _time_w
+        try:
+            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                _f.write(_json_w.dumps({"location":"audio_capture.py:wait_for_compression:entry","message":"Wait called","data":{"timeout":timeout,"event_exists":self._compression_complete_event is not None,"event_is_set":self._compression_complete_event.is_set() if self._compression_complete_event else None},"timestamp":int(_time_w.time()*1000),"hypothesisId":"A"})+"\n")
+        except: pass
+        # #endregion
+        
+        if self._compression_complete_event is None:
+            # #region agent log
+            try:
+                with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                    _f.write(_json_w.dumps({"location":"audio_capture.py:wait_for_compression:no_event","message":"No compression event exists","data":{},"timestamp":int(_time_w.time()*1000),"hypothesisId":"A"})+"\n")
+            except: pass
+            # #endregion
+            return None
+        
+        completed = self._compression_complete_event.wait(timeout=timeout)
+        # #region agent log
+        try:
+            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                _f.write(_json_w.dumps({"location":"audio_capture.py:wait_for_compression:after_wait","message":"Wait returned","data":{"completed":completed,"result_path":self._compression_result_path},"timestamp":int(_time_w.time()*1000),"hypothesisId":"A"})+"\n")
+        except: pass
+        # #endregion
+        if completed:
+            return self._compression_result_path
+        else:
+            self._logger.warning("Compression wait timed out after %s seconds", timeout)
+            return None
+    
+    def is_compression_pending(self) -> bool:
+        """Check if there's a compression operation in progress."""
+        if self._compression_complete_event is None:
+            return False
+        return not self._compression_complete_event.is_set()
     
     def _concat_and_compress(self, existing_path: str, new_wav_path: str) -> str:
         """Concatenate existing audio with new WAV and compress to Opus.
@@ -503,14 +622,21 @@ class AudioCaptureService:
             output_path = existing_path.rsplit(".", 1)[0] + ".opus"
         
         # Use a temp file to avoid overwriting while reading
-        temp_output = output_path + ".tmp"
+        # Use .opus extension (not .tmp) so ffmpeg recognizes the output format
+        temp_output = output_path.rsplit(".", 1)[0] + ".concat-temp.opus"
         
+        # Use filter_complex to decode both inputs, normalize sample rates, and concat
+        # The aformat filter ensures both streams have matching sample rate/channels
+        # before concatenation (opus may have different rate than wav)
         cmd = [
             "ffmpeg",
             "-y",  # Overwrite output
             "-i", existing_path,
             "-i", new_wav_path,
-            "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+            "-filter_complex",
+            "[0:a]aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=mono[a0];"
+            "[1:a]aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=mono[a1];"
+            "[a0][a1]concat=n=2:v=0:a=1[out]",
             "-map", "[out]",
             "-c:a", "libopus",
             "-b:a", "32k",
@@ -525,6 +651,13 @@ class AudioCaptureService:
             os.path.basename(new_wav_path),
             os.path.basename(output_path),
         )
+        # #region agent log
+        import json as _json_cc; import time as _time_cc
+        try:
+            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                _f.write(_json_cc.dumps({"location":"audio_capture.py:_concat_and_compress:cmd","message":"ffmpeg command","data":{"cmd":" ".join(cmd),"existing_path":existing_path,"new_wav_path":new_wav_path},"timestamp":int(_time_cc.time()*1000),"hypothesisId":"D"})+"\n")
+        except: pass
+        # #endregion
         start_time = datetime.utcnow()
         
         try:
@@ -535,8 +668,14 @@ class AudioCaptureService:
             )
             
             if result.returncode != 0:
-                stderr = result.stderr.decode("utf-8", errors="replace")[:500]
-                raise RuntimeError(f"ffmpeg concat failed: {stderr}")
+                stderr = result.stderr.decode("utf-8", errors="replace")
+                # #region agent log
+                try:
+                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                        _f.write(_json_cc.dumps({"location":"audio_capture.py:_concat_and_compress:ffmpeg_error","message":"ffmpeg failed","data":{"returncode":result.returncode,"stderr_full":stderr[-2000:]},"timestamp":int(_time_cc.time()*1000),"hypothesisId":"D"})+"\n")
+                except: pass
+                # #endregion
+                raise RuntimeError(f"ffmpeg concat failed: {stderr[-500:]}")
             
             # Replace original with temp
             os.replace(temp_output, output_path)
@@ -733,6 +872,8 @@ class AudioCaptureService:
         if self._callback_counter <= 5:
             self._logger.debug("CALLBACK_LIVE_CHECK: callback_counter=%d live_enabled=%s payload_len=%d", 
                               self._callback_counter, self._live_enabled, len(payload))
+            # Debug: visible output for audio callback
+            print(f"[RESUME-DBG] Audio callback #{self._callback_counter}: live_enabled={self._live_enabled} payload={len(payload)}")
         # #endregion
         if self._live_enabled:
             try:

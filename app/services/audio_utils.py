@@ -87,7 +87,7 @@ def load_audio_pcm(
 
 
 @contextmanager
-def as_wav_file(
+def as_wav_file_delete(
     audio_path: str,
     target_sr: int = 16000,
     mono: bool = True,
@@ -170,6 +170,43 @@ def as_wav_file(
                 os.unlink(tmp_path)
         except OSError as e:
             _logger.warning("Failed to delete temp WAV %s: %s", tmp_path, e)
+
+
+def load_audio_for_whisper(audio_path: str, target_sr: int = 16000) -> np.ndarray:
+    """Load audio directly to numpy array for faster-whisper.
+    
+    Decodes any format via ffmpeg to float32 PCM in memory.
+    Returns shape (n_samples,) normalized to [-1.0, 1.0].
+    
+    Args:
+        audio_path: Path to audio file (any format ffmpeg supports)
+        target_sr: Target sample rate (default 16000 for Whisper)
+        
+    Returns:
+        Float32 numpy array of shape (n_samples,)
+    """
+    audio, _ = load_audio_pcm(audio_path, target_sr=target_sr, mono=True)
+    return audio
+
+
+def load_audio_for_pyannote(audio_path: str, target_sr: int = 16000) -> dict:
+    """Load audio as dict for pyannote pipeline.
+    
+    Decodes any format via ffmpeg and returns in pyannote's expected
+    in-memory format, avoiding the need for temporary WAV files.
+    
+    Args:
+        audio_path: Path to audio file (any format ffmpeg supports)
+        target_sr: Target sample rate (default 16000)
+        
+    Returns:
+        Dict with {"waveform": torch.Tensor, "sample_rate": int}
+        where waveform has shape (1, n_samples).
+    """
+    import torch
+    audio, sr = load_audio_pcm(audio_path, target_sr=target_sr, mono=True)
+    waveform = torch.from_numpy(audio).unsqueeze(0)  # (n_samples,) -> (1, n_samples)
+    return {"waveform": waveform, "sample_rate": sr}
 
 
 def get_audio_duration(audio_path: str) -> Optional[float]:

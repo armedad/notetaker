@@ -1009,10 +1009,23 @@ class MeetingStore:
         
         Used after audio compression (e.g., WAV -> Opus) to point to the new file.
         """
+        # #region agent log
+        import json as _json_uap; import time as _time_uap
+        try:
+            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                _f.write(_json_uap.dumps({"location":"meeting_store.py:update_audio_path:entry","message":"update_audio_path called","data":{"meeting_id":meeting_id,"new_audio_path":audio_path},"timestamp":int(_time_uap.time()*1000),"hypothesisId":"B"})+"\n")
+        except: pass
+        # #endregion
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
                 self._logger.warning("update_audio_path: meeting not found: %s", meeting_id)
+                # #region agent log
+                try:
+                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                        _f.write(_json_uap.dumps({"location":"meeting_store.py:update_audio_path:not_found","message":"Meeting not found","data":{"meeting_id":meeting_id},"timestamp":int(_time_uap.time()*1000),"hypothesisId":"B"})+"\n")
+                except: pass
+                # #endregion
                 return None
             meeting = self._read_meeting_file(path)
             if not meeting:
@@ -1020,6 +1033,12 @@ class MeetingStore:
             old_path = meeting.get("audio_path")
             meeting["audio_path"] = audio_path
             self._write_meeting_file(path, meeting)
+            # #region agent log
+            try:
+                with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
+                    _f.write(_json_uap.dumps({"location":"meeting_store.py:update_audio_path:success","message":"audio_path updated and written","data":{"meeting_id":meeting_id,"old_path":old_path,"new_path":audio_path},"timestamp":int(_time_uap.time()*1000),"hypothesisId":"B"})+"\n")
+            except: pass
+            # #endregion
             self._logger.info(
                 "Audio path updated: meeting=%s old=%s new=%s",
                 meeting_id,

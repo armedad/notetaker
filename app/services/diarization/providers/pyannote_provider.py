@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Union
 
 from app.services.diarization.providers.base import DiarizationConfig, DiarizationProvider
 
@@ -39,15 +40,28 @@ class PyannoteProvider(DiarizationProvider):
         self._logger = logging.getLogger("notetaker.diarization.pyannote")
         self._pipeline = None
 
-    def diarize(self, audio_path: str) -> list[dict]:
+    def diarize(self, audio_source: Union[str, dict]) -> list[dict]:
+        """Run diarization on audio.
+        
+        Args:
+            audio_source: Either a file path (str) or a dict with
+                {"waveform": torch.Tensor, "sample_rate": int} for in-memory
+                audio. Using the dict format avoids temp file creation when
+                processing compressed formats like Opus.
+        """
         # #region agent log
-        _dbg_logger.debug("PYANNOTE_DIARIZE_ENTER: audio_path=%s model=%s device=%s",
-                        audio_path, self._config.model, self._config.device)
+        if isinstance(audio_source, str):
+            _dbg_logger.debug("PYANNOTE_DIARIZE_ENTER: audio_path=%s model=%s device=%s",
+                            audio_source, self._config.model, self._config.device)
+        else:
+            _dbg_logger.debug("PYANNOTE_DIARIZE_ENTER: in_memory_audio model=%s device=%s",
+                            self._config.model, self._config.device)
         _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
         import json as _json
         import os as _os
+        _audio_info = audio_source if isinstance(audio_source, str) else "in_memory_dict"
         with open(_logpath, "a") as _f:
-            _f.write(_json.dumps({"location": "pyannote_provider.py:diarize:enter", "message": "pyannote_diarize_enter", "hypothesisId": "H2", "data": {"audio_path": audio_path, "model": self._config.model, "device": self._config.device, "HF_HUB_OFFLINE": _os.environ.get("HF_HUB_OFFLINE", "not_set")}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
+            _f.write(_json.dumps({"location": "pyannote_provider.py:diarize:enter", "message": "pyannote_diarize_enter", "hypothesisId": "H2", "data": {"audio_source": _audio_info, "model": self._config.model, "device": self._config.device, "HF_HUB_OFFLINE": _os.environ.get("HF_HUB_OFFLINE", "not_set")}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
         # #endregion
         if not self._config.hf_token:
             raise RuntimeError("Missing Hugging Face token for diarization")
@@ -119,11 +133,19 @@ class PyannoteProvider(DiarizationProvider):
         # #region agent log
         import time as _tpy, os as _ospy
         _t0 = _tpy.time()
-        _audio_size_mb = round(_ospy.path.getsize(audio_path)/1024/1024,2) if _ospy.path.isfile(audio_path) else None
-        self._logger.debug("PIPELINE_CALL_START: audio_path=%s audio_size_mb=%s", _ospy.path.basename(audio_path), _audio_size_mb)
-        _dbg_logger.debug("PYANNOTE_PIPELINE_RUN_START: audio_path=%s audio_size_mb=%s", audio_path, _audio_size_mb)
+        if isinstance(audio_source, str):
+            _audio_size_mb = round(_ospy.path.getsize(audio_source)/1024/1024,2) if _ospy.path.isfile(audio_source) else None
+            self._logger.debug("PIPELINE_CALL_START: audio_path=%s audio_size_mb=%s", _ospy.path.basename(audio_source), _audio_size_mb)
+            _dbg_logger.debug("PYANNOTE_PIPELINE_RUN_START: audio_path=%s audio_size_mb=%s", audio_source, _audio_size_mb)
+        else:
+            _waveform = audio_source.get("waveform")
+            _n_samples = _waveform.shape[-1] if _waveform is not None else 0
+            _sr = audio_source.get("sample_rate", 16000)
+            _duration_sec = _n_samples / _sr if _sr else 0
+            self._logger.debug("PIPELINE_CALL_START: in_memory_audio duration_sec=%.1f", _duration_sec)
+            _dbg_logger.debug("PYANNOTE_PIPELINE_RUN_START: in_memory_audio samples=%d sr=%d duration_sec=%.1f", _n_samples, _sr, _duration_sec)
         # #endregion
-        diarization = self._pipeline(audio_path)
+        diarization = self._pipeline(audio_source)
         # #region agent log
         _diar_elapsed = _tpy.time() - _t0
         _dbg_logger.debug("PYANNOTE_PIPELINE_RUN_DONE: elapsed_sec=%.2f", _diar_elapsed)
