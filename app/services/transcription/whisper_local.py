@@ -4,7 +4,9 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
+
+import numpy as np
 
 # Workaround for tqdm threading issue in huggingface_hub downloads
 # This must be set before importing faster_whisper
@@ -179,28 +181,40 @@ class FasterWhisperProvider(TranscriptionProvider):
             segments=segments,
         )
 
-    def stream_segments(self, audio_path: str):
-        if not os.path.exists(audio_path):
-            raise TranscriptionProviderError("Audio file not found")
+    def stream_segments(self, audio_source: Union[str, np.ndarray]):
+        """Stream transcription segments from audio.
+        
+        Args:
+            audio_source: Either a file path (str) or a numpy array of float32
+                audio samples at 16kHz. Numpy arrays avoid temp file creation
+                when transcribing from compressed formats like Opus.
+        """
+        if isinstance(audio_source, str):
+            if not os.path.exists(audio_source):
+                raise TranscriptionProviderError("Audio file not found")
+            # #region agent log
+            _dbg_logger.debug("WHISPER_STREAM_START: audio_path=%s", audio_source)
+            # #endregion
+        else:
+            # #region agent log
+            _dbg_logger.debug("WHISPER_STREAM_START: numpy_array shape=%s dtype=%s", audio_source.shape, audio_source.dtype)
+            # #endregion
 
-        # #region agent log
-        _dbg_logger.debug("WHISPER_STREAM_START: audio_path=%s", audio_path)
-        # #endregion
         model = self._get_model()
         # #region agent log
-        _dbg_logger.debug("WHISPER_STREAM_GOT_MODEL: audio_path=%s calling transcribe", audio_path)
+        _dbg_logger.debug("WHISPER_STREAM_GOT_MODEL: calling transcribe")
         _transcribe_start = time.perf_counter()
         # #endregion
         try:
-            result = model.transcribe(audio_path)
+            result = model.transcribe(audio_source)
             # #region agent log
             _transcribe_elapsed = time.perf_counter() - _transcribe_start
-            _dbg_logger.debug("WHISPER_STREAM_TRANSCRIBE_RETURNED: audio_path=%s elapsed_sec=%.2f", audio_path, _transcribe_elapsed)
+            _dbg_logger.debug("WHISPER_STREAM_TRANSCRIBE_RETURNED: elapsed_sec=%.2f", _transcribe_elapsed)
             # #endregion
             return result
         except Exception as exc:
             # #region agent log
-            _dbg_logger.debug("WHISPER_STREAM_ERROR: audio_path=%s exc_type=%s exc=%s", audio_path, type(exc).__name__, str(exc)[:500])
+            _dbg_logger.debug("WHISPER_STREAM_ERROR: exc_type=%s exc=%s", type(exc).__name__, str(exc)[:500])
             # #endregion
             self._logger.exception("Transcription stream failed: %s", exc)
             raise TranscriptionProviderError("Transcription failed") from exc

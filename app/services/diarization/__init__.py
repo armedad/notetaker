@@ -130,10 +130,10 @@ class DiarizationService:
         # #endregion
         
         try:
-            # Convert any audio format to WAV for consistent provider input
-            from app.services.audio_utils import as_wav_file
-            with as_wav_file(audio_path) as wav_path:
-                return provider.diarize(wav_path)
+            # Load audio directly to memory for pyannote (avoids temp WAV files)
+            from app.services.audio_utils import load_audio_for_pyannote
+            audio_dict = load_audio_for_pyannote(audio_path)
+            return provider.diarize(audio_dict)
         except Exception as exc:
             _dbg(
                 "app/services/diarization/__init__.py:run",
