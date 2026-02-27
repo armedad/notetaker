@@ -286,8 +286,24 @@ class AudioCaptureService:
 
             os.makedirs(self._ctx.recordings_dir, exist_ok=True)
             recording_id = str(uuid.uuid4())
-            filename = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{recording_id}.wav"
+            
+            # Use Opus format directly if available, otherwise fall back to WAV
+            from app.services.opus_writer import is_opus_recording_available
+            use_direct_opus = is_opus_recording_available()
+            file_ext = ".opus" if use_direct_opus else ".wav"
+            filename = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{recording_id}{file_ext}"
             file_path = os.path.join(self._ctx.recordings_dir, filename)
+            
+            # Notify if falling back to WAV (PyOgg not available)
+            if not use_direct_opus and self._meeting_store and self._meeting_id:
+                self._meeting_store.publish_event(
+                    "recording_warning",
+                    self._meeting_id,
+                    {
+                        "warning": "pyogg_unavailable",
+                        "message": "PyOgg library not available. Recording to WAV format (will convert to Opus after recording, adding ~5-15s delay before finalization).",
+                    }
+                )
 
             self._state = RecordingState(
                 recording_id=recording_id,
@@ -299,12 +315,13 @@ class AudioCaptureService:
             )
 
             self._logger.info(
-                "Recording start: id=%s device=%s samplerate=%s channels=%s file=%s",
+                "Recording start: id=%s device=%s samplerate=%s channels=%s file=%s (direct_opus=%s)",
                 recording_id,
                 device_index,
                 samplerate,
                 channels,
                 file_path,
+                is_opus_recording_available(),
             )
 
             self._stop_event.clear()
@@ -425,7 +442,7 @@ class AudioCaptureService:
             meeting_id = self._meeting_id
             meeting_store = self._meeting_store
             existing_audio_path = self._existing_audio_path
-            wav_path = final_state.get("file_path")
+            audio_path = final_state.get("file_path")
 
             # Clear meeting context for audio level publishing
             self._meeting_id = None
@@ -434,10 +451,30 @@ class AudioCaptureService:
 
             self._state = RecordingState()
             
-            # Start background compression to Opus (non-blocking)
-            # For resumed meetings, this will concatenate existing + new audio
-            if wav_path and os.path.isfile(wav_path):
-                self._compress_to_opus_async(wav_path, meeting_id, meeting_store, existing_audio_path)
+            # Handle audio file finalization
+            if audio_path and os.path.isfile(audio_path):
+                if audio_path.endswith(".opus"):
+                    # Direct Opus recording - file is already in final format
+                    if existing_audio_path and os.path.isfile(existing_audio_path):
+                        # Resumed meeting: need to concatenate existing + new opus
+                        self._concat_opus_async(existing_audio_path, audio_path, meeting_id, meeting_store)
+                    else:
+                        # Normal recording: Opus file is ready immediately
+                        self._compression_result_path = audio_path
+                        if meeting_id and meeting_store:
+                            meeting_store.update_audio_path(meeting_id, audio_path)
+                            self._logger.info(
+                                "Direct Opus recording complete: meeting=%s opus=%s",
+                                meeting_id, audio_path
+                            )
+                        # Signal completion immediately since no conversion needed
+                        if self._compression_complete_event is None:
+                            self._compression_complete_event = threading.Event()
+                        self._compression_complete_event.set()
+                else:
+                    # WAV fallback - need to compress to Opus (non-blocking)
+                    # For resumed meetings, this will concatenate existing + new audio
+                    self._compress_to_opus_async(audio_path, meeting_id, meeting_store, existing_audio_path)
             
             return final_state
 
@@ -601,6 +638,132 @@ class AudioCaptureService:
         if self._compression_complete_event is None:
             return False
         return not self._compression_complete_event.is_set()
+    
+    def _concat_opus_async(
+        self,
+        existing_opus_path: str,
+        new_opus_path: str,
+        meeting_id: Optional[str],
+        meeting_store: Optional["MeetingStore"],
+    ) -> threading.Event:
+        """Start background thread to concatenate two Opus files.
+        
+        Used when resuming a meeting with direct Opus recording.
+        The result overwrites the existing opus file.
+        
+        Returns:
+            threading.Event that is set when concatenation completes.
+        """
+        completion_event = threading.Event()
+        self._compression_complete_event = completion_event
+        self._compression_result_path = None
+        
+        def _concat():
+            try:
+                output_path = self._concat_opus_files(existing_opus_path, new_opus_path)
+                
+                if output_path and meeting_id and meeting_store:
+                    meeting_store.update_audio_path(meeting_id, output_path)
+                    self._logger.info(
+                        "Opus concatenation complete: meeting=%s opus=%s",
+                        meeting_id, output_path
+                    )
+                    self._compression_result_path = output_path
+                    
+                    # Delete the new opus file after successful concatenation
+                    try:
+                        os.remove(new_opus_path)
+                        self._logger.debug("Deleted new Opus segment: %s", new_opus_path)
+                    except OSError as e:
+                        self._logger.warning("Failed to delete new Opus %s: %s", new_opus_path, e)
+            except Exception as exc:
+                self._logger.error(
+                    "Opus concatenation failed for %s + %s: %s (keeping both files)",
+                    existing_opus_path, new_opus_path, exc
+                )
+                # On failure, result path is the new opus file
+                self._compression_result_path = new_opus_path
+            finally:
+                completion_event.set()
+                self._logger.debug("Opus concatenation complete event set")
+        
+        thread = threading.Thread(target=_concat, name="opus-concat", daemon=True)
+        thread.start()
+        return completion_event
+    
+    def _concat_opus_files(self, existing_path: str, new_path: str) -> str:
+        """Concatenate two Opus files using ffmpeg.
+        
+        Args:
+            existing_path: Path to existing Opus file
+            new_path: Path to new Opus file to append
+            
+        Returns:
+            Path to the output opus file (same as existing_path)
+        """
+        output_path = existing_path
+        
+        # Use a temp file to avoid overwriting while reading
+        temp_output = output_path.rsplit(".", 1)[0] + ".concat-temp.opus"
+        
+        # Concatenate opus files - simpler than mixed formats since both are opus
+        cmd = [
+            "ffmpeg",
+            "-y",  # Overwrite output
+            "-i", existing_path,
+            "-i", new_path,
+            "-filter_complex",
+            "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+            "-map", "[out]",
+            "-c:a", "libopus",
+            "-b:a", "32k",
+            "-application", "voip",
+            "-vbr", "on",
+            temp_output,
+        ]
+        
+        self._logger.info(
+            "Concatenating Opus files: %s + %s -> %s",
+            os.path.basename(existing_path),
+            os.path.basename(new_path),
+            os.path.basename(output_path),
+        )
+        start_time = datetime.utcnow()
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=600,  # 10 min timeout for potentially long audio
+            )
+            
+            if result.returncode != 0:
+                stderr = result.stderr.decode("utf-8", errors="replace")
+                raise RuntimeError(f"ffmpeg opus concat failed: {stderr[-500:]}")
+            
+            # Replace original with temp
+            os.replace(temp_output, output_path)
+            
+            elapsed = (datetime.utcnow() - start_time).total_seconds()
+            output_size = os.path.getsize(output_path)
+            
+            self._logger.info(
+                "Opus concatenation complete: %.1fs, output %.1f MB",
+                elapsed,
+                output_size / 1024 / 1024,
+            )
+            
+            return output_path
+            
+        except subprocess.TimeoutExpired:
+            self._logger.error("ffmpeg timed out concatenating opus files")
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+            raise
+        except Exception:
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+            raise
     
     def _concat_and_compress(self, existing_path: str, new_wav_path: str) -> str:
         """Concatenate existing audio with new WAV and compress to Opus.
@@ -792,22 +955,38 @@ class AudioCaptureService:
 
             os.makedirs(self._ctx.recordings_dir, exist_ok=True)
             recording_id = str(uuid.uuid4())
-            filename = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{recording_id}.wav"
-            wav_path = os.path.join(self._ctx.recordings_dir, filename)
+            
+            # Use Opus format directly if available, otherwise fall back to WAV
+            from app.services.opus_writer import is_opus_recording_available
+            use_direct_opus = is_opus_recording_available()
+            file_ext = ".opus" if use_direct_opus else ".wav"
+            filename = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{recording_id}{file_ext}"
+            output_path = os.path.join(self._ctx.recordings_dir, filename)
+            
+            # Notify if falling back to WAV (PyOgg not available)
+            if not use_direct_opus and self._meeting_store and self._meeting_id:
+                self._meeting_store.publish_event(
+                    "recording_warning",
+                    self._meeting_id,
+                    {
+                        "warning": "pyogg_unavailable",
+                        "message": "PyOgg library not available. Recording to WAV format (will convert to Opus after recording, adding ~5-15s delay before finalization).",
+                    }
+                )
 
             self._state = RecordingState(
                 recording_id=recording_id,
                 started_at=datetime.utcnow(),
-                file_path=wav_path,
+                file_path=output_path,
                 samplerate=samplerate,
                 channels=channels,
                 dtype="int16",
             )
 
             self._logger.info(
-                "File playback start: id=%s source=%s wav=%s sr=%s ch=%s speed=%s%%",
-                recording_id, os.path.basename(file_path), wav_path,
-                samplerate, channels, speed_percent,
+                "File playback start: id=%s source=%s output=%s sr=%s ch=%s speed=%s%% (direct_opus=%s)",
+                recording_id, os.path.basename(file_path), output_path,
+                samplerate, channels, speed_percent, use_direct_opus,
             )
 
             self._stop_event.clear()
@@ -924,15 +1103,67 @@ class AudioCaptureService:
             )
             return
 
-        self._logger.debug("Writer loop start: %s", file_path)
+        # Check if we should use direct Opus recording
+        from app.services.opus_writer import is_opus_recording_available, OpusStreamWriter
+        use_opus = is_opus_recording_available() and file_path.endswith(".opus")
+
+        self._logger.debug("Writer loop start: %s (opus=%s)", file_path, use_opus)
         nd_dbg(
             "app/services/audio_capture.py:_writer_loop",
             "mic_writer_start",
-            {"file_path": file_path, "samplerate": int(samplerate), "channels": int(channels)},
+            {"file_path": file_path, "samplerate": int(samplerate), "channels": int(channels), "use_opus": use_opus},
             run_id="pre-fix",
             hypothesis_id="M4",
         )
 
+        if use_opus:
+            self._writer_loop_opus(file_path, samplerate, channels)
+        else:
+            self._writer_loop_wav(file_path, samplerate, channels)
+
+        self._logger.debug("Writer loop complete: %s", file_path)
+        nd_dbg(
+            "app/services/audio_capture.py:_writer_loop",
+            "mic_writer_complete",
+            {"file_path": file_path},
+            run_id="pre-fix",
+            hypothesis_id="M4",
+        )
+
+    def _writer_loop_opus(self, file_path: str, samplerate: int, channels: int) -> None:
+        """Write audio directly to Opus format using OpusStreamWriter."""
+        from app.services.opus_writer import OpusStreamWriter
+        
+        with OpusStreamWriter(file_path, sample_rate=samplerate, channels=channels) as writer:
+            wrote_any = False
+            while not self._stop_event.is_set() or not self._audio_queue.empty():
+                try:
+                    data = self._audio_queue.get(timeout=0.1)
+                    writer.write(data)  # PCM bytes go directly to Opus encoder
+                    if not wrote_any:
+                        wrote_any = True
+                        nd_dbg(
+                            "app/services/audio_capture.py:_writer_loop_opus",
+                            "mic_writer_first_write",
+                            {"bytes": len(data)},
+                            run_id="pre-fix",
+                            hypothesis_id="M4",
+                        )
+                except queue.Empty:
+                    continue
+                except Exception as exc:
+                    self._logger.exception("Failed to write audio data to Opus: %s", exc)
+                    nd_dbg(
+                        "app/services/audio_capture.py:_writer_loop_opus",
+                        "mic_writer_error",
+                        {"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
+                        run_id="pre-fix",
+                        hypothesis_id="M4",
+                    )
+                    break
+
+    def _writer_loop_wav(self, file_path: str, samplerate: int, channels: int) -> None:
+        """Write audio to WAV format using soundfile (fallback if PyOgg unavailable)."""
         with sf.SoundFile(
             file_path,
             mode="w",
@@ -951,7 +1182,7 @@ class AudioCaptureService:
                     if not wrote_any:
                         wrote_any = True
                         nd_dbg(
-                            "app/services/audio_capture.py:_writer_loop",
+                            "app/services/audio_capture.py:_writer_loop_wav",
                             "mic_writer_first_write",
                             {"samples": int(frames.shape[0])},
                             run_id="pre-fix",
@@ -960,21 +1191,12 @@ class AudioCaptureService:
                 except queue.Empty:
                     continue
                 except Exception as exc:
-                    self._logger.exception("Failed to write audio data: %s", exc)
+                    self._logger.exception("Failed to write audio data to WAV: %s", exc)
                     nd_dbg(
-                        "app/services/audio_capture.py:_writer_loop",
+                        "app/services/audio_capture.py:_writer_loop_wav",
                         "mic_writer_error",
                         {"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
                         run_id="pre-fix",
                         hypothesis_id="M4",
                     )
                     break
-
-        self._logger.debug("Writer loop complete: %s", file_path)
-        nd_dbg(
-            "app/services/audio_capture.py:_writer_loop",
-            "mic_writer_complete",
-            {"file_path": file_path},
-            run_id="pre-fix",
-            hypothesis_id="M4",
-        )

@@ -1829,6 +1829,12 @@ body.meeting-layout {
   line-height: 1.5;
 }
 
+.summary-none {
+  margin: 0;
+  font-style: italic;
+  color: var(--text-tertiary);
+}
+
 .summary-action-items li {
   margin-bottom: 6px;
 }

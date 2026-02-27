@@ -53,6 +53,14 @@ if [[ "$(uname)" == "Darwin" ]]; then
   else
     log "portaudio: installed"
   fi
+  
+  # Install opus (needed by pyogg for direct Opus recording)
+  if ! brew list opus >/dev/null 2>&1; then
+    log "Installing opus (libopus)..."
+    brew install opus
+  else
+    log "opus: installed"
+  fi
 fi
 
 # ============================================================================
@@ -343,6 +351,13 @@ try:
     print(f"  diart: OK")
 except ImportError as e:
     errors.append(f"diart: {e}")
+
+# Direct Opus recording (optional but recommended)
+try:
+    import pyogg
+    print(f"  pyogg: OK (direct Opus recording enabled)")
+except ImportError as e:
+    print(f"  pyogg: NOT AVAILABLE - will use WAV fallback (slower finalization)")
 
 if errors:
     print("\nImport errors:")
