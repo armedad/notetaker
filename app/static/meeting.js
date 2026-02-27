@@ -1904,14 +1904,14 @@ function renderStructuredSummary(summary) {
     return;
   }
 
-  const hasKeyPoints = Array.isArray(summary.key_points) && summary.key_points.length > 0;
-  const hasDecisions = Array.isArray(summary.decisions) && summary.decisions.length > 0;
-  const hasActionItems = Array.isArray(summary.action_items) && summary.action_items.length > 0;
+  const keyPoints = Array.isArray(summary.key_points) ? summary.key_points : [];
+  const decisions = Array.isArray(summary.decisions) ? summary.decisions : [];
+  const actionItems = Array.isArray(summary.action_items) ? summary.action_items : [];
   const overview = summary.text || summary.overview || "";
 
-  // If no structured fields at all, fall back to plain text
-  if (!hasKeyPoints && !hasDecisions && !hasActionItems && !summary.title) {
-    output.textContent = overview || "No summary yet.";
+  // If no structured fields at all and no title, fall back to plain text
+  if (keyPoints.length === 0 && decisions.length === 0 && actionItems.length === 0 && !summary.title && !overview) {
+    output.textContent = "No summary yet.";
     return;
   }
 
@@ -1921,33 +1921,48 @@ function renderStructuredSummary(summary) {
     html += `<div class="summary-overview">${escapeHtml(overview)}</div>`;
   }
 
-  if (hasKeyPoints) {
-    html += `<div class="summary-section"><h4>Key Points</h4><ul class="summary-list">`;
-    for (const point of summary.key_points) {
+  // Always show Key Points section
+  html += `<div class="summary-section"><h4>Key Points</h4>`;
+  if (keyPoints.length > 0) {
+    html += `<ul class="summary-list">`;
+    for (const point of keyPoints) {
       html += `<li>${escapeHtml(point)}</li>`;
     }
-    html += `</ul></div>`;
+    html += `</ul>`;
+  } else {
+    html += `<p class="summary-none">None</p>`;
   }
+  html += `</div>`;
 
-  if (hasDecisions) {
-    html += `<div class="summary-section"><h4>Decisions</h4><ul class="summary-list">`;
-    for (const decision of summary.decisions) {
+  // Always show Decisions section
+  html += `<div class="summary-section"><h4>Decisions</h4>`;
+  if (decisions.length > 0) {
+    html += `<ul class="summary-list">`;
+    for (const decision of decisions) {
       html += `<li>${escapeHtml(decision)}</li>`;
     }
-    html += `</ul></div>`;
+    html += `</ul>`;
+  } else {
+    html += `<p class="summary-none">None</p>`;
   }
+  html += `</div>`;
 
-  if (hasActionItems) {
-    html += `<div class="summary-section"><h4>Action Items</h4><ul class="summary-list summary-action-items">`;
-    for (const item of summary.action_items) {
+  // Always show Action Items section
+  html += `<div class="summary-section"><h4>Action Items</h4>`;
+  if (actionItems.length > 0) {
+    html += `<ul class="summary-list summary-action-items">`;
+    for (const item of actionItems) {
       const desc = typeof item === "string" ? item : (item.description || "");
       let meta = "";
       if (item.assignee) meta += `<span class="action-item-assignee">${escapeHtml(item.assignee)}</span>`;
       if (item.due_date) meta += `<span class="action-item-due">${escapeHtml(item.due_date)}</span>`;
       html += `<li>${escapeHtml(desc)}${meta ? " " + meta : ""}</li>`;
     }
-    html += `</ul></div>`;
+    html += `</ul>`;
+  } else {
+    html += `<p class="summary-none">None</p>`;
   }
+  html += `</div>`;
 
   output.innerHTML = html;
 }
