@@ -878,15 +878,21 @@ async function refreshRecordingStatus() {
   try {
     const data = await fetchJson("/api/recording/status");
     state.recording = data.recording;
+    state.paused = data.paused || false;
     if (data.file_path) {
       state.lastRecordingPath = data.file_path;
     }
-    // If recording is active, fetch the active meeting ID from the transcription layer
+    // If recording is active, fetch the active meeting ID and pause state from the transcription layer
     if (data.recording && !state.selectedMeetingId) {
       try {
         const activeData = await fetchJson("/api/transcribe/active");
         if (activeData.active && activeData.meeting_id) {
           state.selectedMeetingId = activeData.meeting_id;
+          // Also check the detailed status for pause state
+          try {
+            const statusData = await fetchJson(`/api/transcribe/status/${activeData.meeting_id}`);
+            state.paused = statusData.paused || statusData.state === "paused";
+          } catch (_) {}
         }
       } catch (_) {
         // Ignore errors fetching active transcription
@@ -894,8 +900,11 @@ async function refreshRecordingStatus() {
     }
     const isRecording = state.recording || state.testTranscribing;
     setRecordingToggleLabel(isRecording);
-    setAudioLevelMeterActive(isRecording);
-    if (state.testTranscribing) {
+    setAudioLevelMeterActive(isRecording && !state.paused);
+    updatePauseButton(isRecording, state.paused);
+    if (state.paused) {
+      setStatus("Recording paused");
+    } else if (state.testTranscribing) {
       setStatus("Recording from file");
     } else if (data.recording) {
       setStatus("Recording from mic");
@@ -909,6 +918,55 @@ async function refreshRecordingStatus() {
     setGlobalError("Recording status failed.");
   }
   updateGoToMeetingButton();
+}
+
+function updatePauseButton(isRecording, isPaused) {
+  const pauseBtn = document.getElementById("pause-recording");
+  if (!pauseBtn) return;
+  
+  if (isRecording) {
+    pauseBtn.style.display = "inline-block";
+    pauseBtn.textContent = isPaused ? "Unpause" : "Pause";
+    if (isPaused) {
+      pauseBtn.classList.add("pause-flashing");
+    } else {
+      pauseBtn.classList.remove("pause-flashing");
+    }
+  } else {
+    pauseBtn.style.display = "none";
+    pauseBtn.classList.remove("pause-flashing");
+  }
+}
+
+async function togglePauseRecording() {
+  const meetingId = state.selectedMeetingId || state.fileMeetingId;
+  if (!meetingId) {
+    setOutput("No active meeting to pause/unpause.");
+    return;
+  }
+  
+  const pauseBtn = document.getElementById("pause-recording");
+  if (pauseBtn) {
+    pauseBtn.disabled = true;
+  }
+  
+  try {
+    if (state.paused) {
+      await fetchJson(`/api/transcribe/unpause/${meetingId}`, { method: "POST" });
+      setOutput("Recording resumed");
+    } else {
+      await fetchJson(`/api/transcribe/pause/${meetingId}`, { method: "POST" });
+      setOutput("Recording paused");
+    }
+    await refreshRecordingStatus();
+  } catch (error) {
+    setOutput(`Failed to toggle pause: ${error.message}`);
+    setGlobalError("Pause toggle failed.");
+  } finally {
+    if (pauseBtn) {
+      pauseBtn.disabled = false;
+    }
+  }
 }
 
 async function loadTestAudioPath() {
@@ -1812,6 +1870,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
   }
+  
+  const pauseBtn = document.getElementById("pause-recording");
+  if (pauseBtn) {
+    pauseBtn.addEventListener("click", async () => {
+      await togglePauseRecording();
+    });
+  }
   const testUpload = document.getElementById("test-audio-upload");
   if (testUpload) {
     testUpload.addEventListener("change", (event) => {
@@ -1838,9 +1903,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       updateFileSourceVisibility();
     });
   }
-  const settingsButton = document.getElementById("settings-button");
-  if (settingsButton) {
-    settingsButton.addEventListener("click", () => {
+  const menuSettingsButton = document.getElementById("menu-settings");
+  if (menuSettingsButton) {
+    menuSettingsButton.addEventListener("click", () => {
       window.location.href = "/settings";
     });
   }

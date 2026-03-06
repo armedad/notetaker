@@ -85,6 +85,7 @@ class LiveTranscriptionService:
         self._is_active = False
         self._capture_stopped = False
         self._transcription_complete = False
+        self._paused = False
         self._samplerate: int = 48000
         self._channels: int = 2
         self._meeting_id: Optional[str] = None
@@ -132,6 +133,7 @@ class LiveTranscriptionService:
             self._stop_requested.clear()
             self._capture_stopped = False
             self._transcription_complete = False
+            self._paused = False
             self._last_language = None
             
             # Clear queues
@@ -180,6 +182,64 @@ class LiveTranscriptionService:
             
             return True
 
+    def pause(self) -> dict:
+        """Pause transcription - audio ingestion stops but session remains active.
+        
+        Returns:
+            Status dict with paused state
+        """
+        with self._lock:
+            if not self._is_active:
+                return {"status": "not_active", "paused": False}
+            if self._paused:
+                return {"status": "already_paused", "paused": True}
+            
+            # Delegate to audio service
+            result = self._audio_service.pause()
+            self._paused = True
+            
+            self._logger.info("Live transcription paused")
+            
+            return {
+                "status": "paused",
+                "paused": True,
+                "paused_at": result.get("paused_at"),
+            }
+    
+    def unpause(self) -> dict:
+        """Resume transcription after pause.
+        
+        Returns:
+            Status dict with pause duration and timestamps
+        """
+        with self._lock:
+            if not self._is_active:
+                return {"status": "not_active", "paused": False}
+            if not self._paused:
+                return {"status": "not_paused", "paused": False}
+            
+            # Delegate to audio service
+            result = self._audio_service.unpause()
+            self._paused = False
+            
+            self._logger.info(
+                "Live transcription resumed after %.1fs pause",
+                result.get("pause_duration_seconds", 0),
+            )
+            
+            return {
+                "status": "resumed",
+                "paused": False,
+                "paused_at": result.get("paused_at"),
+                "resumed_at": result.get("resumed_at"),
+                "pause_duration_seconds": result.get("pause_duration_seconds", 0),
+            }
+    
+    def is_paused(self) -> bool:
+        """Check if transcription is currently paused."""
+        with self._lock:
+            return self._paused
+
     def request_stop(self) -> dict:
         """Request stop - returns immediately, transcription continues in background.
         
@@ -196,6 +256,9 @@ class LiveTranscriptionService:
             
             self._stop_requested.set()
             self._audio_service.signal_capture_stopped()
+            
+            # Clear paused state on stop
+            self._paused = False
             
             self._logger.info("Stop requested - capture will stop, transcription continues")
             
@@ -216,6 +279,8 @@ class LiveTranscriptionService:
                 status = "complete"
             elif self._capture_stopped:
                 status = "finishing"
+            elif self._paused:
+                status = "paused"
             else:
                 status = "transcribing"
             
@@ -223,6 +288,7 @@ class LiveTranscriptionService:
                 "status": status,
                 "capture_stopped": self._capture_stopped,
                 "transcription_complete": self._transcription_complete,
+                "paused": self._paused,
                 "chunks_pending": pending_chunks,
             }
 

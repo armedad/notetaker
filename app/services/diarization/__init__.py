@@ -99,9 +99,19 @@ class DiarizationService:
             return self._provider
         raise DiarizationError(f"Unsupported diarization provider: {provider_name}")
 
-    def run(self, audio_path: str) -> list[dict]:
+    def run(self, audio_source: Union[str, dict]) -> list[dict]:
+        """Run batch diarization.
+
+        Args:
+            audio_source: Either a file path (str) that will be decoded via
+                ffmpeg, or a pre-loaded pyannote audio dict
+                ``{"waveform": Tensor, "sample_rate": int}`` so callers can
+                load once and share across transcription / diarization.
+        """
         if not self._config.enabled:
             return []
+
+        is_path = isinstance(audio_source, str)
         _dbg(
             "app/services/diarization/__init__.py:run",
             "diarization_run_enter",
@@ -110,29 +120,21 @@ class DiarizationService:
                 "device": self._config.device,
                 "model": self._config.model,
                 "hf_token_present": bool(self._config.hf_token),
-                "audio_basename": os.path.basename(audio_path or ""),
+                "audio_source_type": "path" if is_path else "in_memory",
+                "audio_basename": os.path.basename(audio_source) if is_path else None,
             },
             run_id="pre-fix",
             hypothesis_id="H3",
         )
-        # #region agent log
-        _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
-        import json as _json
-        with open(_logpath, "a") as _f:
-            _f.write(_json.dumps({"location": "diarization/__init__.py:run:before_load_provider", "message": "loading_diarization_provider", "hypothesisId": "H2", "data": {"provider_name": self.get_provider_name(), "model": self._config.model}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-        # #endregion
-        
+
         provider = self._load_provider()
-        
-        # #region agent log
-        with open(_logpath, "a") as _f:
-            _f.write(_json.dumps({"location": "diarization/__init__.py:run:after_load_provider", "message": "provider_loaded_calling_diarize", "hypothesisId": "H2", "data": {"provider_type": type(provider).__name__}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-        # #endregion
-        
+
         try:
-            # Load audio directly to memory for pyannote (avoids temp WAV files)
-            from app.services.audio_utils import load_audio_for_pyannote
-            audio_dict = load_audio_for_pyannote(audio_path)
+            if is_path:
+                from app.services.audio_utils import load_audio_for_pyannote
+                audio_dict = load_audio_for_pyannote(audio_source)
+            else:
+                audio_dict = audio_source
             return provider.diarize(audio_dict)
         except Exception as exc:
             _dbg(

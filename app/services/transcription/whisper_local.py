@@ -163,7 +163,9 @@ class FasterWhisperProvider(TranscriptionProvider):
 
         if self._diarization.is_enabled():
             try:
-                diarization_segments = self._diarization.run(audio_path)
+                from app.services.audio_utils import load_audio_for_pyannote
+                audio_dict = load_audio_for_pyannote(audio_path)
+                diarization_segments = self._diarization.run(audio_dict)
                 segments = _apply_diarization(segments, diarization_segments)
             except Exception as exc:
                 self._logger.exception("Diarization failed: %s", exc)

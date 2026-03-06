@@ -472,28 +472,34 @@ def create_transcription_router(
             _dbg_logger.debug("POST_LOOP_FINALIZING: meeting_id=%s", meeting_id)
             # #endregion
             
-            # For resumed meetings, wait for audio concatenation to complete
-            # This ensures finalization has the combined audio for re-transcription and diarization
+            # Wait for audio compression/concatenation before finalization reads audio_path.
+            # WAV→Opus compression runs async; without this wait, finalization may read
+            # the stale .wav path after the file has already been deleted.
             # #region agent log
             try:
                 with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_res:
                     _f_res.write(json.dumps({"location":"transcription.py:before_wait_check","message":"About to check is_resumed_meeting","data":{"meeting_id":meeting_id,"is_resumed_meeting":is_resumed_meeting,"audio_offset":audio_offset},"timestamp":int(time.time()*1000),"hypothesisId":"A"})+"\n")
             except: pass
             # #endregion
-            if is_resumed_meeting:
-                logger.info("Resumed meeting: waiting for audio concatenation to complete...")
+            # Wait for audio compression/concatenation to complete before finalization.
+            # For WAV recordings, compression to Opus runs async; we must wait so
+            # the meeting's audio_path is updated before diarization tries to read it.
+            if True:
+                if is_resumed_meeting:
+                    logger.info("Resumed meeting: waiting for audio concatenation to complete...")
+                else:
+                    logger.info("Waiting for audio compression to complete...")
                 # #region agent log
                 try:
                     with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_res:
-                        _f_res.write(json.dumps({"location":"transcription.py:before_wait","message":"Calling wait_for_compression","data":{"meeting_id":meeting_id},"timestamp":int(time.time()*1000),"hypothesisId":"A"})+"\n")
+                        _f_res.write(json.dumps({"location":"transcription.py:before_wait","message":"Calling wait_for_compression","data":{"meeting_id":meeting_id,"is_resumed":is_resumed_meeting},"timestamp":int(time.time()*1000),"hypothesisId":"A"})+"\n")
                 except: pass
                 # #endregion
                 meeting_store.publish_finalization_status(
                     meeting_id,
-                    "Combining audio files...",
+                    "Processing audio..." if not is_resumed_meeting else "Combining audio files...",
                     0.02,
                 )
-                # Wait up to 5 minutes for concatenation (long meetings may take a while)
                 combined_audio_path = audio_service.wait_for_compression(timeout=300)
                 # #region agent log
                 try:
@@ -648,6 +654,9 @@ def create_transcription_router(
                         _dbg_logger.debug("FINAL_PIPELINE_GET: meeting_id=%s model=%s device=%s compute=%s",
                                          meeting_id, final_model if final_model != "none" else model_size, final_device, final_compute)
                         # #endregion
+                        # Transcription is done (re-transcribed, skipped, or used live segments)
+                        meeting_store.mark_finalization_stage(meeting_id, "transcription")
+
                         final_pipeline = get_pipeline(
                             final_model if final_model != "none" else model_size,
                             final_device, final_compute,
@@ -663,9 +672,13 @@ def create_transcription_router(
                         # #endregion
                         logger.info("Meeting finalized: meeting_id=%s segments=%d", meeting_id, len(disk_segments))
                     else:
+                        for stage in ("transcription", "diarization", "speaker_names", "summary"):
+                            meeting_store.mark_finalization_stage(meeting_id, stage)
                         meeting_store.update_status(meeting_id, "completed")
                         logger.info("Meeting completed (no segments): meeting_id=%s", meeting_id)
                 else:
+                    for stage in ("transcription", "diarization", "speaker_names", "summary"):
+                        meeting_store.mark_finalization_stage(meeting_id, stage)
                     meeting_store.update_status(meeting_id, "completed")
             finally:
                 active_tracker.unregister(meeting_id)
@@ -841,19 +854,25 @@ def create_transcription_router(
 
         Returns one of:
           recording             – actively processing audio (mic or file)
+          paused                – recording is paused (audio not being captured)
           finalizing            – live diarization / summarization running
           background_finalizing – background sweep processing
           idle                  – nothing running for this meeting
         """
         active = active_tracker.get_state(meeting_id)
         if active:
+            state_value = active.state.value
+            # Check if recording is paused
+            if active.state == MeetingState.RECORDING and audio_service.is_paused():
+                state_value = "paused"
             return {
                 "meeting_id": meeting_id,
-                "state": active.state.value,
+                "state": state_value,
                 "stage": active.stage,
                 "started_at": active.started_at.isoformat(),
+                "paused": audio_service.is_paused() if active.state == MeetingState.RECORDING else False,
             }
-        return {"meeting_id": meeting_id, "state": "idle"}
+        return {"meeting_id": meeting_id, "state": "idle", "paused": False}
 
     @router.get("/api/transcribe/finalizing")
     def get_finalizing_meetings_list() -> dict:
@@ -907,6 +926,113 @@ def create_transcription_router(
             }
         
         return {"status": "not_found", "meeting_id": meeting_id}
+
+    @router.post("/api/transcribe/pause/{meeting_id}")
+    def pause_transcription(meeting_id: str) -> dict:
+        """Pause audio ingestion for a meeting.
+        
+        When paused:
+        - Audio from microphone/file is ignored (not transcribed)
+        - Opus file stops recording new audio
+        - For file playback, the file continues playing (audio is lost during pause)
+        
+        Returns immediately with pause status.
+        """
+        # Check if meeting is actively recording
+        active = active_tracker.get_state(meeting_id)
+        if not active or active.state != MeetingState.RECORDING:
+            raise HTTPException(
+                status_code=400,
+                detail="Meeting is not actively recording"
+            )
+        
+        # Check if already paused
+        if audio_service.is_paused():
+            return {
+                "status": "already_paused",
+                "meeting_id": meeting_id,
+            }
+        
+        # Pause the audio capture
+        try:
+            result = audio_service.pause()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        
+        logger.info("Paused transcription: meeting_id=%s", meeting_id)
+        return {
+            "status": "paused",
+            "meeting_id": meeting_id,
+            "paused_at": result.get("paused_at"),
+        }
+
+    @router.post("/api/transcribe/unpause/{meeting_id}")
+    def unpause_transcription(meeting_id: str) -> dict:
+        """Resume audio ingestion for a paused meeting.
+        
+        When unpaused:
+        - Audio ingestion resumes with continuous timestamps
+        - A pause marker is added to the transcript showing wall-clock duration
+        
+        Returns immediately with unpause status.
+        """
+        from app.services.audio_utils import get_audio_duration
+        
+        # Check if meeting is actively recording
+        active = active_tracker.get_state(meeting_id)
+        if not active or active.state != MeetingState.RECORDING:
+            raise HTTPException(
+                status_code=400,
+                detail="Meeting is not actively recording"
+            )
+        
+        # Check if actually paused
+        if not audio_service.is_paused():
+            return {
+                "status": "not_paused",
+                "meeting_id": meeting_id,
+            }
+        
+        # Unpause the audio capture
+        try:
+            result = audio_service.unpause()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        
+        # Get current audio position for the pause marker
+        # For simplicity, we estimate based on what's been recorded so far
+        # The audio file is still being written, so we use the current status
+        status = audio_service.current_status()
+        audio_path = status.get("file_path")
+        audio_position = 0.0
+        if audio_path and os.path.isfile(audio_path):
+            try:
+                duration = get_audio_duration(audio_path)
+                if duration:
+                    audio_position = duration
+            except Exception:
+                pass
+        
+        # Add pause marker to meeting
+        meeting_store.add_pause_marker(
+            meeting_id,
+            audio_position=audio_position,
+            paused_at=result.get("paused_at", datetime.utcnow().isoformat()),
+            resumed_at=result.get("resumed_at", datetime.utcnow().isoformat()),
+        )
+        
+        logger.info(
+            "Unpaused transcription: meeting_id=%s pause_duration=%.1fs",
+            meeting_id,
+            result.get("pause_duration_seconds", 0),
+        )
+        return {
+            "status": "resumed",
+            "meeting_id": meeting_id,
+            "paused_at": result.get("paused_at"),
+            "resumed_at": result.get("resumed_at"),
+            "pause_duration_seconds": result.get("pause_duration_seconds", 0),
+        }
 
     @router.post("/api/transcribe/resume/{meeting_id}")
     def resume_transcription(meeting_id: str) -> dict:

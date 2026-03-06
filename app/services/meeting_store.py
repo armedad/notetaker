@@ -2151,7 +2151,6 @@ class MeetingStore:
         "diarization": "Diarization",
         "speaker_names": "Speaker Names",
         "summary": "Summary",
-        "title": "Title",
     }
 
     def _default_finalization_state(self) -> dict:
@@ -2165,8 +2164,6 @@ class MeetingStore:
             "speaker_names_error": None,
             "summary": self.FINALIZATION_PENDING,
             "summary_error": None,
-            "title": self.FINALIZATION_PENDING,
-            "title_error": None,
         }
 
     def _migrate_finalization_state(self, finalization: dict) -> dict:
@@ -2189,11 +2186,9 @@ class MeetingStore:
                 finalization["transcription"] = self.FINALIZATION_COMPLETED
                 finalization["transcription_error"] = None
             
-            # For existing meetings without title stage, assume it's completed
-            # (title was set by summary or not needed)
-            if "title" not in finalization:
-                finalization["title"] = self.FINALIZATION_COMPLETED
-                finalization["title_error"] = None
+            # Clean up removed "title" stage from older meetings
+            finalization.pop("title", None)
+            finalization.pop("title_error", None)
             
             return finalization
         
@@ -2217,10 +2212,6 @@ class MeetingStore:
         # For migrated meetings, assume transcription is already done
         migrated["transcription"] = self.FINALIZATION_COMPLETED
         migrated["transcription_error"] = None
-        
-        # For migrated meetings, assume title is already set or not needed
-        migrated["title"] = self.FINALIZATION_COMPLETED
-        migrated["title_error"] = None
         
         return migrated
 

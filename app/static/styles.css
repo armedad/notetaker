@@ -755,6 +755,31 @@ button:disabled {
   color: var(--color-warning-text);
 }
 
+.status-badge.paused {
+  background-color: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+/* Flashing pause button animation */
+@keyframes pause-flash {
+  0%, 100% {
+    background-color: var(--color-error-bg, #fee2e2);
+    border-color: var(--color-error-text, #dc2626);
+    color: var(--color-error-text, #dc2626);
+  }
+  50% {
+    background-color: var(--bg-tertiary, #e5e5e5);
+    border-color: var(--border-default, #d4d4d4);
+    color: var(--text-secondary, #737373);
+  }
+}
+
+button.pause-flashing {
+  animation: pause-flash 1.5s ease-in-out infinite;
+  border-width: 2px;
+  border-style: solid;
+}
+
 .model-registry {
   border: 1px solid var(--border-default);
   border-radius: 8px;
@@ -1792,6 +1817,42 @@ body.meeting-layout {
 .grid-panel .output.transcript {
   font-family: inherit;
   white-space: pre-wrap;
+}
+
+/* Transcript live-scroll button */
+.transcript-live-btn {
+  position: absolute;
+  bottom: 10px;
+  right: 14px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0.9;
+  transition: opacity 0.15s, background 0.15s, color 0.15s, box-shadow 0.15s;
+  z-index: 2;
+}
+
+.transcript-live-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+.transcript-live-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.panel-tab-content[data-tab-content="transcript"] {
+  position: relative;
 }
 
 /* =============================================================================

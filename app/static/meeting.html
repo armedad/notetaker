@@ -30,6 +30,7 @@
           <div class="audio-level-meter" id="audio-level-meter">
             <div class="audio-level-bar" id="audio-level-bar"></div>
           </div>
+          <button id="pause-transcription" class="secondary" style="display: none;">Pause</button>
           <button id="stop-transcription" class="secondary" style="display: none;">Stop recording</button>
           <button id="resume-transcription" class="secondary" style="display: none;">Resume</button>
           <button id="export-meeting" class="secondary">Export</button>
@@ -92,6 +93,7 @@
             <div class="panel-tab-content active" data-tab-content="transcript">
               <div class="status" id="transcript-status">No transcript yet.</div>
               <div class="output transcript" id="transcript-output"></div>
+              <button class="transcript-live-btn" id="transcript-live-btn" disabled title="Following live transcript">Live</button>
             </div>
             <div class="panel-tab-content" data-tab-content="status">
               <div class="refinalize-controls" id="refinalize-controls">
