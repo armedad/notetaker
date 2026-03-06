@@ -31,8 +31,15 @@
           <div class="audio-level-meter" id="audio-level-meter">
             <div class="audio-level-bar" id="audio-level-bar"></div>
           </div>
+          <button id="pause-recording" class="secondary" style="display:none">Pause</button>
           <button id="recording-toggle">Start recording</button>
-          <button id="settings-button" class="secondary">Settings</button>
+          <div class="header-menu-wrapper">
+            <button id="profile-toggle" class="secondary">Profile ▾</button>
+            <div class="header-menu" id="profile-menu">
+              <button id="menu-settings" class="secondary">Settings</button>
+              <button id="menu-auth" class="secondary" disabled>Login (soon)</button>
+            </div>
+          </div>
           <div class="notification-center">
             <button id="notification-toggle" class="notification-bell" title="Notifications">
               🔔
@@ -49,12 +56,6 @@
               <div id="notification-list" class="notification-list">
                 <div class="notification-empty">No notifications</div>
               </div>
-            </div>
-          </div>
-          <div class="header-menu-wrapper">
-            <button id="profile-toggle" class="secondary">Profile ▾</button>
-            <div class="header-menu" id="profile-menu">
-              <button id="menu-auth" class="secondary" disabled>Login (soon)</button>
             </div>
           </div>
         </div>

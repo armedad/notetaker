@@ -38,6 +38,9 @@ echo "Version bumped to ${NEXT_VERSION}"
 
 mkdir -p "${DEST_DIR}"
 
+# Remove stale .git if present — rsync --delete won't touch excluded paths
+rm -rf "${DEST_DIR}/.git"
+
 rsync -av --delete \
   --exclude ".git/" \
   --exclude "__pycache__/" \

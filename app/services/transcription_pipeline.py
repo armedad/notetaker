@@ -18,7 +18,7 @@ import json
 import tempfile
 import threading
 import time
-from typing import TYPE_CHECKING, Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, Optional, Union
 
 import numpy as np
 import soundfile as sf
@@ -230,13 +230,13 @@ class TranscriptionPipeline:
 
     def run_diarization(
         self,
-        audio_path: str,
+        audio_source: Union[str, dict],
         segments: list[dict],
     ) -> list[dict]:
         """Apply diarization to segments if enabled.
         
         Args:
-            audio_path: Path to audio file (any format supported)
+            audio_source: File path (str) or pre-loaded pyannote audio dict
             segments: List of transcript segments
             
         Returns:
@@ -246,7 +246,9 @@ class TranscriptionPipeline:
             return segments
         
         try:
-            self._logger.info("Diarization start: audio=%s", audio_path)
+            is_path = isinstance(audio_source, str)
+            self._logger.info("Diarization start: source=%s",
+                              audio_source if is_path else "in_memory")
             # #region agent log
             try:
                 dbg(
@@ -256,7 +258,7 @@ class TranscriptionPipeline:
                     data={
                         "provider": getattr(self._diarization, "get_provider_name", lambda: "unknown")(),
                         "segments_in": len(segments) if segments else 0,
-                        "audio_basename": os.path.basename(audio_path or ""),
+                        "audio_source_type": "path" if is_path else "in_memory",
                     },
                     run_id="pre-fix",
                     hypothesis_id="H3",
@@ -264,8 +266,10 @@ class TranscriptionPipeline:
             except Exception:
                 pass
             # #endregion
-            # DiarizationService handles audio format conversion internally
-            diarization_segments = self._diarization.run(audio_path)
+            if is_path:
+                from app.services.audio_utils import load_audio_for_pyannote
+                audio_source = load_audio_for_pyannote(audio_source)
+            diarization_segments = self._diarization.run(audio_source)
             segments = apply_diarization(segments, diarization_segments)
             speaker_count = len(set(s.get("speaker") for s in segments if s.get("speaker")))
             self._logger.info("Diarization complete: speakers=%s", speaker_count)
@@ -659,12 +663,14 @@ class TranscriptionPipeline:
             
             # Step 1-3: Run batch diarization if enabled and audio available
             diarization_segments = []
+            diarization_ran = False
             # #region agent log
             _dbg_logger.debug("batch_diarization_check: meeting_id=%s has_audio=%s diar_enabled=%s will_run=%s",
                              meeting_id, bool(audio_path), self._diarization.is_enabled(),
                              bool(audio_path and self._diarization.is_enabled()))
             # #endregion
             if audio_path and self._diarization.is_enabled():
+                diarization_ran = True
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Diarization...", 0.1
                 )
@@ -676,8 +682,11 @@ class TranscriptionPipeline:
                 _dbg_logger.debug("DIARIZATION_START: meeting_id=%s", meeting_id)
                 # #endregion
                 try:
-                    # DiarizationService handles audio format conversion internally
-                    diarization_segments = self._diarization.run(audio_path)
+                    # Load audio into memory once — avoids file-path coupling
+                    # and lets us share the data with other consumers if needed.
+                    from app.services.audio_utils import load_audio_for_pyannote
+                    audio_dict = load_audio_for_pyannote(audio_path)
+                    diarization_segments = self._diarization.run(audio_dict)
                     self._logger.info(
                         "Diarization complete: meeting_id=%s segments=%d",
                         meeting_id,
@@ -780,7 +789,7 @@ class TranscriptionPipeline:
                             "traceback": tb_str,
                         }
                     )
-            elif audio_path and self._diarization.is_enabled():
+            elif diarization_ran:
                 # Diarization ran but returned no segments - no speakers to identify
                 self._meeting_store.mark_finalization_stage(meeting_id, "speaker_names")
             else:

@@ -2,6 +2,20 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Safety check: never run from development folder
+if [[ -d "${PROJECT_DIR}/.git" ]]; then
+    echo "ERROR: Cannot launch from development folder."
+    echo ""
+    echo "This appears to be a git repository (development folder)."
+    echo "Please deploy first and run from the deployment folder:"
+    echo ""
+    echo "  ./deploy.sh"
+    echo "  ~/projects/notetaker/notetaker.sh"
+    echo ""
+    exit 1
+fi
+
 PID_FILE="${PROJECT_DIR}/.notetaker.pid"
 VERSION_FILE="${PROJECT_DIR}/VERSION.txt"
 LAST_VERSION_FILE="${PROJECT_DIR}/.last_version"
@@ -76,6 +90,12 @@ fi
 
 source ".venv/bin/activate"
 
+# Ensure Homebrew shared libraries (libopus, libogg, libopusenc) are discoverable
+# by ctypes / PyOgg so direct-to-Opus recording works without WAV fallback.
+if [[ -d "/opt/homebrew/lib" ]]; then
+  export DYLD_LIBRARY_PATH="/opt/homebrew/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+fi
+
 log "Installing dependencies"
 pip install -r requirements.txt
 log "Checking installed dependencies"
@@ -102,6 +122,15 @@ try:
 except Exception as exc:
     print(f"[preflight] run import: FAIL: {exc}")
     sys.exit(1)
+PY
+
+log "Preflight: PyOgg/Opus encoder availability"
+python - <<'PY'
+try:
+    from pyogg import OpusBufferedEncoder, OggOpusWriter
+    print("[preflight] pyogg: OK (direct Opus recording available)")
+except ImportError as exc:
+    print(f"[preflight] pyogg: WARN: {exc} — will fall back to WAV recording")
 PY
 
 log "Preflight: whisperx/torch availability"

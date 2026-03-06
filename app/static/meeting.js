@@ -24,6 +24,8 @@ const state = {
   // Status log state (for rich status panel)
   statusLog: [],           // Array of status log entries from SSE events
   activeTranscriptTab: "transcript", // "transcript" or "status"
+  // Transcript live-scroll state
+  transcriptLiveScroll: true, // Auto-scroll transcript to bottom on new content
 };
 
 /**
@@ -1575,6 +1577,41 @@ function setTranscriptOutput(segments) {
   }
   const text = buildTranscriptText(segments);
   output.textContent = text;
+  if (state.transcriptLiveScroll) {
+    output.scrollTop = output.scrollHeight;
+  }
+}
+
+// =============================================================================
+// Transcript Live Scroll
+// =============================================================================
+
+function initTranscriptLiveScroll() {
+  const output = document.getElementById("transcript-output");
+  const btn = document.getElementById("transcript-live-btn");
+  if (!output || !btn) return;
+
+  output.addEventListener("scroll", () => {
+    const atBottom = (output.scrollHeight - output.scrollTop - output.clientHeight) <= 30;
+    if (atBottom) {
+      setTranscriptLiveScroll(true);
+    } else if (state.transcriptLiveScroll) {
+      setTranscriptLiveScroll(false);
+    }
+  });
+
+  btn.addEventListener("click", () => {
+    setTranscriptLiveScroll(true);
+    output.scrollTop = output.scrollHeight;
+  });
+}
+
+function setTranscriptLiveScroll(live) {
+  state.transcriptLiveScroll = live;
+  const btn = document.getElementById("transcript-live-btn");
+  if (!btn) return;
+  btn.disabled = live;
+  btn.classList.toggle("active", live);
 }
 
 // =============================================================================
@@ -2841,6 +2878,7 @@ async function updateTranscriptionControls() {
   // #region agent log
   fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'meeting.js:updateTranscriptionControls:enter',message:'updateTranscriptionControls called',data:{meetingId:state.meetingId,hasMeeting:!!state.meeting,meetingStatus:state.meeting?.status},timestamp:Date.now(),runId:'meeting-controls-fix',hypothesisId:'H1-H2'})}).catch(()=>{});
   // #endregion
+  const pauseBtn = document.getElementById("pause-transcription");
   const stopBtn = document.getElementById("stop-transcription");
   const resumeBtn = document.getElementById("resume-transcription");
   const statusBadge = document.getElementById("transcription-status-badge");
@@ -2859,7 +2897,7 @@ async function updateTranscriptionControls() {
     statusBadge: !!statusBadge 
   });
   
-  if (!stopBtn || !resumeBtn || !statusBadge) {
+  if (!pauseBtn || !stopBtn || !resumeBtn || !statusBadge) {
     logToServer("missing elements, returning");
     return;
   }
@@ -2867,6 +2905,7 @@ async function updateTranscriptionControls() {
   const meeting = state.meeting;
   if (!meeting) {
     logToServer("no meeting");
+    pauseBtn.style.display = "none";
     stopBtn.style.display = "none";
     resumeBtn.style.display = "none";
     statusBadge.textContent = "";
@@ -2898,18 +2937,34 @@ async function updateTranscriptionControls() {
   });
   
   // Show controls based on the real backend state
-  // liveState can be: "recording", "finalizing", "background_finalizing", or "idle"
+  // liveState can be: "recording", "paused", "finalizing", "background_finalizing", or "idle"
   if (liveState === "recording") {
-    logToServer("showing stop (recording)");
+    logToServer("showing stop and pause (recording)");
+    pauseBtn.style.display = "inline-block";
+    pauseBtn.textContent = "Pause";
+    pauseBtn.disabled = false;
+    pauseBtn.classList.remove("pause-flashing");
     stopBtn.style.display = "inline-block";
     resumeBtn.style.display = "none";
     statusBadge.textContent = "Recording";
     statusBadge.className = "status-badge in-progress";
     setAudioLevelMeterActive(true);
+  } else if (liveState === "paused") {
+    logToServer("showing stop and unpause (paused)");
+    pauseBtn.style.display = "inline-block";
+    pauseBtn.textContent = "Unpause";
+    pauseBtn.disabled = false;
+    pauseBtn.classList.add("pause-flashing");
+    stopBtn.style.display = "inline-block";
+    resumeBtn.style.display = "none";
+    statusBadge.textContent = "Paused";
+    statusBadge.className = "status-badge paused";
+    setAudioLevelMeterActive(false);
   } else if (liveState === "finalizing") {
     // Finalization is actively running in the backend thread.
     // Detailed step text arrives via SSE finalization_status events.
     logToServer("finalizing in background");
+    pauseBtn.style.display = "none";
     stopBtn.style.display = "none";
     resumeBtn.style.display = "none";
     statusBadge.textContent = "Finalizing...";
@@ -2919,6 +2974,7 @@ async function updateTranscriptionControls() {
     // Backend says idle but meeting file still says in_progress —
     // stale state from a crashed/restarted server.  Show as completed.
     logToServer("stale in_progress, treating as completed");
+    pauseBtn.style.display = "none";
     stopBtn.style.display = "none";
     resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
     statusBadge.textContent = "Completed";
@@ -2933,6 +2989,7 @@ async function updateTranscriptionControls() {
   } else if (meetingStatus === "completed" && meeting.audio_path) {
     // Meeting is completed but has audio - can resume
     logToServer("completed with audio, showing resume");
+    pauseBtn.style.display = "none";
     stopBtn.style.display = "none";
     resumeBtn.style.display = isAnyActive ? "none" : "inline-block";
     statusBadge.textContent = isAnyActive ? "Completed (another active)" : "Completed";
@@ -2941,11 +2998,76 @@ async function updateTranscriptionControls() {
   } else {
     // No audio path or other state
     logToServer("else branch - hiding all", { meetingStatus, audioPath: meeting.audio_path });
+    pauseBtn.style.display = "none";
     stopBtn.style.display = "none";
     setAudioLevelMeterActive(false);
     resumeBtn.style.display = "none";
     statusBadge.textContent = meetingStatus === "completed" ? "Completed" : "";
     statusBadge.className = "status-badge completed";
+  }
+}
+
+async function pauseTranscription() {
+  if (!state.meetingId) return;
+  
+  const pauseBtn = document.getElementById("pause-transcription");
+  if (pauseBtn) {
+    pauseBtn.disabled = true;
+    pauseBtn.textContent = "Pausing...";
+  }
+  
+  try {
+    const result = await fetchJson(`/api/transcribe/pause/${state.meetingId}`, { method: "POST" });
+    debugLog("Transcription paused", { meetingId: state.meetingId, result });
+    
+    // Update controls to show paused state
+    await updateTranscriptionControls();
+  } catch (error) {
+    setGlobalError(`Failed to pause: ${error.message}`);
+    debugError("Pause transcription failed", error);
+    if (pauseBtn) {
+      pauseBtn.disabled = false;
+      pauseBtn.textContent = "Pause";
+    }
+  }
+}
+
+async function unpauseTranscription() {
+  if (!state.meetingId) return;
+  
+  const pauseBtn = document.getElementById("pause-transcription");
+  if (pauseBtn) {
+    pauseBtn.disabled = true;
+    pauseBtn.textContent = "Resuming...";
+  }
+  
+  try {
+    const result = await fetchJson(`/api/transcribe/unpause/${state.meetingId}`, { method: "POST" });
+    debugLog("Transcription unpaused", { meetingId: state.meetingId, result });
+    
+    // Update controls to show recording state
+    await updateTranscriptionControls();
+  } catch (error) {
+    setGlobalError(`Failed to unpause: ${error.message}`);
+    debugError("Unpause transcription failed", error);
+    if (pauseBtn) {
+      pauseBtn.disabled = false;
+      pauseBtn.textContent = "Unpause";
+    }
+  }
+}
+
+async function togglePause() {
+  // Check current state and toggle
+  try {
+    const statusResp = await fetchJson(`/api/transcribe/status/${state.meetingId}`);
+    if (statusResp.state === "paused") {
+      await unpauseTranscription();
+    } else {
+      await pauseTranscription();
+    }
+  } catch (error) {
+    debugError("Toggle pause failed", error);
   }
 }
 
@@ -3066,6 +3188,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     .addEventListener("click", exportMeeting);
   
   // Transcription controls
+  const pauseBtn = document.getElementById("pause-transcription");
+  if (pauseBtn) {
+    pauseBtn.addEventListener("click", togglePause);
+  }
   const stopBtn = document.getElementById("stop-transcription");
   if (stopBtn) {
     stopBtn.addEventListener("click", stopTranscription);
@@ -3152,6 +3278,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   
   // Initialize transcript/status tab switching
   initTranscriptPanelTabs();
+  initTranscriptLiveScroll();
   
   // Initialize re-finalization controls
   initRefinalizeControls();

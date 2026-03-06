@@ -152,7 +152,7 @@ class BackgroundFinalizer:
         import threading
         
         # Define the correct dependency order
-        STAGE_ORDER = ["transcription", "diarization", "speaker_names", "summary", "title"]
+        STAGE_ORDER = ["transcription", "diarization", "speaker_names", "summary"]
         
         # Sort requested stages by dependency order
         ordered_stages = [s for s in STAGE_ORDER if s in stages]
@@ -206,8 +206,6 @@ class BackgroundFinalizer:
                             self._run_speaker_names_stage(meeting_id, segments)
                         elif stage == "summary":
                             self._run_summary_stage(meeting_id)
-                        elif stage == "title":
-                            self._run_title_stage(meeting_id)
                         else:
                             _logger.warning("run_stages_now: unknown stage %s", stage)
                     except Exception as exc:
@@ -319,6 +317,7 @@ class BackgroundFinalizer:
     def _run_diarization_stage(self, meeting_id: str, audio_path: str, segments: list) -> None:
         """Run diarization stage."""
         from app.services.transcription_pipeline import apply_diarization
+        from app.services.audio_utils import load_audio_for_pyannote
         
         # #region agent log
         _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
@@ -337,13 +336,10 @@ class BackgroundFinalizer:
             return
         
         try:
-            # #region agent log
-            with open(_logpath, "a") as _f:
-                _f.write(_json.dumps({"location": "background_finalizer.py:_run_diarization_stage:before_run", "message": "calling_diarization_run", "hypothesisId": "H2", "data": {"meeting_id": meeting_id, "audio_path": audio_path}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-            # #endregion
-            
-            # DiarizationService handles audio format conversion internally
-            diarization_segments = self._diarization.run(audio_path)
+            # Load audio into memory once so diarization doesn't depend on
+            # the file path remaining valid throughout processing.
+            audio_dict = load_audio_for_pyannote(audio_path)
+            diarization_segments = self._diarization.run(audio_dict)
             # #region agent log
             _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
             import json as _json
@@ -445,59 +441,6 @@ class BackgroundFinalizer:
             error_detail = f"{type(exc).__name__}: {str(exc)}"
             self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary", error_detail)
             self._meeting_store.publish_status_log(meeting_id, "summary", "failed", {"error": error_detail})
-            raise
-    
-    def _run_title_stage(self, meeting_id: str) -> None:
-        """Run title generation stage (standalone, when not produced by summary)."""
-        self._meeting_store.publish_finalization_status(meeting_id, "Title...", 0.9)
-        self._meeting_store.publish_status_log(meeting_id, "title", "started")
-        
-        meeting = self._meeting_store.get_meeting(meeting_id)
-        if not meeting:
-            return
-        
-        # Check if title already exists (may have been set by summary stage)
-        existing_title = meeting.get("title")
-        if existing_title and existing_title != meeting_id[:8] and not existing_title.startswith("Untitled"):
-            self._meeting_store.mark_finalization_stage(meeting_id, "title")
-            self._meeting_store.publish_status_log(meeting_id, "title", "skipped",
-                {"reason": "title already exists", "title": existing_title})
-            return
-        
-        # Need summary text to generate title
-        summary = meeting.get("summary")
-        if not summary:
-            self._meeting_store.mark_finalization_stage(meeting_id, "title")
-            self._meeting_store.publish_status_log(meeting_id, "title", "skipped",
-                {"reason": "no summary available"})
-            return
-        
-        summary_text = ""
-        if isinstance(summary, dict):
-            summary_text = summary.get("overview", "") or summary.get("raw", "")
-        elif isinstance(summary, str):
-            summary_text = summary
-        
-        if not summary_text.strip():
-            self._meeting_store.mark_finalization_stage(meeting_id, "title")
-            self._meeting_store.publish_status_log(meeting_id, "title", "skipped",
-                {"reason": "empty summary"})
-            return
-        
-        try:
-            title = self._summarization.generate_title(summary_text)
-            if title:
-                self._meeting_store.set_title_from_summary(meeting_id, title)
-                self._meeting_store.publish_event("title_updated", meeting_id,
-                    {"title": title, "source": "auto"})
-            self._meeting_store.mark_finalization_stage(meeting_id, "title")
-            self._meeting_store.publish_status_log(meeting_id, "title", "completed",
-                {"title": title if title else "(no title generated)"})
-            self._meeting_store.publish_event("meeting_updated", meeting_id)
-        except Exception as exc:
-            error_detail = f"{type(exc).__name__}: {str(exc)}"
-            self._meeting_store.mark_finalization_stage_failed(meeting_id, "title", error_detail)
-            self._meeting_store.publish_status_log(meeting_id, "title", "failed", {"error": error_detail})
             raise
     
     def wake(self) -> None:
@@ -662,7 +605,6 @@ class BackgroundFinalizer:
             needs_diarization = finalization.get("diarization") == MeetingStore.FINALIZATION_PENDING
             needs_speaker_names = finalization.get("speaker_names") == MeetingStore.FINALIZATION_PENDING
             needs_summary = finalization.get("summary") == MeetingStore.FINALIZATION_PENDING
-            needs_title = finalization.get("title") == MeetingStore.FINALIZATION_PENDING
             
             pending_stages = self._meeting_store.get_pending_finalization_stages(meeting)
             failed_stages = self._meeting_store.get_failed_finalization_stages(meeting)
@@ -710,8 +652,9 @@ class BackgroundFinalizer:
                     {"audio_path": audio_path}
                 )
                 try:
-                    # DiarizationService handles audio format conversion internally
-                    diarization_segments = self._diarization.run(audio_path)
+                    from app.services.audio_utils import load_audio_for_pyannote
+                    audio_dict = load_audio_for_pyannote(audio_path)
+                    diarization_segments = self._diarization.run(audio_dict)
                     if diarization_segments:
                         segments = apply_diarization(segments, diarization_segments)
                         self._meeting_store.update_transcript_speakers(meeting_id, segments)
@@ -865,18 +808,6 @@ class BackgroundFinalizer:
                             meeting_id, "summary", "skipped",
                             {"reason": "no transcript text"}
                         )
-            
-            # Stage 4: Title generation (if not produced by summary)
-            if needs_title:
-                self._set_current_work(meeting_id, "title")
-                try:
-                    self._run_title_stage(meeting_id)
-                except Exception as exc:
-                    _logger.warning(
-                        "BackgroundFinalizer: title generation failed for %s: %s",
-                        meeting_id, exc,
-                    )
-                    errors_occurred.append(("title", str(exc)))
             
             # Mark meeting as completed if it wasn't already
             meeting = self._meeting_store.get_meeting(meeting_id)

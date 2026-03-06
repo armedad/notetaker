@@ -1,7 +1,35 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Optional, Protocol
+
+_logger = logging.getLogger("notetaker.diarization")
+
+
+def resolve_device(requested: str) -> str:
+    """Resolve the best available compute device.
+
+    Accepts ``"auto"``, ``"cpu"``, ``"mps"``, or ``"cuda"``.
+    ``"auto"`` (and ``"cpu"`` as a legacy default) will pick MPS on
+    Apple Silicon or CUDA if available, falling back to CPU.
+    """
+    req = (requested or "auto").lower().strip()
+    if req in ("auto", "cpu"):
+        try:
+            import torch
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                _logger.info("Diarization device: mps (auto-detected)")
+                return "mps"
+            if torch.cuda.is_available():
+                _logger.info("Diarization device: cuda (auto-detected)")
+                return "cuda"
+        except ImportError:
+            pass
+        if req == "auto":
+            _logger.info("Diarization device: cpu (no GPU available)")
+        return "cpu"
+    return req
 
 
 @dataclass(frozen=True)
@@ -13,7 +41,7 @@ class RealtimeDiarizationConfig:
     """
     enabled: bool
     provider: str  # "diart" or "none"
-    device: str  # "cpu" or "cuda"
+    device: str  # resolved by resolve_device(): "mps", "cuda", or "cpu"
     hf_token: Optional[str]
     performance_level: float  # 0.0-1.0, trades latency vs accuracy
 
@@ -28,7 +56,7 @@ class BatchDiarizationConfig:
     enabled: bool
     provider: str  # "pyannote", "whisperx", "diart", or "none"
     model: str  # e.g., "pyannote/speaker-diarization-3.1"
-    device: str  # "cpu" or "cuda"
+    device: str  # resolved by resolve_device(): "mps", "cuda", or "cpu"
     hf_token: Optional[str]
 
 
@@ -95,7 +123,7 @@ def parse_diarization_config(config_dict: dict) -> tuple[RealtimeDiarizationConf
         realtime_config = RealtimeDiarizationConfig(
             enabled=bool(realtime_dict.get("enabled", False)),
             provider=realtime_dict.get("provider", "none"),
-            device=realtime_dict.get("device", "cpu"),
+            device=resolve_device(realtime_dict.get("device", "auto")),
             hf_token=realtime_dict.get("hf_token"),
             performance_level=float(realtime_dict.get("performance_level", 0.5)),
         )
@@ -104,7 +132,7 @@ def parse_diarization_config(config_dict: dict) -> tuple[RealtimeDiarizationConf
             enabled=bool(batch_dict.get("enabled", False)),
             provider=batch_dict.get("provider", "none"),
             model=batch_dict.get("model", "pyannote/speaker-diarization-3.1"),
-            device=batch_dict.get("device", "cpu"),
+            device=resolve_device(batch_dict.get("device", "auto")),
             hf_token=batch_dict.get("hf_token"),
         )
         
@@ -114,7 +142,7 @@ def parse_diarization_config(config_dict: dict) -> tuple[RealtimeDiarizationConf
     enabled = bool(config_dict.get("enabled", False))
     provider = config_dict.get("provider", "none")
     model = config_dict.get("model", "")
-    device = config_dict.get("device", "cpu")
+    device = resolve_device(config_dict.get("device", "auto"))
     hf_token = config_dict.get("hf_token")
     performance_level = float(config_dict.get("performance_level", 0.5))
     

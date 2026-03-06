@@ -59,6 +59,10 @@ class AudioCaptureService:
         self._existing_audio_path: Optional[str] = None  # For resumed meetings
         self._compression_complete_event: Optional[threading.Event] = None  # Signals when compression/concatenation is done
         self._compression_result_path: Optional[str] = None  # Path to compressed audio after completion
+        
+        # Pause state
+        self._paused = False
+        self._paused_at: Optional[datetime] = None
 
     def list_devices(self) -> list[dict]:
         self._logger.debug("Listing audio input devices")
@@ -90,6 +94,70 @@ class AudioCaptureService:
     def is_capture_stopped(self) -> bool:
         """Check if audio capture has stopped (but transcription may still be processing)."""
         return self._capture_stopped.is_set()
+    
+    def is_paused(self) -> bool:
+        """Check if audio capture is currently paused."""
+        with self._lock:
+            return self._paused
+    
+    def pause(self) -> dict:
+        """Pause audio ingestion.
+        
+        When paused:
+        - Audio from microphone/file is ignored (not queued for transcription)
+        - Opus file stops recording new audio
+        - For file playback, the file continues playing (audio is lost during pause)
+        
+        Returns:
+            Status dict with paused_at timestamp
+        """
+        with self._lock:
+            if self._state.recording_id is None:
+                raise RuntimeError("No recording in progress")
+            if self._paused:
+                return {"status": "already_paused", "paused_at": self._paused_at.isoformat() if self._paused_at else None}
+            
+            self._paused = True
+            self._paused_at = datetime.utcnow()
+            self._logger.info("Audio capture paused at %s", self._paused_at.isoformat())
+            
+            return {
+                "status": "paused",
+                "paused_at": self._paused_at.isoformat(),
+            }
+    
+    def unpause(self) -> dict:
+        """Resume audio ingestion after pause.
+        
+        Returns:
+            Status dict with pause duration and timestamps
+        """
+        with self._lock:
+            if self._state.recording_id is None:
+                raise RuntimeError("No recording in progress")
+            if not self._paused:
+                return {"status": "not_paused"}
+            
+            resumed_at = datetime.utcnow()
+            paused_at = self._paused_at
+            pause_duration = (resumed_at - paused_at).total_seconds() if paused_at else 0.0
+            
+            self._paused = False
+            self._paused_at = None
+            
+            self._logger.info(
+                "Audio capture resumed: paused_at=%s resumed_at=%s duration=%.1fs",
+                paused_at.isoformat() if paused_at else None,
+                resumed_at.isoformat(),
+                pause_duration,
+            )
+            
+            return {
+                "status": "resumed",
+                "paused_at": paused_at.isoformat() if paused_at else None,
+                "resumed_at": resumed_at.isoformat(),
+                "pause_duration_seconds": pause_duration,
+            }
     
     def has_buffered_audio(self) -> bool:
         """Check if there is audio buffered in the live queue."""
@@ -202,6 +270,8 @@ class AudioCaptureService:
                 "samplerate": self._state.samplerate,
                 "channels": self._state.channels,
                 "dtype": self._state.dtype,
+                "paused": self._paused,
+                "paused_at": self._paused_at.isoformat() if self._paused_at else None,
             }
 
     def start_recording(
@@ -450,6 +520,10 @@ class AudioCaptureService:
             self._existing_audio_path = None
 
             self._state = RecordingState()
+            
+            # Reset pause state
+            self._paused = False
+            self._paused_at = None
             
             # Handle audio file finalization
             if audio_path and os.path.isfile(audio_path):
@@ -1044,7 +1118,12 @@ class AudioCaptureService:
                 hypothesis_id="M3",
             )
         if self._callback_counter % 50 == 0:
-            self._logger.debug("Audio callback frames=%s", frames)
+            self._logger.debug("Audio callback frames=%s paused=%s", frames, self._paused)
+        
+        # Skip audio processing when paused
+        if self._paused:
+            return
+        
         payload = bytes(indata)
         self._audio_queue.put(payload)
         # #region agent log
