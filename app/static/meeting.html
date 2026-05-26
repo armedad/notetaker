@@ -101,7 +101,7 @@
                 <button class="btn btn-sm btn-secondary" id="btn-retranscribe" title="Re-transcribe with final model">Transcribe</button>
                 <button class="btn btn-sm btn-secondary" id="btn-rediarize" title="Re-run diarization">Diarize</button>
                 <button class="btn btn-sm btn-secondary" id="btn-speaker-names" title="Re-identify speaker names">Speakers</button>
-                <button class="btn btn-sm btn-secondary" id="btn-resummarize" title="Re-generate summary">Summary</button>
+                <button class="btn btn-sm btn-secondary" id="btn-resummarize" title="Re-generate summary" style="display:none">Summary</button>
               </div>
               <div class="status-log" id="status-log-output">
                 <div class="status-log-empty">No status logs yet. Start a recording to see processing status.</div>
@@ -110,7 +110,7 @@
           </section>
 
           <!-- Upper right: Summary -->
-          <section class="grid-panel summary-panel" data-panel="summary">
+          <section class="grid-panel summary-panel" data-panel="summary" style="display:none">
             <div class="grid-panel-header">
               <h2>Summary</h2>
               <div id="summary-search-bar" class="chat-search-bar chat-search-bar-inline" style="display:none">

@@ -37,11 +37,12 @@ from app.routers.logs import create_logs_router
 from app.routers.transcription import create_transcription_router
 from app.routers.meetings import create_meetings_router
 from app.routers.settings import create_settings_router
-from app.routers.summarization import create_summarization_router
+# from app.routers.summarization import create_summarization_router  # disabled
 from app.routers.uploads import create_uploads_router
 from app.routers.testing import create_testing_router
 from app.routers.chat import create_chat_router
 from app.routers.debug import create_test_debug_router
+from app.routers.local_shutdown import router as local_shutdown_router
 from app.routers.search import create_search_router
 from app.services.audio_capture import AudioCaptureService
 from app.services.meeting_store import MeetingStore
@@ -235,8 +236,8 @@ def create_app() -> FastAPI:
         logger.info("Boot: transcription router mounted")
         app.include_router(create_meetings_router(meeting_store, summarization_service, ctx))
         logger.info("Boot: meetings router mounted")
-        app.include_router(create_summarization_router(meeting_store, summarization_service))
-        logger.info("Boot: summarization router mounted")
+        # Summarization API removed — transcript + diarization only (see features.summary)
+        logger.info("Boot: summarization router skipped (summary disabled)")
         search_service = SearchService(meeting_store)
         chat_service = ChatService(ctx, meeting_store, summarization_service, search_service)
         app.include_router(create_chat_router(chat_service, meeting_store))
@@ -302,6 +303,9 @@ def create_app() -> FastAPI:
 
     app.include_router(create_testing_router(ctx))
     logger.info("Boot: testing router mounted")
+
+    app.include_router(local_shutdown_router, prefix="/api")
+    logger.info("Boot: local shutdown router mounted at /api/local/shutdown")
 
     class NoCacheMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):

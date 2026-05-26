@@ -103,13 +103,16 @@ def create_recording_router(
                 active_tracker.unregister(meeting_id)
             if meeting:
                 meeting_id = meeting.get("id")
-                summary = meeting.get("summary", {})
-                summary_text = summary.get("text") if isinstance(summary, dict) else None
-                if summary_text and meeting_id:
+                transcript = meeting.get("transcript", {})
+                segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
+                transcript_text = "\n".join(
+                    seg.get("text", "") for seg in segments if isinstance(seg, dict)
+                )
+                if transcript_text.strip() and meeting_id:
                     try:
                         meeting_store.maybe_auto_title(
                             meeting_id,
-                            summary_text,
+                            transcript_text[:4000],
                             summarization_service,
                             force=True,
                         )

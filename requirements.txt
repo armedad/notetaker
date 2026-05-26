@@ -1,6 +1,7 @@
 fastapi==0.115.8
 uvicorn[standard]==0.30.6
-sounddevice==0.4.6
+# Shared X:\.env: voice-dictation uses >=0.5.1; do not pin 0.4.6 (downgrade locks portaudio DLL on Windows)
+sounddevice>=0.5.1,<0.6
 soundfile==0.12.1
 numpy==1.26.4
 faster-whisper==1.1.0
@@ -11,4 +12,5 @@ python-multipart==0.0.9
 aiohttp==3.9.3
 diart==0.9.0
 httpx==0.28.1
-pyogg>=0.7
+# 0.7 was never published to PyPI; OpusBufferedEncoder is in 0.6.14a1 (optional — app falls back to WAV)
+PyOgg>=0.6.14a1

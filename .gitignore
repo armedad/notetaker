@@ -1,4 +1,5 @@
 .DS_Store
+.notetaker_venv
 .venv/
 __pycache__/
 *.pyc

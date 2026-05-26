@@ -1673,7 +1673,6 @@ function initRefinalizeControls() {
   const btnTranscribe = document.getElementById("btn-retranscribe");
   const btnDiarize = document.getElementById("btn-rediarize");
   const btnSpeakers = document.getElementById("btn-speaker-names");
-  const btnSummary = document.getElementById("btn-resummarize");
 
   if (btnAll) {
     btnAll.addEventListener("click", () => triggerRefinalization(null, btnAll));
@@ -1687,10 +1686,6 @@ function initRefinalizeControls() {
   if (btnSpeakers) {
     btnSpeakers.addEventListener("click", () => triggerRefinalization(["speaker_names"], btnSpeakers));
   }
-  if (btnSummary) {
-    btnSummary.addEventListener("click", () => triggerRefinalization(["summary"], btnSummary));
-  }
-
   updateRefinalizeControls();
 }
 
@@ -1716,7 +1711,6 @@ function updateRefinalizeControls() {
     document.getElementById("btn-retranscribe")?.setAttribute("title", "Re-transcribe with final model");
     document.getElementById("btn-rediarize")?.setAttribute("title", "Re-run diarization");
     document.getElementById("btn-speaker-names")?.setAttribute("title", "Re-identify speaker names");
-    document.getElementById("btn-resummarize")?.setAttribute("title", "Re-generate summary");
   }
 }
 

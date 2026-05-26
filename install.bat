@@ -1,6 +1,9 @@
 @echo off
 REM Notetaker Installation Script Launcher for Windows
-REM This will run the PowerShell installation script
+REM Uses CHEEAPPS_VENV for the shared venv folder (same as gauth / voice-dictation).
+REM Default shared path on this machine: X:\.env  (\\cc\apps\.env)
+REM   set CHEEAPPS_VENV=X:\.env
+REM   install.bat
 
 echo ============================================
 echo Notetaker Installation

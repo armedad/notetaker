@@ -278,10 +278,10 @@ class SearchService:
         # Field weights
         WEIGHTS = {
             "title": 3.0,
-            "summary": 2.0,
+            "transcript": 3.0,
+            "summary": 0.5,
             "attendee": 2.0,
             "user_note": 1.5,
-            "transcript": 1.0,
             "manual_notes": 1.0,
             "chat": 1.0,
         }

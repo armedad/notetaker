@@ -157,6 +157,13 @@
               </div>
               <div class="hint" style="margin-top: -6px; margin-bottom: 12px;">Size of audio chunks sent to the live transcription model.</div>
               <div class="row-setting">
+                <label for="retranscribe-on-stop">Re-transcribe on stop</label>
+                <div class="setting-controls">
+                  <input id="retranscribe-on-stop" type="checkbox" />
+                  <span class="hint">Re-run Whisper with the final model after stop (slower).</span>
+                </div>
+              </div>
+              <div class="row-setting">
                 <label for="final-model-size">Final model size</label>
                 <div class="setting-controls">
                   <select id="final-model-size">
