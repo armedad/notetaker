@@ -514,7 +514,11 @@ async function loadTranscriptionSettings() {
       document.getElementById("final-model-size").value = data.final_model_size;
     }
     document.getElementById("live-chunk-seconds").value =
-      data.live_chunk_seconds ?? 5;
+      data.live_chunk_seconds ?? 15;
+    const retranscribeEl = document.getElementById("retranscribe-on-stop");
+    if (retranscribeEl) {
+      retranscribeEl.checked = Boolean(data.retranscribe_on_stop);
+    }
   } catch (error) {
     setGlobalError(`Failed to load transcription settings: ${error.message}`);
   }
@@ -612,7 +616,8 @@ async function saveTranscriptionSettings() {
   const payload = {
     live_model_size: document.getElementById("live-model-size").value,
     final_model_size: document.getElementById("final-model-size").value,
-    live_chunk_seconds: parseFloat(document.getElementById("live-chunk-seconds").value) || 5,
+    live_chunk_seconds: parseFloat(document.getElementById("live-chunk-seconds").value) || 15,
+    retranscribe_on_stop: document.getElementById("retranscribe-on-stop")?.checked ?? false,
   };
   setTranscriptionOutput("Saving transcription settings...");
   setGlobalBusy("Saving transcription settings...");

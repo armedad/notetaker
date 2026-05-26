@@ -155,6 +155,7 @@ def create_transcription_router(
     final_compute = transcription_config.get("final_compute_type", "int8")
     live_default_size = transcription_config.get("live_model_size", "base")
     final_default_size = transcription_config.get("final_model_size", "medium")
+    retranscribe_on_stop = transcription_config.get("retranscribe_on_stop", False)
 
     provider_cache: dict[tuple[str, str, str], FasterWhisperProvider] = {}
 
@@ -500,7 +501,8 @@ def create_transcription_router(
                     "Processing audio..." if not is_resumed_meeting else "Combining audio files...",
                     0.02,
                 )
-                combined_audio_path = audio_service.wait_for_compression(timeout=300)
+                # Short wait for Opus; diarization uses WAV — do not block minutes on compression
+                combined_audio_path = audio_service.wait_for_compression(timeout=15)
                 # #region agent log
                 try:
                     with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_res:
@@ -547,7 +549,8 @@ def create_transcription_router(
                                          meeting_id, final_model, model_size, audio_path, os.path.isfile(audio_path) if audio_path else False)
                         # #endregion
                         if (
-                            final_model
+                            retranscribe_on_stop
+                            and final_model
                             and final_model != "none"
                             and final_model != model_size
                             and audio_path

@@ -5,7 +5,7 @@ This service centralizes:
 - Segment formatting (whisper output → standard dict format)
 - Diarization application (speaker identification)
 - Meeting store updates
-- Summarization and title extraction
+- Optional auto-title from transcript (no meeting summary)
 
 All transcription endpoints should use this pipeline after obtaining audio.
 """
@@ -440,134 +440,35 @@ class TranscriptionPipeline:
         self,
         meeting_id: str,
         segments: list[dict],
-    ) -> Optional[dict]:
-        """Finalize a meeting after transcription: summarize and set title.
-        
-        Args:
-            meeting_id: Meeting ID to finalize
-            segments: Transcript segments for summarization
-            
-        Returns:
-            Summary result dict or None if summarization failed
-        """
-        # #region agent log
-        try:
-            dbg(
-                self._logger,
-                location="transcription_pipeline.py:finalize_meeting",
-                message="finalize_meeting_enter",
-                data={"meeting_id": meeting_id, "segments_count": len(segments) if segments else 0},
-                run_id="bugs-debug",
-                hypothesis_id="H1a_H2a",
-            )
-        except Exception:
-            pass
-        # #endregion
-        
-        # Update status to completed
+    ) -> None:
+        """Finalize a meeting after transcription (no summary)."""
         self._meeting_store.update_status(meeting_id, "completed")
-        
-        # Get user notes for inclusion in summary
-        meeting = self._meeting_store.get_meeting(meeting_id)
-        user_notes = meeting.get("user_notes", []) if meeting else []
-        
-        # Generate summary from transcript text
-        summary_text = "\n".join(
+        self._maybe_auto_title_from_transcript(meeting_id, segments)
+        self._logger.info("Finalize complete: meeting_id=%s", meeting_id)
+
+    def _maybe_auto_title_from_transcript(
+        self, meeting_id: str, segments: list[dict]
+    ) -> None:
+        """Generate meeting title from transcript via LLM (best-effort)."""
+        transcript_text = "\n".join(
             segment.get("text", "")
             for segment in segments
             if isinstance(segment, dict)
         )
-        
-        if not summary_text.strip():
-            self._logger.info("Finalize skipped (no text): meeting_id=%s", meeting_id)
-            # #region agent log
-            try:
-                dbg(
-                    self._logger,
-                    location="transcription_pipeline.py:finalize_meeting",
-                    message="finalize_meeting_skip_empty",
-                    data={"meeting_id": meeting_id},
-                    run_id="bugs-debug",
-                    hypothesis_id="H2a",
-                )
-            except Exception:
-                pass
-            # #endregion
-            return None
-        
+        if not transcript_text.strip():
+            return
         try:
-            self._logger.info(
-                "Finalize summary start: meeting_id=%s segments=%s",
+            self._meeting_store.maybe_auto_title(
                 meeting_id,
-                len(segments),
+                transcript_text[:4000],
+                self._summarization,
             )
-            # #region agent log
-            try:
-                dbg(
-                    self._logger,
-                    location="transcription_pipeline.py:finalize_meeting",
-                    message="finalize_summarize_start",
-                    data={"meeting_id": meeting_id, "summary_text_len": len(summary_text)},
-                    run_id="bugs-debug",
-                    hypothesis_id="H2b",
-                )
-            except Exception:
-                pass
-            # #endregion
-            result = self._summarization.summarize(summary_text, user_notes=user_notes)
-            # #region agent log
-            try:
-                dbg(
-                    self._logger,
-                    location="transcription_pipeline.py:finalize_meeting",
-                    message="finalize_summarize_done",
-                    data={
-                        "meeting_id": meeting_id,
-                        "has_result": result is not None,
-                        "summary_len": len(result.get("summary", "")) if result else 0,
-                        "action_items_count": len(result.get("action_items", [])) if result else 0,
-                    },
-                    run_id="bugs-debug",
-                    hypothesis_id="H2b",
-                )
-            except Exception:
-                pass
-            # #endregion
-            
-            self._meeting_store.add_summary(
-                meeting_id,
-                summary_data=result,
-                provider="default",
-            )
-
-            if result.get("title"):
-                self._meeting_store.set_title_from_summary(meeting_id, result["title"])
-            
-            self._logger.info("Finalize complete: meeting_id=%s", meeting_id)
-            return result
-            
         except Exception as exc:
-            self._logger.warning("Finalize summary failed: meeting_id=%s error=%s", meeting_id, exc)
-            # #region agent log
-            try:
-                import traceback
-                dbg(
-                    self._logger,
-                    location="transcription_pipeline.py:finalize_meeting",
-                    message="finalize_meeting_error",
-                    data={
-                        "meeting_id": meeting_id,
-                        "exc_type": type(exc).__name__,
-                        "exc_str": str(exc)[:500],
-                        "traceback": traceback.format_exc()[-1500:],
-                    },
-                    run_id="bugs-debug",
-                    hypothesis_id="H2b",
-                )
-            except Exception:
-                pass
-            # #endregion
-            return None
+            self._logger.warning(
+                "Auto title failed (non-fatal): meeting_id=%s error=%s",
+                meeting_id,
+                exc,
+            )
 
     def finalize_meeting_with_diarization(
         self,
@@ -584,17 +485,13 @@ class TranscriptionPipeline:
         4. Publish status: "Speaker Names..."
         5. Use LLM to identify speaker names (if available)
         6. Update attendee names
-        7. Publish status: "Summary..."
-        8. Run summarization (title extracted from structured JSON)
-        9. Publish status: "Complete"
+        7. Optional auto-title from transcript
+        8. Publish status: "Complete"
         
         Args:
             meeting_id: Meeting ID to finalize
             segments: Transcript segments
             audio_path: Path to the audio file for diarization
-            
-        Returns:
-            Summary result dict or None if failed
         """
         # #region agent log
         _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
@@ -649,7 +546,7 @@ class TranscriptionPipeline:
                         meeting_id,
                     )
                     _dbg_fin("finalize_skipped_already_complete", {"meeting_id": meeting_id, "status": current_status})
-                    return meeting.get("summary")
+                    return None
                 if current_status == "processing":
                     self._logger.warning(
                         "finalize_meeting_with_diarization: skipping - already processing: meeting_id=%s",
@@ -798,133 +695,13 @@ class TranscriptionPipeline:
                 self._meeting_store.mark_finalization_stage(meeting_id, "diarization")
                 self._meeting_store.mark_finalization_stage(meeting_id, "speaker_names")
             
-            # Step 7-9: Generate summary with streaming events
-            # Backend always generates - frontend subscribes to events if connected
-            # #region agent log
-            _dbg_logger.debug("SPEAKER_ID_DONE: meeting_id=%s", meeting_id)
-            # #endregion
+            # Step 7: Optional auto-title (non-blocking for completion)
             self._meeting_store.publish_finalization_status(
-                meeting_id, "Summary...", 0.6
+                meeting_id, "Finalizing...", 0.85
             )
+            self._maybe_auto_title_from_transcript(meeting_id, segments)
             
-            # Get user notes for inclusion in summary
-            meeting = self._meeting_store.get_meeting(meeting_id)
-            user_notes = meeting.get("user_notes", []) if meeting else []
-            
-            summary_text = "\n".join(
-                segment.get("text", "")
-                for segment in segments
-                if isinstance(segment, dict)
-            )
-            
-            result = None
-            # #region agent log
-            _dbg_logger.debug("SUMMARY_TEXT_READY: meeting_id=%s summary_text_len=%d", meeting_id, len(summary_text.strip()))
-            # #endregion
-            if summary_text.strip():
-                self._meeting_store.publish_status_log(
-                    meeting_id, "summary", "started"
-                )
-                self._meeting_store.publish_status_log(
-                    meeting_id, "summary", "input",
-                    {
-                        "transcript_length": len(summary_text),
-                        "transcript_preview": summary_text[:500] + ("..." if len(summary_text) > 500 else ""),
-                        "user_notes_count": len(user_notes),
-                    }
-                )
-                try:
-                    # Emit summary_start event for any connected frontends
-                    self._meeting_store.publish_event("summary_start", meeting_id)
-                    
-                    # Use streaming summarization, emitting tokens as they arrive
-                    accumulated_summary = ""
-                    token_count = 0
-                    # #region agent log
-                    _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
-                    import json as _json
-                    import time as _time
-                    def _dbg(msg, data=None):
-                        with open(_log_path, "a") as _f:
-                            _f.write(_json.dumps({"location":"transcription_pipeline.py:finalize","message":msg,"data":data or {},"timestamp":int(_time.time()*1000),"hypothesisId":"STREAM"})+"\n")
-                    _dbg("summary_stream_start", {"meeting_id": meeting_id})
-                    # #endregion
-                    for token in self._summarization.summarize_stream(summary_text, user_notes=user_notes):
-                        accumulated_summary += token
-                        token_count += 1
-                        # #region agent log
-                        if token_count <= 5 or token_count % 20 == 0:
-                            _dbg("summary_token_emit", {"token_num": token_count, "accum_len": len(accumulated_summary)})
-                        # #endregion
-                        # Emit each token for progressive display
-                        self._meeting_store.publish_event(
-                            "summary_token",
-                            meeting_id,
-                            {"text": accumulated_summary}
-                        )
-                    # #region agent log
-                    _dbg("summary_stream_done", {"total_tokens": token_count, "final_len": len(accumulated_summary)})
-                    # #endregion
-                    
-                    from app.services.summarization import SummarizationService as _SS
-                    result = _SS.parse_structured_summary(accumulated_summary)
-
-                    self._meeting_store.publish_event(
-                        "summary_complete",
-                        meeting_id,
-                        {"structured": result}
-                    )
-                    self._meeting_store.publish_status_log(
-                        meeting_id, "summary", "output",
-                        {
-                            "overview": result.get("overview", ""),
-                            "action_items": result.get("action_items", []),
-                        }
-                    )
-
-                    self._meeting_store.add_summary(
-                        meeting_id,
-                        summary_data=result,
-                        provider="default",
-                    )
-                    self._meeting_store.mark_finalization_stage(meeting_id, "summary")
-                    self._meeting_store.publish_status_log(
-                        meeting_id, "summary", "completed"
-                    )
-
-                    if result.get("title"):
-                        self._meeting_store.set_title_from_summary(meeting_id, result["title"])
-                        self._meeting_store.publish_event(
-                            "title_updated", meeting_id,
-                            {"title": result["title"], "source": "auto"},
-                        )
-                except Exception as exc:
-                    import traceback
-                    tb_str = traceback.format_exc()
-                    self._logger.error(
-                        "Summarization failed: meeting_id=%s error=%s\n%s",
-                        meeting_id, exc, tb_str
-                    )
-                    # Include traceback in user-visible error for debugging
-                    error_detail = f"{type(exc).__name__}: {str(exc)}"
-                    self._meeting_store.publish_finalization_status(
-                        meeting_id,
-                        f"Summary failed: {error_detail[:120]}",
-                        0.7,
-                    )
-                    self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary", error_detail)
-                    self._meeting_store.publish_status_log(
-                        meeting_id, "summary", "failed",
-                        {
-                            "error": error_detail,
-                            "traceback": tb_str,
-                        }
-                    )
-                    # #region agent log
-                    _dbg_logger.debug("SUMMARIZATION_ERROR: meeting_id=%s error=%s traceback=%s", meeting_id, str(exc)[:500], tb_str[:1000])
-                    # #endregion
-            
-            # Step 10: Ensure attendees are created from speaker labels
+            # Step 8: Ensure attendees are created from speaker labels
             # This handles cases where real-time diarization added speakers but batch diarization was skipped
             meeting = self._meeting_store.get_meeting(meeting_id)
             if meeting:
@@ -942,7 +719,7 @@ class TranscriptionPipeline:
                         meeting_id
                     )
             
-            # Step 11: Complete
+            # Step 9: Complete
             self._meeting_store.update_status(meeting_id, "completed")
             self._meeting_store.publish_event("meeting_updated", meeting_id)
             
@@ -950,7 +727,7 @@ class TranscriptionPipeline:
             _dbg_logger.debug("FINALIZATION_COMPLETE: meeting_id=%s", meeting_id)
             # #endregion
             self._logger.info("finalize_meeting_with_diarization complete: meeting_id=%s", meeting_id)
-            return result
+            return None
             
         except Exception as exc:
             import traceback

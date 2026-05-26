@@ -78,7 +78,8 @@ class ProviderSettingsRequest(BaseModel):
 class TranscriptionSettingsRequest(BaseModel):
     live_model_size: str
     final_model_size: str
-    live_chunk_seconds: float = 5.0
+    live_chunk_seconds: float = 15.0
+    retranscribe_on_stop: bool = False
 
 
 class WhisperModelTestRequest(BaseModel):
@@ -656,6 +657,7 @@ def create_settings_router(ctx) -> APIRouter:
         transcription["live_model_size"] = payload.live_model_size
         transcription["final_model_size"] = payload.final_model_size
         transcription["live_chunk_seconds"] = payload.live_chunk_seconds
+        transcription["retranscribe_on_stop"] = payload.retranscribe_on_stop
         data["transcription"] = transcription
         with open(config_path, "w", encoding="utf-8") as config_file:
             json.dump(data, config_file, indent=2)

@@ -363,7 +363,7 @@ except ImportError:
         import pyogg
         print(f"  pyogg: INSTALLED but encoder unavailable (missing system libs: brew install opus libogg libopusenc)")
     except ImportError:
-        print(f"  pyogg: NOT INSTALLED (pip install 'pyogg>=0.7')")
+        print(f"  pyogg: NOT INSTALLED (pip install 'PyOgg>=0.6.14a1')")
 
 if errors:
     print("\nImport errors:")

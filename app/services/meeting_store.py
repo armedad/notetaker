@@ -2150,7 +2150,6 @@ class MeetingStore:
         "transcription": "Transcription",
         "diarization": "Diarization",
         "speaker_names": "Speaker Names",
-        "summary": "Summary",
     }
 
     def _default_finalization_state(self) -> dict:
@@ -2162,8 +2161,6 @@ class MeetingStore:
             "diarization_error": None,
             "speaker_names": self.FINALIZATION_PENDING,
             "speaker_names_error": None,
-            "summary": self.FINALIZATION_PENDING,
-            "summary_error": None,
         }
 
     def _migrate_finalization_state(self, finalization: dict) -> dict:
@@ -2186,9 +2183,13 @@ class MeetingStore:
                 finalization["transcription"] = self.FINALIZATION_COMPLETED
                 finalization["transcription_error"] = None
             
-            # Clean up removed "title" stage from older meetings
+            # Clean up removed stages from older meetings
             finalization.pop("title", None)
             finalization.pop("title_error", None)
+            if finalization.get("summary") == self.FINALIZATION_PENDING:
+                finalization["summary"] = self.FINALIZATION_COMPLETED
+            finalization.pop("summary", None)
+            finalization.pop("summary_error", None)
             
             return finalization
         

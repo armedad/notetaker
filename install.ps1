@@ -22,6 +22,49 @@ function Write-Err {
     Write-Host "[$timestamp] [install] ERROR: $Message" -ForegroundColor Red
 }
 
+function Test-ValidPythonVenv {
+    param([Parameter(Mandatory)][string]$VenvDir)
+    $cfg = Join-Path $VenvDir "pyvenv.cfg"
+    $py = Join-Path $VenvDir "Scripts\python.exe"
+    return ((Test-Path -LiteralPath $cfg) -and (Test-Path -LiteralPath $py))
+}
+
+function Resolve-NotetakerVenvPath {
+    param([Parameter(Mandatory)][string]$ProjectDir)
+    $seen = @{}
+    $ordered = [System.Collections.Generic.List[string]]::new()
+
+    function Add-Candidate([string]$raw) {
+        if (-not $raw -or -not $raw.Trim()) { return }
+        $t = $raw.Trim()
+        if ($seen.ContainsKey($t)) { return }
+        $seen[$t] = $true
+        [void]$ordered.Add($t)
+    }
+
+    if ($env:CHEEAPPS_VENV) { Add-Candidate $env:CHEEAPPS_VENV }
+    $marker = Join-Path $ProjectDir ".notetaker_venv"
+    if (Test-Path -LiteralPath $marker) {
+        $line = Get-Content -LiteralPath $marker -TotalCount 1 -ErrorAction SilentlyContinue | Select-Object -First 1
+        Add-Candidate ([string]$line)
+    }
+    # Shared Chee apps venv: X:\.env == \\cc\apps\.env (same as gauth / voice-dictation)
+    Add-Candidate (Join-Path (Split-Path -Parent $ProjectDir) ".env")
+    Add-Candidate (Join-Path $ProjectDir ".venv")
+
+    foreach ($raw in $ordered) {
+        try {
+            $resolved = [System.IO.Path]::GetFullPath($raw)
+        } catch {
+            continue
+        }
+        if (Test-ValidPythonVenv $resolved) {
+            return $resolved
+        }
+    }
+    return $null
+}
+
 Write-Log "============================================"
 Write-Log "Notetaker Installation Script (Windows)"
 Write-Log "============================================"
@@ -129,32 +172,47 @@ Write-Log "Setting up Python environment..."
 
 Set-Location $ProjectDir
 
-$venvPath = Join-Path $ProjectDir ".venv"
-if (-not (Test-Path $venvPath)) {
-    Write-Log "Creating virtual environment..."
-    & $pythonCmd.Split()[0] $pythonCmd.Split()[1..99] -m venv .venv
-} else {
-    Write-Log "Virtual environment: exists"
+$venvPath = Resolve-NotetakerVenvPath -ProjectDir $ProjectDir
+if (-not $venvPath) {
+    if ($env:CHEEAPPS_VENV -and $env:CHEEAPPS_VENV.Trim()) {
+        Write-Err "CHEEAPPS_VENV is set but not a valid venv (need pyvenv.cfg and Scripts\python.exe): $($env:CHEEAPPS_VENV.Trim())"
+        exit 1
+    }
+    $localVenv = Join-Path $ProjectDir ".venv"
+    $brokenLocal = (Test-Path -LiteralPath $localVenv) -and -not (Test-ValidPythonVenv $localVenv)
+    if ($brokenLocal) {
+        Write-Warn "Removing incomplete .venv under project (missing Scripts\python.exe)..."
+        Remove-Item -LiteralPath $localVenv -Recurse -Force
+    }
+    Write-Log "Creating local virtual environment at .venv ..."
+    & $pythonCmd.Split()[0] $pythonCmd.Split()[1..99] -m venv $localVenv
+    $venvPath = Resolve-NotetakerVenvPath -ProjectDir $ProjectDir
 }
 
-# Activate virtual environment
-$activateScript = Join-Path $venvPath "Scripts\Activate.ps1"
-if (Test-Path $activateScript) {
-    . $activateScript
-} else {
-    Write-Err "Could not find virtual environment activation script"
+if (-not $venvPath) {
+    Write-Err "No valid Python venv found. Set CHEEAPPS_VENV to your shared venv folder (e.g. X:\.env) and re-run install."
     exit 1
 }
 
+$venvPython = Join-Path $venvPath "Scripts\python.exe"
+Write-Log "Virtual environment: $venvPath"
+$markerPath = Join-Path $ProjectDir ".notetaker_venv"
+Set-Content -LiteralPath $markerPath -Value $venvPath -Encoding utf8 -NoNewline
+
 # Upgrade pip
 Write-Log "Upgrading pip..."
-python -m pip install --upgrade pip --quiet
+& $venvPython -m pip install --upgrade pip --quiet
 
 # Install dependencies
 $requirementsPath = Join-Path $ProjectDir "requirements.txt"
 if (Test-Path $requirementsPath) {
     Write-Log "Installing Python dependencies (this may take several minutes)..."
-    pip install -r requirements.txt
+    Write-Log "If pip fails with WinError 32 on sounddevice/portaudio, stop other apps using $venvPath (voice-dictation, notetaker, uvicorn) and retry."
+    & $venvPython -m pip install -r $requirementsPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "pip install failed (exit $LASTEXITCODE). See errors above."
+        exit 1
+    }
     Write-Log "Python dependencies: installed"
 } else {
     Write-Err "requirements.txt not found!"
@@ -436,7 +494,7 @@ else:
     print("\nAll imports successful!")
 '@
 
-python -c $verifyScript
+& $venvPython -c $verifyScript
 
 # ============================================================================
 # Create Start Script
@@ -449,16 +507,33 @@ $startScript = @'
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectDir
 
-# Activate virtual environment
-. ".\.venv\Scripts\Activate.ps1"
+function Get-VenvPython {
+    $candidates = @()
+    if ($env:CHEEAPPS_VENV -and $env:CHEEAPPS_VENV.Trim()) { $candidates += $env:CHEEAPPS_VENV.Trim() }
+    $marker = Join-Path $ProjectDir ".notetaker_venv"
+    if (Test-Path -LiteralPath $marker) {
+        $line = (Get-Content -LiteralPath $marker -TotalCount 1 -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($line -and "$line".Trim()) { $candidates += "$line".Trim() }
+    }
+    $candidates += (Join-Path (Split-Path -Parent $ProjectDir) ".env")
+    $candidates += (Join-Path $ProjectDir ".venv")
+    foreach ($raw in $candidates) {
+        try { $dir = [System.IO.Path]::GetFullPath($raw) } catch { continue }
+        $py = Join-Path $dir "Scripts\python.exe"
+        if ((Test-Path -LiteralPath (Join-Path $dir "pyvenv.cfg")) -and (Test-Path -LiteralPath $py)) { return $py }
+    }
+    throw "No valid venv. Run install.bat or set CHEEAPPS_VENV (e.g. X:\.env)."
+}
 
-# Start server
+$venvPython = Get-VenvPython
+
 Write-Host "Starting Notetaker server..."
+Write-Host "Python: $venvPython"
 Write-Host "Web interface: http://127.0.0.1:6684"
 Write-Host "Press Ctrl+C to stop"
 Write-Host ""
 
-python -m uvicorn run:app --host 127.0.0.1 --port 6684
+& $venvPython -m uvicorn run:app --host 127.0.0.1 --port 6684
 '@
 
 $startScriptPath = Join-Path $ProjectDir "start.ps1"
@@ -468,9 +543,9 @@ Write-Log "Created start.ps1"
 # Also create a batch file for easier launching
 $startBatch = @'
 @echo off
+title Notetaker
 cd /d "%~dp0"
 powershell -ExecutionPolicy Bypass -File "start.ps1"
-pause
 '@
 
 $startBatchPath = Join-Path $ProjectDir "start.bat"

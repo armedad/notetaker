@@ -147,12 +147,12 @@ class BackgroundFinalizer:
         
         Args:
             meeting_id: The meeting ID
-            stages: List of stage keys ('transcription', 'diarization', 'speaker_names', 'summary', 'title')
+            stages: List of stage keys ('transcription', 'diarization', 'speaker_names')
         """
         import threading
         
         # Define the correct dependency order
-        STAGE_ORDER = ["transcription", "diarization", "speaker_names", "summary"]
+        STAGE_ORDER = ["transcription", "diarization", "speaker_names"]
         
         # Sort requested stages by dependency order
         ordered_stages = [s for s in STAGE_ORDER if s in stages]
@@ -204,8 +204,6 @@ class BackgroundFinalizer:
                             self._run_diarization_stage(meeting_id, audio_path, segments)
                         elif stage == "speaker_names":
                             self._run_speaker_names_stage(meeting_id, segments)
-                        elif stage == "summary":
-                            self._run_summary_stage(meeting_id)
                         else:
                             _logger.warning("run_stages_now: unknown stage %s", stage)
                     except Exception as exc:
@@ -379,70 +377,6 @@ class BackgroundFinalizer:
             self._meeting_store.publish_status_log(meeting_id, "speaker_names", "failed", {"error": error_detail})
             raise
     
-    def _run_summary_stage(self, meeting_id: str) -> None:
-        """Run summary generation stage.
-
-        Streams tokens from the LLM, accumulates them, then parses the
-        structured JSON result.  If the JSON includes a ``title`` field the
-        title is applied immediately (eliminating a separate LLM call).
-        """
-        from app.services.summarization import SummarizationService
-
-        self._meeting_store.publish_finalization_status(meeting_id, "Summary...", 0.6)
-        self._meeting_store.publish_status_log(meeting_id, "summary", "started")
-
-        meeting = self._meeting_store.get_meeting(meeting_id)
-        if not meeting:
-            return
-
-        transcript = meeting.get("transcript", {})
-        segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
-        user_notes = meeting.get("user_notes", [])
-
-        summary_text = "\n".join(
-            seg.get("text", "") for seg in segments if isinstance(seg, dict)
-        )
-
-        if not summary_text.strip():
-            self._meeting_store.mark_finalization_stage(meeting_id, "summary")
-            self._meeting_store.publish_status_log(meeting_id, "summary", "skipped", {"reason": "no transcript text"})
-            return
-
-        try:
-            accumulated = ""
-            for token in self._summarization.summarize_stream(summary_text, user_notes=user_notes):
-                accumulated += token
-                self._meeting_store.publish_event("summary_token", meeting_id, {"text": accumulated})
-
-            result = SummarizationService.parse_structured_summary(accumulated)
-
-            self._meeting_store.add_summary(
-                meeting_id,
-                summary_data=result,
-                provider="default",
-            )
-
-            self._meeting_store.publish_event(
-                "summary_complete", meeting_id, {"structured": result}
-            )
-            self._meeting_store.mark_finalization_stage(meeting_id, "summary")
-            self._meeting_store.publish_status_log(meeting_id, "summary", "completed",
-                {"summary_length": len(result.get("overview", ""))})
-
-            if result.get("title"):
-                self._meeting_store.set_title_from_summary(meeting_id, result["title"])
-                self._meeting_store.publish_event(
-                    "title_updated", meeting_id,
-                    {"title": result["title"], "source": "auto"},
-                )
-
-            self._meeting_store.publish_event("meeting_updated", meeting_id)
-        except Exception as exc:
-            error_detail = f"{type(exc).__name__}: {str(exc)}"
-            self._meeting_store.mark_finalization_stage_failed(meeting_id, "summary", error_detail)
-            self._meeting_store.publish_status_log(meeting_id, "summary", "failed", {"error": error_detail})
-            raise
-    
     def wake(self) -> None:
         """Wake the finalizer to process pending meetings immediately."""
         self._wake_event.set()
@@ -604,8 +538,6 @@ class BackgroundFinalizer:
             needs_transcription = finalization.get("transcription") == MeetingStore.FINALIZATION_PENDING
             needs_diarization = finalization.get("diarization") == MeetingStore.FINALIZATION_PENDING
             needs_speaker_names = finalization.get("speaker_names") == MeetingStore.FINALIZATION_PENDING
-            needs_summary = finalization.get("summary") == MeetingStore.FINALIZATION_PENDING
-            
             pending_stages = self._meeting_store.get_pending_finalization_stages(meeting)
             failed_stages = self._meeting_store.get_failed_finalization_stages(meeting)
             _logger.info(
@@ -727,86 +659,26 @@ class BackgroundFinalizer:
                     {"reason": "no diarization segments"}
                 )
             
-            # Stage 3: Summary generation (produces structured JSON with title)
-            if needs_summary:
-                from app.services.summarization import SummarizationService as _SS
-
-                self._set_current_work(meeting_id, "summary")
-                self._meeting_store.publish_finalization_status(
-                    meeting_id, "Summary...", 0.6
+            # Optional auto-title from transcript (best-effort)
+            meeting = self._meeting_store.get_meeting(meeting_id)
+            if meeting:
+                transcript = meeting.get("transcript", {})
+                segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
+                transcript_text = "\n".join(
+                    seg.get("text", "") for seg in segments if isinstance(seg, dict)
                 )
-                self._meeting_store.publish_status_log(
-                    meeting_id, "summary", "started"
-                )
-                meeting = self._meeting_store.get_meeting(meeting_id)
-                if meeting:
-                    transcript = meeting.get("transcript", {})
-                    segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
-                    user_notes = meeting.get("user_notes", [])
-
-                    summary_text = "\n".join(
-                        seg.get("text", "") for seg in segments if isinstance(seg, dict)
-                    )
-
-                    if summary_text.strip():
-                        self._meeting_store.publish_status_log(
-                            meeting_id, "summary", "input",
-                            {"transcript_length": len(summary_text)}
+                if transcript_text.strip():
+                    try:
+                        self._meeting_store.maybe_auto_title(
+                            meeting_id,
+                            transcript_text[:4000],
+                            self._summarization,
                         )
-                        try:
-                            accumulated = ""
-                            for token in self._summarization.summarize_stream(summary_text, user_notes=user_notes):
-                                accumulated += token
-                                self._meeting_store.publish_event(
-                                    "summary_token", meeting_id, {"text": accumulated}
-                                )
-
-                            result = _SS.parse_structured_summary(accumulated)
-
-                            self._meeting_store.add_summary(
-                                meeting_id,
-                                summary_data=result,
-                                provider="default",
-                            )
-                            self._meeting_store.publish_event(
-                                "summary_complete", meeting_id, {"structured": result}
-                            )
-                            self._meeting_store.mark_finalization_stage(meeting_id, "summary")
-                            self._meeting_store.publish_status_log(
-                                meeting_id, "summary", "completed",
-                                {"summary_length": len(result.get("overview", ""))}
-                            )
-                            _logger.info(
-                                "BackgroundFinalizer: summary generated for %s",
-                                meeting_id,
-                            )
-
-                            if result.get("title"):
-                                self._meeting_store.set_title_from_summary(meeting_id, result["title"])
-                                self._meeting_store.publish_event(
-                                    "title_updated", meeting_id,
-                                    {"title": result["title"], "source": "auto"},
-                                )
-
-                        except Exception as exc:
-                            _logger.warning(
-                                "BackgroundFinalizer: summary generation failed for %s: %s",
-                                meeting_id, exc,
-                            )
-                            error_detail = f"{type(exc).__name__}: {str(exc)}"
-                            self._meeting_store.mark_finalization_stage_failed(
-                                meeting_id, "summary", error_detail
-                            )
-                            self._meeting_store.publish_status_log(
-                                meeting_id, "summary", "failed",
-                                {"error": error_detail}
-                            )
-                            errors_occurred.append(("summary", str(exc)))
-                    else:
-                        self._meeting_store.mark_finalization_stage(meeting_id, "summary")
-                        self._meeting_store.publish_status_log(
-                            meeting_id, "summary", "skipped",
-                            {"reason": "no transcript text"}
+                    except Exception as exc:
+                        _logger.warning(
+                            "BackgroundFinalizer: auto title failed for %s: %s",
+                            meeting_id,
+                            exc,
                         )
             
             # Mark meeting as completed if it wasn't already

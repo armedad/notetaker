@@ -8,13 +8,17 @@
     "model_size": "base",
     "device": "cpu",
     "compute_type": "int8",
-    "live_chunk_seconds": 5.0,
+    "live_chunk_seconds": 15.0,
     "live_model_size": "base",
     "live_device": "cpu",
     "live_compute_type": "int8",
     "final_model_size": "medium",
     "final_device": "cpu",
-    "final_compute_type": "int8"
+    "final_compute_type": "int8",
+    "retranscribe_on_stop": false
+  },
+  "features": {
+    "summary": false
   },
   "diarization": {
     "enabled": false,
