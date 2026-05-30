@@ -3,8 +3,13 @@ set -euo pipefail
 
 # Notetaker Installation Script
 # Full installation of all components needed to run Notetaker
+#
+# Uses CHEEAPPS_VENV for shared venv (same as gauth / voice-dictation). Python 3.12.
+# See CHEEAPPS.md. Non-interactive: CHEEAPPS_VENV="$HOME/venvs/cheeapps-stack" ./install.sh
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/cheeapps_python.sh
+source "${PROJECT_DIR}/scripts/cheeapps_python.sh"
 
 log() {
   echo "[$(date +"%H:%M:%S")] [install] $*"
@@ -66,30 +71,15 @@ if [[ "$(uname)" == "Darwin" ]]; then
 fi
 
 # ============================================================================
-# Python Check
+# Python 3.12 + CHEEAPPS venv
 # ============================================================================
 log ""
-log "Checking Python..."
+log "Checking Python 3.12..."
 
-if ! command -v python3 >/dev/null 2>&1; then
-  error "python3 not found."
-  log "Please install Python 3.10+ via:"
-  log "  brew install python@3.11"
-  log "  or download from https://www.python.org/downloads/"
+if ! cheeapps_resolve_python; then
   exit 1
 fi
-
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-PYTHON_MAJOR=$(echo "${PYTHON_VERSION}" | cut -d. -f1)
-PYTHON_MINOR=$(echo "${PYTHON_VERSION}" | cut -d. -f2)
-
-log "Python version: ${PYTHON_VERSION}"
-
-if [[ "${PYTHON_MAJOR}" -lt 3 ]] || [[ "${PYTHON_MAJOR}" -eq 3 && "${PYTHON_MINOR}" -lt 10 ]]; then
-  warn "Python 3.10+ recommended. Current: ${PYTHON_VERSION}"
-  warn "Some features may not work correctly."
-  log "To install Python 3.11: brew install python@3.11"
-fi
+log "Python for venv: ${CHEEAPPS_PY} ($("${CHEEAPPS_PY}" --version 2>&1))"
 
 # ============================================================================
 # Virtual Environment & Python Dependencies
@@ -99,14 +89,74 @@ log "Setting up Python environment..."
 
 cd "${PROJECT_DIR}"
 
-if [[ ! -d ".venv" ]]; then
-  log "Creating virtual environment..."
-  python3 -m venv .venv
+resolve_notetaker_venv() {
+  local candidates=()
+  if [[ -n "${CHEEAPPS_VENV:-}" ]]; then
+    candidates+=("${CHEEAPPS_VENV}")
+  fi
+  if [[ -f "${PROJECT_DIR}/.notetaker_venv" ]]; then
+    candidates+=("$(head -n 1 "${PROJECT_DIR}/.notetaker_venv" | tr -d '\r')")
+  fi
+  candidates+=("$(dirname "${PROJECT_DIR}")/.env")
+  candidates+=("${PROJECT_DIR}/.venv")
+
+  local raw resolved
+  for raw in "${candidates[@]}"; do
+    [[ -n "$raw" ]] || continue
+    case "$raw" in
+      /*) resolved="$raw" ;;
+      *) resolved="${PROJECT_DIR}/${raw}" ;;
+    esac
+    resolved="$(cd "$(dirname "$resolved")" 2>/dev/null && pwd)/$(basename "$resolved")" || continue
+    if [[ -f "${resolved}/pyvenv.cfg" && -x "${resolved}/bin/python" ]]; then
+      echo "$resolved"
+      return 0
+    fi
+  done
+  return 1
+}
+
+VENV_DIR=""
+if VENV_DIR="$(resolve_notetaker_venv)"; then
+  log "Virtual environment: ${VENV_DIR}"
+  cheeapps_warn_venv_python "${VENV_DIR}"
 else
-  log "Virtual environment: exists"
+  if [[ -n "${CHEEAPPS_VENV:-}" ]]; then
+    case "${CHEEAPPS_VENV}" in
+      /*) VENV_DIR="${CHEEAPPS_VENV}" ;;
+      *) VENV_DIR="${PROJECT_DIR}/${CHEEAPPS_VENV}" ;;
+    esac
+    mkdir -p "$(dirname "${VENV_DIR}")"
+    VENV_DIR="$(cd "$(dirname "${VENV_DIR}")" && pwd)/$(basename "${VENV_DIR}")"
+    if [[ -e "${VENV_DIR}" && ! -f "${VENV_DIR}/pyvenv.cfg" ]]; then
+      error "${VENV_DIR} exists but is not a Python venv."
+      exit 1
+    fi
+    log "Creating virtual environment at ${VENV_DIR}..."
+    "${CHEEAPPS_PY}" -m venv "${VENV_DIR}"
+  elif [[ -t 0 ]]; then
+    read -r -p "Path for virtual environment (CHEEAPPS shared, e.g. ../.venv): " CHEEAPPS_VENV
+    CHEEAPPS_VENV="${CHEEAPPS_VENV#"${CHEEAPPS_VENV%%[![:space:]]*}"}"
+    CHEEAPPS_VENV="${CHEEAPPS_VENV%"${CHEEAPPS_VENV##*[![:space:]]}"}"
+    [[ -n "${CHEEAPPS_VENV}" ]] || { error "venv path required"; exit 1; }
+    case "${CHEEAPPS_VENV}" in
+      /*) VENV_DIR="${CHEEAPPS_VENV}" ;;
+      *) VENV_DIR="${PROJECT_DIR}/${CHEEAPPS_VENV}" ;;
+    esac
+    mkdir -p "$(dirname "${VENV_DIR}")"
+    VENV_DIR="$(cd "$(dirname "${VENV_DIR}")" && pwd)/$(basename "${VENV_DIR}")"
+    log "Creating virtual environment at ${VENV_DIR}..."
+    "${CHEEAPPS_PY}" -m venv "${VENV_DIR}"
+  else
+    error "No valid venv. Set CHEEAPPS_VENV or run interactively."
+    exit 1
+  fi
 fi
 
-source ".venv/bin/activate"
+printf '%s\n' "${VENV_DIR}" >"${PROJECT_DIR}/.notetaker_venv"
+
+# shellcheck source=/dev/null
+source "${VENV_DIR}/bin/activate"
 
 # Upgrade pip
 log "Upgrading pip..."
@@ -292,7 +342,7 @@ fi
 log ""
 log "Verifying Python imports..."
 
-python3 - <<'PY'
+python - <<'PY'
 import sys
 errors = []
 

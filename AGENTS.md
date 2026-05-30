@@ -26,7 +26,9 @@ cd X:\notetaker
 
 Install writes `.notetaker_venv` with the resolved path. Do not use broken `X:\notetaker\.venv` on the share — remove it if `Scripts\python.exe` is missing.
 
-**Python version:** shared `X:\.env` is currently **3.10**. Notetaker’s `requirements.txt` pins packages that work on 3.10; upstream may eventually want **3.11+** for some ML wheels. If pip fails on version gates, recreate the shared venv with `py -3.11 -m venv X:\.env` (reinstall gauth/voice-dictation/notetaker deps after).
+**Python version:** shared CHEEAPPS venv targets **3.12** (`X:\.env` on Windows). Recreate with `py -3.12 -m venv X:\.env`, then reinstall gauth → voice-dictation → cursor-agent → notetaker. See [`CHEEAPPS.md`](CHEEAPPS.md).
+
+**Torch pins:** `requirements.txt` locks `torch` / `torchaudio` / `torchvision` at **2.5.1** so pyannote 3.3.2 imports on 3.12 (newer torchaudio drops `AudioMetaData`). Do not upgrade torch in the shared venv without re-testing whisperx + pyannote.
 
 ## Paths
 
