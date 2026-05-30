@@ -99,12 +99,13 @@ Write-Log ""
 Write-Log "Checking Python..."
 
 $pythonCmd = $null
-$pythonPaths = @("python", "python3", "py -3")
+$pythonPaths = @("py -3.12", "python", "python3", "py -3")
 
 foreach ($cmd in $pythonPaths) {
     try {
-        $version = & $cmd.Split()[0] $cmd.Split()[1..99] --version 2>&1
-        if ($version -match "Python 3\.(\d+)") {
+        $parts = $cmd.Split()
+        $version = & $parts[0] @($parts[1..($parts.Length - 1)]) --version 2>&1
+        if ($version -match "Python 3\.12") {
             $pythonCmd = $cmd
             Write-Log "Found Python: $version"
             break
@@ -115,32 +116,30 @@ foreach ($cmd in $pythonPaths) {
 }
 
 if (-not $pythonCmd) {
-    Write-Log "Python not found. Installing Python 3.11..."
+    Write-Log "Python 3.12 not found. Installing Python 3.12..."
     if ($hasWinget) {
-        winget install Python.Python.3.11 --accept-source-agreements --accept-package-agreements
-        $pythonCmd = "py -3"
+        winget install Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+        $pythonCmd = "py -3.12"
         Write-Log "Python installed. You may need to restart PowerShell."
     } else {
-        Write-Err "Cannot install Python automatically. Please install Python 3.11+ from:"
+        Write-Err "Cannot install Python automatically. Please install Python 3.12 from:"
         Write-Log "https://www.python.org/downloads/"
         Write-Log "Make sure to check 'Add Python to PATH' during installation."
         exit 1
     }
 }
 
-# Check Python version
-$versionOutput = & $pythonCmd.Split()[0] $pythonCmd.Split()[1..99] -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>&1
-$pythonVersion = $versionOutput.Trim()
-Write-Log "Python version: $pythonVersion"
-
-$versionParts = $pythonVersion.Split(".")
-$major = [int]$versionParts[0]
-$minor = [int]$versionParts[1]
-
-if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 10)) {
-    Write-Warn "Python 3.10+ recommended. Current: $pythonVersion"
-    Write-Warn "Some features may not work correctly."
+# Venv creation uses 3.12 (CHEEAPPS standard)
+$venvCreateCmd = "py -3.12"
+try {
+    & py -3.12 -c "import sys" 2>&1 | Out-Null
+} catch {
+    $venvCreateCmd = $pythonCmd
 }
+
+$versionOutput = & $pythonCmd.Split()[0] @($pythonCmd.Split()[1..($pythonCmd.Split().Length - 1)]) -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>&1
+$pythonVersion = $versionOutput.Trim()
+Write-Log "Python on PATH: $pythonVersion (CHEEAPPS venvs use 3.12 via $venvCreateCmd)"
 
 # ============================================================================
 # ffmpeg Installation
@@ -184,8 +183,9 @@ if (-not $venvPath) {
         Write-Warn "Removing incomplete .venv under project (missing Scripts\python.exe)..."
         Remove-Item -LiteralPath $localVenv -Recurse -Force
     }
-    Write-Log "Creating local virtual environment at .venv ..."
-    & $pythonCmd.Split()[0] $pythonCmd.Split()[1..99] -m venv $localVenv
+    Write-Log "Creating local virtual environment at .venv with $venvCreateCmd ..."
+    $vcParts = $venvCreateCmd.Split()
+    & $vcParts[0] @($vcParts[1..($vcParts.Length - 1)]) -m venv $localVenv
     $venvPath = Resolve-NotetakerVenvPath -ProjectDir $ProjectDir
 }
 
