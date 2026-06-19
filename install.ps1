@@ -497,60 +497,16 @@ else:
 & $venvPython -c $verifyScript
 
 # ============================================================================
-# Create Start Script
+# Launch scripts (notetaker.bat / notetaker.ps1 — tracked in repo)
 # ============================================================================
 Write-Log ""
-Write-Log "Creating start script..."
-
-$startScript = @'
-# Notetaker Start Script
-$ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $ProjectDir
-
-function Get-VenvPython {
-    $candidates = @()
-    if ($env:CHEEAPPS_VENV -and $env:CHEEAPPS_VENV.Trim()) { $candidates += $env:CHEEAPPS_VENV.Trim() }
-    $marker = Join-Path $ProjectDir ".notetaker_venv"
-    if (Test-Path -LiteralPath $marker) {
-        $line = (Get-Content -LiteralPath $marker -TotalCount 1 -ErrorAction SilentlyContinue | Select-Object -First 1)
-        if ($line -and "$line".Trim()) { $candidates += "$line".Trim() }
-    }
-    $candidates += (Join-Path (Split-Path -Parent $ProjectDir) ".env")
-    $candidates += (Join-Path $ProjectDir ".venv")
-    foreach ($raw in $candidates) {
-        try { $dir = [System.IO.Path]::GetFullPath($raw) } catch { continue }
-        $py = Join-Path $dir "Scripts\python.exe"
-        if ((Test-Path -LiteralPath (Join-Path $dir "pyvenv.cfg")) -and (Test-Path -LiteralPath $py)) { return $py }
-    }
-    throw "No valid venv. Run install.bat or set CHEEAPPS_VENV (e.g. X:\.env)."
+$launcherPs1 = Join-Path $ProjectDir "notetaker.ps1"
+$launcherBat = Join-Path $ProjectDir "notetaker.bat"
+if ((Test-Path -LiteralPath $launcherPs1) -and (Test-Path -LiteralPath $launcherBat)) {
+    Write-Log "Launch scripts: notetaker.bat / notetaker.ps1"
+} else {
+    Write-Log "WARNING: notetaker.bat or notetaker.ps1 missing — reinstall from repo"
 }
-
-$venvPython = Get-VenvPython
-
-Write-Host "Starting Notetaker server..."
-Write-Host "Python: $venvPython"
-Write-Host "Web interface: http://127.0.0.1:6684"
-Write-Host "Press Ctrl+C to stop"
-Write-Host ""
-
-& $venvPython -m uvicorn run:app --host 127.0.0.1 --port 6684
-'@
-
-$startScriptPath = Join-Path $ProjectDir "start.ps1"
-$startScript | Out-File -FilePath $startScriptPath -Encoding utf8
-Write-Log "Created start.ps1"
-
-# Also create a batch file for easier launching
-$startBatch = @'
-@echo off
-title Notetaker
-cd /d "%~dp0"
-powershell -ExecutionPolicy Bypass -File "start.ps1"
-'@
-
-$startBatchPath = Join-Path $ProjectDir "start.bat"
-$startBatch | Out-File -FilePath $startBatchPath -Encoding ascii
-Write-Log "Created start.bat"
 
 # ============================================================================
 # Installation Summary
@@ -584,8 +540,8 @@ Write-Log "Next Steps:"
 Write-Log "============================================"
 Write-Log ""
 Write-Log "1. Start the server:"
-Write-Log "   Double-click start.bat"
-Write-Log "   OR run: .\start.ps1"
+Write-Log "   Double-click notetaker.bat"
+Write-Log "   OR run: .\notetaker.ps1"
 Write-Log ""
 Write-Log "2. Open the web interface:"
 Write-Log "   http://127.0.0.1:6684"

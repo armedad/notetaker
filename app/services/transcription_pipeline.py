@@ -150,36 +150,19 @@ class TranscriptionPipeline:
         """
         from app.services.audio_utils import load_audio_for_whisper
         
-        # #region agent log
-        _dbg_logger.debug("TRANSCRIBE_FORMAT_START: audio_path=%s provider=%s", audio_path, type(self._provider).__name__)
-        # #endregion
         
         # Load audio directly to memory (avoids temp WAV file for Opus, FLAC, etc.)
         audio_array = load_audio_for_whisper(audio_path)
         segments_iter, info = self._provider.stream_segments(audio_array)
-        # #region agent log
-        _dbg_logger.debug("TRANSCRIBE_FORMAT_GOT_ITER: audio_path=%s info_type=%s", audio_path, type(info).__name__)
-        # #endregion
         language = getattr(info, "language", None)
         
         segments: list[dict] = []
         seg_count = 0
-        # #region agent log
-        _dbg_logger.debug("TRANSCRIBE_FORMAT_ITERATING_SEGMENTS: audio_path=%s starting segment iteration", audio_path)
-        # #endregion
         for segment in segments_iter:
             seg_count += 1
-            # #region agent log
-            if seg_count <= 3 or seg_count % 10 == 0:
-                _dbg_logger.debug("TRANSCRIBE_FORMAT_SEG: seg_count=%d start=%.2f end=%.2f text_len=%d",
-                                 seg_count, segment.start, segment.end, len(segment.text.strip()))
-            # #endregion
             # Check for cancellation after each segment
             if cancel_event and cancel_event.is_set():
                 self._logger.info("Transcription cancelled during processing")
-                # #region agent log
-                _dbg_logger.debug("TRANSCRIBE_FORMAT_CANCELLED: audio_path=%s seg_count=%d", audio_path, seg_count)
-                # #endregion
                 break
             segments.append({
                 "type": "segment",
@@ -188,9 +171,6 @@ class TranscriptionPipeline:
                 "text": segment.text.strip(),
                 "speaker": None,
             })
-        # #region agent log
-        _dbg_logger.debug("TRANSCRIBE_FORMAT_DONE: audio_path=%s segments=%d language=%s", audio_path, len(segments), language)
-        # #endregion
         
         return segments, language
     
@@ -249,23 +229,6 @@ class TranscriptionPipeline:
             is_path = isinstance(audio_source, str)
             self._logger.info("Diarization start: source=%s",
                               audio_source if is_path else "in_memory")
-            # #region agent log
-            try:
-                dbg(
-                    self._logger,
-                    location="app/services/transcription_pipeline.py:run_diarization",
-                    message="run_diarization_before_run",
-                    data={
-                        "provider": getattr(self._diarization, "get_provider_name", lambda: "unknown")(),
-                        "segments_in": len(segments) if segments else 0,
-                        "audio_source_type": "path" if is_path else "in_memory",
-                    },
-                    run_id="pre-fix",
-                    hypothesis_id="H3",
-                )
-            except Exception:
-                pass
-            # #endregion
             if is_path:
                 from app.services.audio_utils import load_audio_for_pyannote
                 audio_source = load_audio_for_pyannote(audio_source)
@@ -273,38 +236,8 @@ class TranscriptionPipeline:
             segments = apply_diarization(segments, diarization_segments)
             speaker_count = len(set(s.get("speaker") for s in segments if s.get("speaker")))
             self._logger.info("Diarization complete: speakers=%s", speaker_count)
-            # #region agent log
-            try:
-                dbg(
-                    self._logger,
-                    location="app/services/transcription_pipeline.py:run_diarization",
-                    message="run_diarization_after_apply",
-                    data={
-                        "diarization_segments": len(diarization_segments) if diarization_segments else 0,
-                        "segments_out": len(segments) if segments else 0,
-                        "speakers": speaker_count,
-                    },
-                    run_id="pre-fix",
-                    hypothesis_id="H5",
-                )
-            except Exception:
-                pass
-            # #endregion
         except Exception as exc:
             self._logger.warning("Diarization failed: %s", exc)
-            # #region agent log
-            try:
-                dbg(
-                    self._logger,
-                    location="app/services/transcription_pipeline.py:run_diarization",
-                    message="run_diarization_error",
-                    data={"exc_type": type(exc).__name__, "exc_str": str(exc)[:800]},
-                    run_id="pre-fix",
-                    hypothesis_id="H1",
-                )
-            except Exception:
-                pass
-            # #endregion
         
         return segments
     
@@ -401,11 +334,6 @@ class TranscriptionPipeline:
         segments_iter, info = self._provider.stream_segments(audio_array)
         language = getattr(info, "language", None)
         
-        # #region agent log
-        # Calculate duration from numpy array: samples / sample_rate (16kHz)
-        actual_audio_duration = len(audio_array) / 16000.0
-        raw_segments = []
-        # #endregion
         
         segments: list[dict] = []
         max_end = 0.0
@@ -413,9 +341,6 @@ class TranscriptionPipeline:
             seg_end = float(segment.end)
             if seg_end > max_end:
                 max_end = seg_end
-            # #region agent log
-            raw_segments.append({"raw_start": float(segment.start), "raw_end": seg_end})
-            # #endregion
             segments.append({
                 "type": "segment",
                 "start": float(segment.start) + offset_seconds,
@@ -424,15 +349,6 @@ class TranscriptionPipeline:
                 "speaker": None,
             })
         
-        # #region agent log
-        first_raw_start = raw_segments[0]["raw_start"] if raw_segments else None
-        last_raw_end = raw_segments[-1]["raw_end"] if raw_segments else None
-        gap_at_start = first_raw_start if first_raw_start is not None else None
-        gap_at_end = actual_audio_duration - max_end if actual_audio_duration > 0 else None
-        _dbg_logger.debug("whisper_raw_output: path=%s offset=%f actual_dur=%f max_end=%f raw_segs=%d first=%s last=%s gap_start=%s gap_end=%s",
-                         audio_path, offset_seconds, actual_audio_duration, max_end, len(raw_segments),
-                         first_raw_start, last_raw_end, gap_at_start, gap_at_end)
-        # #endregion
         
         return segments, language, max_end
 
@@ -493,35 +409,6 @@ class TranscriptionPipeline:
             segments: Transcript segments
             audio_path: Path to the audio file for diarization
         """
-        # #region agent log
-        _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
-        import json as _json_fin
-        import time as _time_fin
-        def _dbg_fin(msg, data=None):
-            try:
-                with open(_log_path, "a") as _f:
-                    _f.write(_json_fin.dumps({"location":"pipeline:finalize_meeting_with_diarization","message":msg,"data":data or {},"timestamp":int(_time_fin.time()*1000),"hypothesisId":"H_DIARIZE"})+"\n")
-            except Exception:
-                pass
-        # Get audio file info for debugging
-        _audio_format = None
-        _audio_size = None
-        if audio_path and os.path.exists(audio_path):
-            try:
-                _audio_info = sf.info(audio_path)
-                _audio_format = _audio_info.format
-                _audio_size = os.path.getsize(audio_path)
-            except Exception:
-                pass
-        _dbg_fin("finalize_entry", {
-            "meeting_id": meeting_id,
-            "segments_count": len(segments) if segments else 0,
-            "audio_path": audio_path,
-            "audio_format": _audio_format,
-            "audio_size_bytes": _audio_size,
-            "is_wav": audio_path.endswith(".wav") if audio_path else None,
-        })
-        # #endregion
         
         try:
             self._logger.info(
@@ -531,10 +418,6 @@ class TranscriptionPipeline:
                 audio_path,
             )
             
-            # #region agent log
-            _dbg_logger.debug("FINALIZE_ENTER: meeting_id=%s segments=%d audio_path=%s", 
-                             meeting_id, len(segments) if segments else 0, audio_path)
-            # #endregion
             
             # Guard against double finalization
             meeting = self._meeting_store.get_meeting(meeting_id)
@@ -561,11 +444,6 @@ class TranscriptionPipeline:
             # Step 1-3: Run batch diarization if enabled and audio available
             diarization_segments = []
             diarization_ran = False
-            # #region agent log
-            _dbg_logger.debug("batch_diarization_check: meeting_id=%s has_audio=%s diar_enabled=%s will_run=%s",
-                             meeting_id, bool(audio_path), self._diarization.is_enabled(),
-                             bool(audio_path and self._diarization.is_enabled()))
-            # #endregion
             if audio_path and self._diarization.is_enabled():
                 diarization_ran = True
                 self._meeting_store.publish_finalization_status(
@@ -575,9 +453,6 @@ class TranscriptionPipeline:
                     meeting_id, "diarization", "started",
                     {"audio_path": audio_path}
                 )
-                # #region agent log
-                _dbg_logger.debug("DIARIZATION_START: meeting_id=%s", meeting_id)
-                # #endregion
                 try:
                     # Load audio into memory once — avoids file-path coupling
                     # and lets us share the data with other consumers if needed.
@@ -589,11 +464,6 @@ class TranscriptionPipeline:
                         meeting_id,
                         len(diarization_segments),
                     )
-                    # #region agent log
-                    unique_spk = list(set(s.get("speaker") for s in diarization_segments if s.get("speaker")))
-                    _dbg_logger.debug("batch_diarization_complete: meeting_id=%s segments=%d speakers=%s",
-                                     meeting_id, len(diarization_segments), unique_spk)
-                    # #endregion
                     
                     # Emit diarization output to status log
                     self._meeting_store.publish_status_log(
@@ -639,14 +509,8 @@ class TranscriptionPipeline:
                             "traceback": tb_str,
                         }
                     )
-                    # #region agent log
-                    _dbg_logger.debug("batch_diarization_error: meeting_id=%s error=%s traceback=%s", meeting_id, str(exc)[:500], tb_str[:1000])
-                    # #endregion
             
             # Step 4-6: Identify speaker names using LLM
-            # #region agent log
-            _dbg_logger.debug("DIARIZATION_DONE: meeting_id=%s diar_segments=%d", meeting_id, len(diarization_segments))
-            # #endregion
             if diarization_segments:
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Speaker Names...", 0.3
@@ -723,18 +587,12 @@ class TranscriptionPipeline:
             self._meeting_store.update_status(meeting_id, "completed")
             self._meeting_store.publish_event("meeting_updated", meeting_id)
             
-            # #region agent log
-            _dbg_logger.debug("FINALIZATION_COMPLETE: meeting_id=%s", meeting_id)
-            # #endregion
             self._logger.info("finalize_meeting_with_diarization complete: meeting_id=%s", meeting_id)
             return None
             
         except Exception as exc:
             import traceback
             tb_str = traceback.format_exc()
-            # #region agent log
-            _dbg_logger.debug("FINALIZATION_CRASH: meeting_id=%s error=%s traceback=%s", meeting_id, str(exc)[:500], tb_str[:1000])
-            # #endregion
             self._logger.exception(
                 "finalize_meeting_with_diarization failed: meeting_id=%s error=%s",
                 meeting_id, exc

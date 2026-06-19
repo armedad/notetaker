@@ -138,14 +138,6 @@ def _test_wrap_chat_service(
     original_chat_meeting = chat_service.chat_meeting
     original_chat_overall = chat_service.chat_overall
     
-    # #region agent log
-    import json as _json
-    _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
-    def _dbg(msg, data):
-        import time as _time
-        with open(_log_path, "a") as _f:
-            _f.write(_json.dumps({"location":"llm_instrumentation.py","message":msg,"data":data,"timestamp":int(_time.time()*1000),"runId":"chat-wrap","hypothesisId":"H3"})+"\n")
-    # #endregion
     
     @functools.wraps(original_chat_meeting)
     def wrapped_chat_meeting(
@@ -153,9 +145,6 @@ def _test_wrap_chat_service(
         question: str,
         include_related: bool = False,
     ) -> Generator[str, None, None]:
-        # #region agent log
-        _dbg("wrapped_chat_meeting_called", {"meeting_id": meeting_id, "question": question[:50]})
-        # #endregion
         # Start tracking
         query_id = rag_metrics.test_start_query("meeting_chat", meeting_id=meeting_id)
         token_query_id = _test_active_query_id.set(query_id)
@@ -203,9 +192,6 @@ def _test_wrap_chat_service(
         max_meetings: int = 5,
         include_transcripts: bool = True,
     ) -> Generator[str, None, None]:
-        # #region agent log
-        _dbg("wrapped_chat_overall_called", {"question": question[:50], "max_meetings": max_meetings})
-        # #endregion
         # Start tracking
         query_id = rag_metrics.test_start_query("overall_chat")
         token_query_id = _test_active_query_id.set(query_id)

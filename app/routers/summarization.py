@@ -141,26 +141,12 @@ def create_summarization_router(
         user_notes = meeting.get("user_notes", [])
         
         def generate():
-            # #region agent log
-            import time as _time
-            _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
-            def _dbg(msg, data=None):
-                with open(_log_path, "a") as _f:
-                    _f.write(json.dumps({"location":"summarization.py:generate","message":msg,"data":data or {},"timestamp":int(_time.time()*1000),"hypothesisId":"H2"})+"\n")
-            _dbg("generate_start")
-            _sse_count = 0
-            # #endregion
             accumulated_text = ""
             try:
                 for token in summarization_service.summarize_stream(
                     transcript_text, provider_override=payload.provider, user_notes=user_notes
                 ):
                     accumulated_text += token
-                    # #region agent log
-                    _sse_count += 1
-                    if _sse_count <= 5 or _sse_count % 20 == 0:
-                        _dbg("sse_yield", {"sse_num": _sse_count, "token_len": len(token)})
-                    # #endregion
                     yield f"data: {json.dumps({'token': token})}\n\n"
             except LLMProviderError as exc:
                 logger.warning("Streaming summarization failed: %s", exc)
@@ -169,9 +155,6 @@ def create_summarization_router(
                 logger.exception("Streaming summarization error: %s", exc)
                 yield f"data: {json.dumps({'error': 'Summarization failed'})}\n\n"
             finally:
-                # #region agent log
-                _dbg("generate_finally", {"total_sse": _sse_count})
-                # #endregion
                 # Signal completion
                 yield "data: [DONE]\n\n"
                 

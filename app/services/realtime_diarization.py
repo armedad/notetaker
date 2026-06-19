@@ -222,17 +222,10 @@ class RealtimeDiarizationService:
                     channels=self._channels,
                 )
                 
-                # #region agent log - track annotation accumulation
-                prev_count = len(self._annotations)
-                # #endregion
                 
                 if new_annotations:
                     # Accumulate into internal list for get_speaker_at lookups
                     self._annotations.extend(new_annotations)
-                    # #region agent log - log when annotations are updated
-                    self._logger.debug("annotations_accumulated: prev=%d added=%d total=%d audio_s=%.2f",
-                                      prev_count, len(new_annotations), len(self._annotations), self._total_audio_duration)
-                    # #endregion
 
                 # Log only first few feed calls to avoid spamming.
                 if self._dbg_feed_count < 3:
@@ -303,11 +296,6 @@ class RealtimeDiarizationService:
             if not self._is_active:
                 return None
             
-            # #region agent log
-            found_speaker = None
-            match_type = None
-            matched_ann = None
-            # #endregion
             
             # First pass: exact match (timestamp falls within annotation range)
             for ann in self._annotations:
@@ -333,12 +321,6 @@ class RealtimeDiarizationService:
                         match_type = "nearest"
                         matched_ann = ann
             
-            # #region agent log
-            matched_range = [round(matched_ann["start"], 2), round(matched_ann["end"], 2)] if matched_ann else None
-            self._logger.debug("speaker_lookup_result: ts=%.2f speaker=%s match=%s range=%s anns=%d audio_s=%.2f",
-                              timestamp, found_speaker, match_type, matched_range, 
-                              len(self._annotations), self._total_audio_duration)
-            # #endregion
             
             return found_speaker
     

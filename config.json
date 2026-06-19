@@ -20,6 +20,11 @@
   "features": {
     "summary": false
   },
+  "recording": {
+    "auto_pause_enabled": true,
+    "auto_pause_idle_seconds": 300,
+    "silence_rms_threshold": 400
+  },
   "diarization": {
     "enabled": false,
     "provider": "pyannote",

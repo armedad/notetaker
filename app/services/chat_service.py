@@ -373,15 +373,6 @@ class ChatService:
         Yields:
             Token strings as they arrive from the LLM
         """
-        # #region agent log
-        import time as _time
-        import json as _json
-        _log_path = os.path.join(os.getcwd(), "logs", "debug.log")
-        def _dbg(msg, data):
-            with open(_log_path, "a") as _f:
-                _f.write(_json.dumps({"location":"chat_service.py:chat_overall","message":msg,"data":data,"timestamp":int(_time.time()*1000),"runId":"chat-debug","hypothesisId":"H1-H4"})+"\n")
-        _dbg("entry", {"question": question[:100], "max_meetings": max_meetings})
-        # #endregion
         
         self._logger.info(
             "Overall chat: question='%s' max_meetings=%d include_transcripts=%s",
@@ -391,18 +382,12 @@ class ChatService:
         # Search for relevant meetings
         search_results = self._search.search_meetings(question, limit=max_meetings)
         
-        # #region agent log
-        _dbg("search_results", {"count": len(search_results), "titles": [r.title for r in search_results[:3]]})
-        # #endregion
         
         if not search_results:
             # No matches - get recent meetings instead
             self._logger.info("No search matches, using recent meetings")
             all_meetings = self._meeting_store.list_meetings()
             meetings = all_meetings[:max_meetings]
-            # #region agent log
-            _dbg("fallback_to_recent", {"recent_count": len(meetings), "titles": [m.get("title","") for m in meetings[:3]]})
-            # #endregion
         else:
             # Load full meeting data for search results
             meetings = []
@@ -423,17 +408,11 @@ class ChatService:
         # Build prompt
         prompt = self._build_overall_chat_prompt(question, meetings, include_transcripts)
         
-        # #region agent log
-        _dbg("prompt_built", {"prompt_len": len(prompt), "has_question": question in prompt, "meetings_in_prompt": len(meetings)})
-        # #endregion
         
         # Stream response from LLM
         provider = self._summarization._get_provider()
         self._logger.info("Chat using provider=%s", provider.__class__.__name__)
         
-        # #region agent log
-        _dbg("calling_provider", {"provider": provider.__class__.__name__})
-        # #endregion
         
         self._maybe_log_prompt(question, prompt, provider.__class__.__name__, {
             "Mode": "overall",

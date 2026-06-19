@@ -1,142 +1,52 @@
-"""Debug UI test suite."""
+"""Debug UI / manual summarization HTML checks."""
 from __future__ import annotations
 
-from app.tests.base import TestSuite, TestResult, TestStatus
+import aiohttp
+
+from app.tests.base import TestResult, TestStatus, TestSuite
 
 
 class DebugUISuite(TestSuite):
-    """Tests for the manual summarization UI."""
-
     suite_id = "debug-ui"
     name = "Manual Summarization UI"
-    description = "Tests the manual summarization section in the meeting UI"
+    description = "HTML presence checks for meeting page controls"
 
     def _register_tests(self):
-        self.add_test(
-            "DU-001",
-            "Debug button exists in meeting page",
-            self._test_debug_button_exists,
-        )
-        self.add_test(
-            "DU-002",
-            "Click debug shows two columns",
-            self._test_two_columns_render,
-            skip=True,
-            skip_reason="Feature not yet implemented",
-        )
-        self.add_test(
-            "DU-003",
-            "Left column has done/draft/streaming",
-            self._test_left_column_content,
-            skip=True,
-            skip_reason="Feature not yet implemented",
-        )
-        self.add_test(
-            "DU-004",
-            "Right column has summarized/interim",
-            self._test_right_column_content,
-            skip=True,
-            skip_reason="Feature not yet implemented",
-        )
-        self.add_test(
-            "DU-005",
-            "Content auto-scrolls to bottom",
-            self._test_auto_scroll,
-            skip=True,
-            skip_reason="Feature not yet implemented",
-        )
+        self.add_test("DU-001", "Manual summarize button in meeting page", self._test_manual_button)
+        self.add_test("DU-002", "Meeting grid layout present", self._test_grid)
+        self.add_test("DU-003", "Transcript output region present", self._test_transcript)
+        self.add_test("DU-004", "Manual summary textarea present", self._test_manual_summary)
+        self.add_test("DU-005", "Export and delete controls present", self._test_actions)
 
     async def setup(self):
-        """Set up test context."""
         self.context["api_base"] = "http://127.0.0.1:6684"
 
-    async def _test_debug_button_exists(self, ctx: dict) -> TestResult:
-        """Test that debug button exists in meeting page."""
-        import aiohttp
+    async def _fetch_meeting_html(self, ctx: dict) -> str:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{ctx['api_base']}/static/meeting.html") as resp:
+                return await resp.text()
 
-        api_base = ctx["api_base"]
+    async def _test_manual_button(self, ctx: dict) -> TestResult:
+        html = await self._fetch_meeting_html(ctx)
+        ok = 'id="manual-summarize"' in html
+        return TestResult("DU-001", "Manual summarize button", TestStatus.PASSED if ok else TestStatus.FAILED)
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                # Fetch the meeting page HTML
-                async with session.get(f"{api_base}/static/meeting.html") as resp:
-                    if resp.status != 200:
-                        return TestResult(
-                            test_id="DU-001",
-                            name="Debug button exists in meeting page",
-                            status=TestStatus.ERROR,
-                            message=f"Failed to fetch meeting.html: HTTP {resp.status}",
-                        )
-                    html = await resp.text()
+    async def _test_grid(self, ctx: dict) -> TestResult:
+        html = await self._fetch_meeting_html(ctx)
+        ok = 'id="meeting-grid"' in html
+        return TestResult("DU-002", "Meeting grid layout", TestStatus.PASSED if ok else TestStatus.FAILED)
 
-                # Check for debug button in HTML
-                # Look for the manual summarization toggle button.
-                has_debug_button = (
-                    'id="toggle-summary-debug"' in html
-                    and "Manual summarization" in html
-                )
+    async def _test_transcript(self, ctx: dict) -> TestResult:
+        html = await self._fetch_meeting_html(ctx)
+        ok = 'id="transcript-output"' in html
+        return TestResult("DU-003", "Transcript output region", TestStatus.PASSED if ok else TestStatus.FAILED)
 
-                if has_debug_button:
-                    return TestResult(
-                        test_id="DU-001",
-                        name="Debug button exists in meeting page",
-                        status=TestStatus.PASSED,
-                        message="Debug button found in meeting.html",
-                    )
-                else:
-                    return TestResult(
-                        test_id="DU-001",
-                        name="Debug button exists in meeting page",
-                        status=TestStatus.FAILED,
-                        message="No debug button found in meeting.html",
-                        details={"html_length": len(html)},
-                    )
+    async def _test_manual_summary(self, ctx: dict) -> TestResult:
+        html = await self._fetch_meeting_html(ctx)
+        ok = 'id="manual-summary"' in html
+        return TestResult("DU-004", "Manual summary textarea", TestStatus.PASSED if ok else TestStatus.FAILED)
 
-        except Exception as e:
-            return TestResult(
-                test_id="DU-001",
-                name="Debug button exists in meeting page",
-                status=TestStatus.ERROR,
-                message=f"Connection error: {e}",
-            )
-
-    async def _test_two_columns_render(self, ctx: dict) -> TestResult:
-        """Test that clicking debug shows two columns."""
-        # TODO: Implement when feature is ready
-        # This would require browser automation (Playwright/Selenium)
-        return TestResult(
-            test_id="DU-002",
-            name="Click debug shows two columns",
-            status=TestStatus.SKIPPED,
-            message="Requires browser automation - feature not yet implemented",
-        )
-
-    async def _test_left_column_content(self, ctx: dict) -> TestResult:
-        """Test that left column has done/draft/streaming."""
-        # TODO: Implement when feature is ready
-        return TestResult(
-            test_id="DU-003",
-            name="Left column has done/draft/streaming",
-            status=TestStatus.SKIPPED,
-            message="Requires browser automation - feature not yet implemented",
-        )
-
-    async def _test_right_column_content(self, ctx: dict) -> TestResult:
-        """Test that right column has summarized/interim."""
-        # TODO: Implement when feature is ready
-        return TestResult(
-            test_id="DU-004",
-            name="Right column has summarized/interim",
-            status=TestStatus.SKIPPED,
-            message="Requires browser automation - feature not yet implemented",
-        )
-
-    async def _test_auto_scroll(self, ctx: dict) -> TestResult:
-        """Test that content auto-scrolls to bottom."""
-        # TODO: Implement when feature is ready
-        return TestResult(
-            test_id="DU-005",
-            name="Content auto-scrolls to bottom",
-            status=TestStatus.SKIPPED,
-            message="Requires browser automation - feature not yet implemented",
-        )
+    async def _test_actions(self, ctx: dict) -> TestResult:
+        html = await self._fetch_meeting_html(ctx)
+        ok = 'id="export-meeting"' in html and 'id="delete-meeting"' in html
+        return TestResult("DU-005", "Export and delete controls", TestStatus.PASSED if ok else TestStatus.FAILED)

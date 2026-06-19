@@ -1,3 +1,7 @@
+from app.paths import ensure_install_cwd
+
+ensure_install_cwd()
+
 import warnings
 
 # Suppress torchaudio deprecation warnings (pyannote uses deprecated APIs)

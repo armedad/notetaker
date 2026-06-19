@@ -21,6 +21,8 @@ import logging
 import os
 from typing import Any, Optional
 
+from app.paths import default_config_path
+
 # ============================================================================
 # Flag Definitions
 # ============================================================================
@@ -49,8 +51,8 @@ DEBUG = {flag: defn['default'] for flag, defn in FLAG_DEFINITIONS.items()}
 # ============================================================================
 
 def _get_config_path() -> str:
-    """Get the path to config.json in the current working directory."""
-    return os.path.join(os.getcwd(), 'config.json')
+    """Get the path to data/config.json under this install."""
+    return default_config_path()
 
 # ============================================================================
 # Load/Save from config.json

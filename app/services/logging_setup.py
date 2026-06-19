@@ -3,6 +3,8 @@ import os
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
+from app.paths import logs_dir as install_logs_dir
+
 
 def _build_file_handler(log_path: str) -> RotatingFileHandler:
     formatter = logging.Formatter("[%(asctime)s] [%(name)s] %(message)s", "%H:%M:%S")
@@ -30,7 +32,7 @@ def _replace_handlers(logger: logging.Logger, handlers: list[logging.Handler]) -
 
 
 def configure_logging() -> str:
-    logs_dir = os.path.join(os.getcwd(), "logs")
+    logs_dir = install_logs_dir()
     os.makedirs(logs_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

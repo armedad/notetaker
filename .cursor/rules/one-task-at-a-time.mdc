@@ -1,0 +1,33 @@
+---
+description: Work on one feature or bug at a time; confirm before switching tasks
+alwaysApply: true
+---
+
+# One task at a time
+
+Default to **one active feature or bug** per conversation unless Chee explicitly says to switch or start fresh.
+
+## When a new request looks like a different task
+
+If Chee asks to work on something that is clearly **not** the current in-progress task (different feature, bug, or area), **stop and verify** before starting:
+
+> "We're currently working on [current task]. Did you mean to switch, or was that accidental?"
+
+- **Accidental** — stay on the current task; ignore or park the new request briefly.
+- **Intentional** — confirm the switch, summarize what we're leaving (done vs paused), then start the new task.
+
+## What counts as "new"
+
+- A different feature or bug than what's actively in progress
+- Unrelated refactors, docs, or chores mid-task
+- "While you're here…" tangents that would derail the current goal
+
+## What does NOT require verification
+
+- Clarifications, tests, or follow-ups **on the current task**
+- Chee explicitly says "switch to…", "new task", "forget that", or "let's work on X instead"
+- The current task is clearly finished and Chee moves on
+
+## While working
+
+Keep a light mental model of the **active task** (one line). Reference it when deciding whether a new message is in-scope or a potential accidental switch.

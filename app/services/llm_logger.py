@@ -10,6 +10,8 @@ import threading
 from datetime import datetime
 from typing import Optional
 
+from app.paths import llm_logs_dir
+
 
 class TestLLMLogger:
     """Singleton service for logging LLM calls to structured log files.
@@ -31,21 +33,21 @@ class TestLLMLogger:
             return cls._instance
 
     def __init__(self, ctx=None) -> None:
-        if self._initialized:
+        if getattr(self, "_initialized", False):
             return
 
         self._ctx = ctx
-        self._logs_dir_fallback = os.path.join(os.getcwd(), "logs", "llm")
+        self._logs_dir_fallback = llm_logs_dir()
+        self._test_log_all_enabled = False
+        self._write_lock = threading.Lock()
         os.makedirs(self._logs_dir, exist_ok=True)
+        self._initialized = True
 
     @property
     def _logs_dir(self) -> str:
         if self._ctx is not None:
             return self._ctx.llm_logs_dir
         return self._logs_dir_fallback
-        self._test_log_all_enabled = False
-        self._write_lock = threading.Lock()
-        self._initialized = True
     
     def test_log_call(
         self,
@@ -222,4 +224,4 @@ class TestLLMLogger:
         Returns:
             True if all LLM calls are being logged
         """
-        return self._test_log_all_enabled
+        return getattr(self, "_test_log_all_enabled", False)

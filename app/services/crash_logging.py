@@ -2,13 +2,15 @@ import faulthandler
 import os
 from typing import Optional
 
+from app.paths import logs_dir as install_logs_dir
+
 
 _crash_file_handle: Optional[object] = None
 
 
 def enable_crash_logging() -> None:
     global _crash_file_handle
-    logs_dir = os.path.join(os.getcwd(), "logs")
+    logs_dir = install_logs_dir()
     os.makedirs(logs_dir, exist_ok=True)
     crash_log_path = os.path.join(logs_dir, "crash.log")
 

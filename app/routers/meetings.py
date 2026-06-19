@@ -122,11 +122,6 @@ def create_meetings_router(
         def event_stream():
             from app.services.debug import debug_log as dl
             cursor = 0
-            # #region agent log
-            _buf_size = len(meeting_store._events)
-            _event_types = [e.get("type") for e in meeting_store._events[-10:]]
-            logger.debug("SSE_STREAM_INIT: cursor=%d buffer_size=%d recent_types=%s", cursor, _buf_size, _event_types)
-            # #endregion
             # Log notification events in buffer at connection time
             notif_events = [
                 e for e in meeting_store._events
@@ -146,11 +141,6 @@ def create_meetings_router(
                 )
             while True:
                 events, cursor = meeting_store.wait_for_events(cursor, timeout=5.0)
-                # #region agent log
-                if events:
-                    _etypes = [e.get("type") for e in events]
-                    logger.debug("SSE_EVENTS_SENT: count=%d types=%s new_cursor=%d", len(events), _etypes, cursor)
-                # #endregion
                 # Log notification events being sent
                 notif_in_batch = [
                     e for e in events

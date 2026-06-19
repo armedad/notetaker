@@ -21,18 +21,27 @@ class AppContext:
     def __init__(
         self,
         *,
-        cwd: str,
+        install_dir: str,
         data_dir: str,
         default_data_dir: str,
         config_path: str,
     ) -> None:
         self._lock = threading.Lock()
-        self._cwd = cwd
+        self._install_dir = install_dir
         self._data_dir = data_dir
         self._default_data_dir = default_data_dir
         self._config_path = config_path
         # Static paths derived from the app package location
         self._app_dir = os.path.dirname(__file__)
+
+    @property
+    def install_dir(self) -> str:
+        return self._install_dir
+
+    @property
+    def cwd(self) -> str:
+        """Alias for install_dir (legacy)."""
+        return self._install_dir
 
     # ── data_dir (hot-swappable) ───────────────────────────────────────
 
@@ -84,7 +93,7 @@ class AppContext:
 
     @property
     def logs_dir(self) -> str:
-        return os.path.join(self._cwd, "logs")
+        return os.path.join(self._install_dir, "logs")
 
     @property
     def llm_logs_dir(self) -> str:

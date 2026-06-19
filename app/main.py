@@ -20,16 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # Module import trace (stderr) for boot debugging.
-print(f"[boot] app.main module import cwd={os.getcwd()} pid={os.getpid()}", file=sys.stderr)
-
-# #region agent log
-_boot_dbg_logger = logging.getLogger("notetaker.boot.debug")
-
-
-def _boot_log(location: str, message: str, data: dict, hypothesis_id: str) -> None:
-    """Write boot debug log to server log."""
-    _boot_dbg_logger.debug("%s: %s data=%s", location, message, data)
-# #endregion
+print(f"[boot] app.main module import install={os.getcwd()} pid={os.getpid()}", file=sys.stderr)
 
 from app.context import AppContext
 from app.routers.recording import create_recording_router
@@ -57,16 +48,14 @@ from app.services.rag_metrics import TestRAGMetrics
 from app.services.llm_instrumentation import test_install_instrumentation
 from app.services.background_finalizer import BackgroundFinalizer, set_background_finalizer
 from app.services.diarization import DiarizationService, parse_diarization_config
+from app.paths import (
+    default_config_path,
+    default_data_dir as install_default_data_dir,
+    ensure_install_cwd,
+)
 
 def create_app() -> FastAPI:
-    # #region agent log
-    _boot_log(
-        "app/main.py:create_app",
-        "create_app enter",
-        {"cwd": os.getcwd(), "pid": os.getpid()},
-        "H0",
-    )
-    # #endregion
+    install_root = ensure_install_cwd()
     configure_logging()
     logger = logging.getLogger("notetaker.boot")
     logger.info("Boot: starting create_app")
@@ -77,13 +66,12 @@ def create_app() -> FastAPI:
     logger.info("Boot: HF_HUB_OFFLINE=%s (initial)", os.environ.get("HF_HUB_OFFLINE"))
 
     base_dir = os.path.dirname(__file__)
-    cwd = os.getcwd()
-    logger.info("Boot: base_dir=%s cwd=%s", base_dir, cwd)
+    logger.info("Boot: base_dir=%s install_root=%s", base_dir, install_root)
 
-    default_data_dir = os.path.join(cwd, "data")
+    default_data_dir = install_default_data_dir()
     os.makedirs(default_data_dir, exist_ok=True)
     # Config always lives in the app-level data dir regardless of custom data_dir
-    config_path = os.path.join(default_data_dir, "config.json")
+    config_path = default_config_path()
     config: dict = {}
     try:
         if os.path.exists(config_path):
@@ -91,33 +79,10 @@ def create_app() -> FastAPI:
             with open(config_path, "r", encoding="utf-8") as config_file:
                 config = json.load(config_file)
             logger.info("Boot: config keys=%s", sorted(config.keys()))
-            # #region agent log
-            _boot_log(
-                "app/main.py:create_app",
-                "config loaded",
-                {"config_path": config_path, "keys": sorted(config.keys())},
-                "H1",
-            )
-            # #endregion
         else:
             logger.info("Boot: config_path missing=%s", config_path)
-            # #region agent log
-            _boot_log(
-                "app/main.py:create_app",
-                "config missing",
-                {"config_path": config_path},
-                "H1",
-            )
-            # #endregion
     except Exception as exc:
-        # #region agent log
-        _boot_log(
-            "app/main.py:create_app",
-            "config load failed",
-            {"config_path": config_path, "exc_type": type(exc).__name__, "exc": str(exc)[:300]},
-            "H1",
-        )
-        # #endregion
+        logger.error("Boot: config load failed path=%s err=%s", config_path, exc)
         raise
 
     # Resolve data directory: use custom path from config if valid, else default
@@ -136,7 +101,7 @@ def create_app() -> FastAPI:
             logger.info("Boot: using default data_dir=%s", data_dir)
 
     ctx = AppContext(
-        cwd=cwd,
+        install_dir=install_root,
         data_dir=data_dir,
         default_data_dir=default_data_dir,
         config_path=config_path,
@@ -176,12 +141,7 @@ def create_app() -> FastAPI:
         audio_service = AudioCaptureService(ctx)
         logger.info("Boot: audio_service ready")
     except Exception as exc:
-        _boot_log(
-            "app/main.py:create_app",
-            "audio_service failed",
-            {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
-            "H2",
-        )
+        logger.exception("Boot: audio_service failed")
         raise
     try:
         meeting_store = MeetingStore(ctx)
@@ -189,12 +149,7 @@ def create_app() -> FastAPI:
         meeting_store.regenerate_folder_docs()
         logger.info("Boot: folder docs regenerated")
     except Exception as exc:
-        _boot_log(
-            "app/main.py:create_app",
-            "meeting_store failed",
-            {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
-            "H3",
-        )
+        logger.exception("Boot: meeting_store failed")
         raise
     try:
         summarization_service = SummarizationService(ctx)
@@ -216,12 +171,7 @@ def create_app() -> FastAPI:
         except Exception:
             pass
     except Exception as exc:
-        _boot_log(
-            "app/main.py:create_app",
-            "summarization_service failed",
-            {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
-            "H4",
-        )
+        logger.exception("Boot: summarization_service failed")
         raise
     try:
         app.include_router(
@@ -257,7 +207,7 @@ def create_app() -> FastAPI:
                 rag_metrics=test_rag_metrics,
             )
         except Exception as inst_exc:
-            _boot_log("app/main.py:create_app", "instrumentation_failed", {"error": str(inst_exc)[:300]}, "H2")
+            logger.exception("Boot: instrumentation failed")
             raise
         # Start background finalizer for meetings with incomplete finalization
         background_finalizer = None
@@ -278,12 +228,6 @@ def create_app() -> FastAPI:
             logger.info("Boot: BackgroundFinalizer started")
         except Exception as exc:
             logger.warning("Boot: BackgroundFinalizer failed to start: %s", exc)
-            _boot_log(
-                "app/main.py:create_app",
-                "background_finalizer_failed",
-                {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
-                "H6",
-            )
         
         debug_router = create_test_debug_router(ctx, test_llm_logger, test_rag_metrics, background_finalizer, meeting_store)
         app.include_router(debug_router)
@@ -293,12 +237,7 @@ def create_app() -> FastAPI:
         app.include_router(create_uploads_router(ctx))
         logger.info("Boot: uploads router mounted")
     except Exception as exc:
-        _boot_log(
-            "app/main.py:create_app",
-            "router mount failed",
-            {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
-            "H5",
-        )
+        logger.exception("Boot: router mount failed")
         raise
 
     app.include_router(create_testing_router(ctx))
