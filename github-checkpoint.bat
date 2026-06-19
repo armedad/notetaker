@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 REM github-checkpoint.bat - Commit and push changes in notetaker (Windows)
 REM
 REM Usage:
@@ -28,19 +28,26 @@ if "%~1"=="" (
 
 set "commit_msg=%*"
 
+REM Worktrees on //cc/apps need safe.directory (see AGENTS.md).
+for %%I in ("%~dp0.") do set "REPO_DIR=%%~fI"
+set "REPO_SAFE=%REPO_DIR:\=/%"
+set "GIT_CONFIG_COUNT=1"
+set "GIT_CONFIG_KEY_0=safe.directory"
+set "GIT_CONFIG_VALUE_0=%REPO_SAFE%"
+
 REM Check if there are any changes (unstaged, staged, or untracked)
 git diff --quiet
 if errorlevel 1 goto :has_changes
 git diff --cached --quiet
 if errorlevel 1 goto :has_changes
-for /f %%i in ('git ls-files --others --exclude-standard') do (
+for /f %%i in ('git ls-files --others --exclude-standard 2^>nul') do (
   goto :has_changes
 )
-echo ✓ No changes to commit
+echo No changes to commit
 exit /b 0
 
 :has_changes
-echo 📁 Changes detected:
+echo Changes detected:
 git status --short
 echo.
 
@@ -53,9 +60,14 @@ if errorlevel 1 exit /b %errorlevel%
 
 echo.
 echo Pushing...
-git push
+git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >nul 2>&1
+if errorlevel 1 (
+  git push -u origin HEAD
+) else (
+  git push
+)
 if errorlevel 1 exit /b %errorlevel%
 
 echo.
-echo ✅ Done
+echo Done
 exit /b 0
