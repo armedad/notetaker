@@ -32,6 +32,30 @@ Install writes `.notetaker_venv` with the resolved path. Do not use broken `X:\n
 
 Same repo as `\\cc\apps\notetaker` — also **`X:\notetaker`** (`\\cc\apps` is mounted as drive **X:**).
 
+## Agent workspace (mandatory)
+
+**All agent edits, git commits, and file changes go in `X:\notetaker` only.**
+
+Do not modify `X:\notetaker-dev` or other worktrees unless Chee explicitly asks. The dev worktree exists for Chee's manual parallel runs (port 6685); agents work in prod.
+
+## Git worktrees (Windows)
+
+| Worktree | Path | Branch | Role |
+|----------|------|--------|------|
+| **prod (agent)** | `X:\notetaker` | `main` | stable / deploy-aligned — **default for all agent work** |
+| **dev** | `X:\notetaker-dev` | `notetaker-dev` | Chee-only parallel runs; agents do not edit here |
+
+```powershell
+git -C X:\notetaker worktree list
+git -c safe.directory=//cc/apps/notetaker-dev -C X:\notetaker-dev status
+```
+
+Each worktree has its own `data/` (gitignored). Shared venv: `X:\.env` via `.notetaker_venv`.
+
+**Run dev instance:** `cd X:\notetaker-dev; .\notetaker.ps1 -Debug` → http://127.0.0.1:6685 (prod on `X:\notetaker` stays 6684).
+
+Add more worktrees for isolated issues: `git -C X:\notetaker worktree add X:\notetaker-<issue> -b <branch>`.
+
 ## Dev / git
 
 Prefer **`X:\notetaker`** for git on Windows (avoids many UNC “dubious ownership” issues):
