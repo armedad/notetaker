@@ -421,6 +421,14 @@ button.secondary {
   background: var(--text-muted);
 }
 
+button.danger {
+  background: var(--color-error);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--color-error-hover);
+}
+
 .button-link {
   display: inline-flex;
   align-items: center;

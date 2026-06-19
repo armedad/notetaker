@@ -26,7 +26,9 @@ cd X:\notetaker
 
 Install writes `.notetaker_venv` with the resolved path. Do not use broken `X:\notetaker\.venv` on the share — remove it if `Scripts\python.exe` is missing.
 
-**Python version:** shared `X:\.env` is currently **3.10**. Notetaker’s `requirements.txt` pins packages that work on 3.10; upstream may eventually want **3.11+** for some ML wheels. If pip fails on version gates, recreate the shared venv with `py -3.11 -m venv X:\.env` (reinstall gauth/voice-dictation/notetaker deps after).
+**Python version:** shared CHEEAPPS venv targets **3.12** (`X:\.env` on Windows). Recreate with `py -3.12 -m venv X:\.env`, then reinstall gauth → voice-dictation → cursor-agent → notetaker. See [`CHEEAPPS.md`](CHEEAPPS.md).
+
+**Torch pins:** `requirements.txt` locks `torch` / `torchaudio` / `torchvision` at **2.5.1** so pyannote 3.3.2 imports on 3.12 (newer torchaudio drops `AudioMetaData`). Do not upgrade torch in the shared venv without re-testing whisperx + pyannote.
 
 ## Paths
 
@@ -49,6 +51,30 @@ Each worktree has its own `data/` (gitignored). Shared venv: `X:\.env` via `.not
 **This instance:** `.\notetaker.ps1 -Debug` → http://127.0.0.1:6685. Prod on `X:\notetaker` uses 6684.
 
 Add more worktrees: `git -C X:\notetaker worktree add X:\notetaker-<issue> -b <branch>`.
+
+## Agent workspace (mandatory)
+
+**All agent edits, git commits, and file changes go in `X:\notetaker` only.**
+
+Do not modify `X:\notetaker-dev` or other worktrees unless Chee explicitly asks. The dev worktree exists for Chee's manual parallel runs (port 6685); agents work in prod.
+
+## Git worktrees (Windows)
+
+| Worktree | Path | Branch | Role |
+|----------|------|--------|------|
+| **prod (agent)** | `X:\notetaker` | `main` | stable / deploy-aligned — **default for all agent work** |
+| **dev** | `X:\notetaker-dev` | `notetaker-dev` | Chee-only parallel runs; agents do not edit here |
+
+```powershell
+git -C X:\notetaker worktree list
+git -c safe.directory=//cc/apps/notetaker-dev -C X:\notetaker-dev status
+```
+
+Each worktree has its own `data/` (gitignored). Shared venv: `X:\.env` via `.notetaker_venv`.
+
+**Run dev instance:** `cd X:\notetaker-dev; .\notetaker.ps1 -Debug` → http://127.0.0.1:6685 (prod on `X:\notetaker` stays 6684).
+
+Add more worktrees for isolated issues: `git -C X:\notetaker worktree add X:\notetaker-<issue> -b <branch>`.
 
 ## Dev / git
 

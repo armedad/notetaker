@@ -962,6 +962,57 @@ function initSettingsTabs() {
   }
 }
 
+async function stopServer() {
+  if (
+    !confirm(
+      "Stop the Notetaker server?\n\nAny in-progress recording will be interrupted. Restart with start.bat or your usual launcher."
+    )
+  ) {
+    return;
+  }
+
+  const btn = document.getElementById("stop-server-btn");
+  const output = document.getElementById("stop-server-output");
+  if (output) {
+    output.textContent = "";
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Stopping…";
+  }
+
+  try {
+    const response = await fetch("/api/local/shutdown", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      const detail =
+        typeof err.detail === "string"
+          ? err.detail
+          : Array.isArray(err.detail)
+            ? err.detail.map((d) => d.msg || d).join("; ")
+            : response.statusText;
+      throw new Error(detail || "Stop server is not available for this launch.");
+    }
+    if (output) {
+      output.textContent = "Server is shutting down…";
+    }
+  } catch (error) {
+    setGlobalError(error.message || String(error));
+    if (output) {
+      output.textContent = error.message || String(error);
+    }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Stop server";
+    }
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   // Tab navigation (must run before async loads so the right pane is visible)
   initSettingsTabs();
@@ -1282,6 +1333,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       scheduleSave(() => saveAppearanceSettings());
     });
   }
+
+  document.getElementById("stop-server-btn")?.addEventListener("click", stopServer);
 
   await refreshVersion();
   await refreshDevices();

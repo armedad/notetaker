@@ -1,8 +1,9 @@
 @echo off
 REM Notetaker Installation Script Launcher for Windows
 REM Uses CHEEAPPS_VENV for the shared venv folder (same as gauth / voice-dictation).
-REM Default shared path on this machine: X:\.env  (\\cc\apps\.env)
+REM Default shared path on this machine: X:\.env  (\\cc\apps\.env), Python 3.12
 REM   set CHEEAPPS_VENV=X:\.env
+REM See CHEEAPPS.md to recreate: py -3.12 -m venv X:\.env
 REM   install.bat
 
 echo ============================================
