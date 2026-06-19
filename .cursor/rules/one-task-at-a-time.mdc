@@ -27,6 +27,7 @@ If Chee asks to work on something that is clearly **not** the current in-progres
 - Clarifications, tests, or follow-ups **on the current task**
 - Chee explicitly says "switch to…", "new task", "forget that", or "let's work on X instead"
 - The current task is clearly finished and Chee moves on
+- Pure questions or read-only lookups that don't start new implementation work
 
 ## While working
 
