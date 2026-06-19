@@ -1,13 +1,14 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 REM github-checkpoint.bat - Commit and push changes in notetaker (Windows)
 REM
 REM Usage:
 REM   github-checkpoint.bat "Your commit message here"
+REM   github-checkpoint.bat Your commit message here
 REM
 REM Examples:
 REM   github-checkpoint.bat "Fix transcription bug"
-REM   github-checkpoint.bat "Add audio compression support"
+REM   github-checkpoint.bat Add audio compression support
 REM
 REM The script will:
 REM   1. Show any uncommitted changes
@@ -22,18 +23,26 @@ if "%~1"=="" (
   echo.
   echo Examples:
   echo   github-checkpoint.bat "Fix transcription bug"
-  echo   github-checkpoint.bat "Add audio compression support"
+  echo   github-checkpoint.bat Add audio compression support
   exit /b 1
 )
 
-set "commit_msg=%*"
+REM Join all arguments into one commit message (quoted or unquoted).
+set "commit_msg="
+:join_args
+if "%~1"=="" goto joined_args
+set "commit_msg=!commit_msg! %~1"
+shift
+goto join_args
+:joined_args
+set "commit_msg=!commit_msg:~1!"
 
 REM Worktrees on //cc/apps need safe.directory (see AGENTS.md).
 for %%I in ("%~dp0.") do set "REPO_DIR=%%~fI"
-set "REPO_SAFE=%REPO_DIR:\=/%"
+set "REPO_SAFE=!REPO_DIR:\=/!"
 set "GIT_CONFIG_COUNT=1"
 set "GIT_CONFIG_KEY_0=safe.directory"
-set "GIT_CONFIG_VALUE_0=%REPO_SAFE%"
+set "GIT_CONFIG_VALUE_0=!REPO_SAFE!"
 
 REM Check if there are any changes (unstaged, staged, or untracked)
 git diff --quiet
@@ -54,9 +63,13 @@ echo.
 git add -A
 if errorlevel 1 exit /b %errorlevel%
 
-echo Commit: %commit_msg%
-git commit -m "%commit_msg%"
-if errorlevel 1 exit /b %errorlevel%
+echo Commit: !commit_msg!
+set "commit_msg_file=%TEMP%\notetaker_commit_msg_%RANDOM%.txt"
+> "!commit_msg_file!" echo(!commit_msg!
+git commit -F "!commit_msg_file!"
+set "commit_rc=!errorlevel!"
+del "!commit_msg_file!" 2>nul
+if !commit_rc! neq 0 exit /b !commit_rc!
 
 echo.
 echo Pushing...
@@ -71,3 +84,4 @@ if errorlevel 1 exit /b %errorlevel%
 echo.
 echo Done
 exit /b 0
+ 
