@@ -1,0 +1,18 @@
+---
+description: All code changes in X:\notetaker only — never notetaker-dev
+alwaysApply: true
+---
+
+# Worktree: X:\notetaker only
+
+All agent work happens in **`X:\notetaker`** (`\\cc\apps\notetaker`).
+
+## Rules
+
+- Edit, create, and delete files only under `X:\notetaker`.
+- Run git commands with `-C X:\notetaker` (or from that directory).
+- Do **not** modify `X:\notetaker-dev` or other worktrees unless Chee explicitly requests it.
+
+## If a path points elsewhere
+
+If Chee references `notetaker-dev`, another worktree, or a path outside `X:\notetaker`, confirm before acting — default is to stay in `X:\notetaker`.

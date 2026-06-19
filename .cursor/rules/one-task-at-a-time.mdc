@@ -1,0 +1,29 @@
+---
+description: Work one feature or bug at a time; confirm before switching tasks
+alwaysApply: true
+---
+
+# One task at a time
+
+Default to **one feature or bug per session** unless Chee explicitly switches.
+
+## When a new topic appears
+
+If Chee asks to work on something that looks like a **different** feature, bug, or unrelated task while something is already in progress:
+
+1. **Pause** — do not start the new work yet.
+2. **Confirm** — ask whether the new request was intentional or accidental (e.g. "We're still on X — did you mean to switch to Y, or was that accidental?").
+3. **Proceed** only after Chee confirms:
+   - **Intentional switch** → treat the new item as the active task; the prior one is parked unless Chee says to resume it.
+   - **Accident** → stay on the current task.
+
+## What counts as "in progress"
+
+- An open task from this conversation (including unfinished work).
+- Chee explicitly named a feature or bug we're working on.
+
+## Exceptions (no confirmation needed)
+
+- Chee clearly says to switch, drop, or pause the current task.
+- Pure questions or read-only lookups that don't start new implementation work.
+- Small clarifications directly related to the current task.
