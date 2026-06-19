@@ -97,7 +97,8 @@ function updateRealtimeDiarizationUI() {
   
   if (deviceRow) deviceRow.style.display = showFields ? "block" : "none";
   if (performanceRow) performanceRow.style.display = showFields ? "block" : "none";
-  if (tokenRow) tokenRow.style.display = showFields ? "block" : "none";
+  // Token is configured before enabling diarization — keep visible.
+  if (tokenRow) tokenRow.style.display = "block";
   
   // Update GPU hint
   const gpuHint = document.getElementById("realtime-gpu-hint");
@@ -114,19 +115,22 @@ function setBatchDiarizationOutput(message) {
   if (output) output.textContent = message;
 }
 
+function setHfTokenOutput(message) {
+  const output = document.getElementById("hf-token-output");
+  if (output) output.textContent = message;
+}
+
 function updateBatchDiarizationUI() {
   const enabled = document.getElementById("batch-diarization-enabled").checked;
   const providerSelect = document.getElementById("batch-diarization-provider");
   const modelRow = document.getElementById("batch-diarization-model")?.closest(".row");
   const deviceRow = document.getElementById("batch-device-row");
-  const tokenRow = document.getElementById("batch-token-row");
   
   const showFields = enabled && providerSelect.value !== "none";
   const showModel = showFields && providerSelect.value === "pyannote";
   
   if (modelRow) modelRow.style.display = showModel ? "block" : "none";
   if (deviceRow) deviceRow.style.display = showFields ? "block" : "none";
-  if (tokenRow) tokenRow.style.display = showFields ? "block" : "none";
   
   // Update GPU hint
   const gpuHint = document.getElementById("batch-gpu-hint");
@@ -503,8 +507,6 @@ async function loadTranscriptionSettings() {
 
     const data = await fetchJson("/api/settings/transcription");
     if (!data || Object.keys(data).length === 0) {
-      setDiarizationDeviceState(false);
-      setPerformanceLabel(50);
       return;
     }
     if (data.live_model_size) {
@@ -551,21 +553,20 @@ async function saveRealtimeDiarizationSettings() {
   const provider = document.getElementById("realtime-diarization-provider").value;
   const device = document.getElementById("realtime-diarization-device").value;
   const performanceLevel = parseFloat(document.getElementById("realtime-performance-level").value);
-  const hfToken = document.getElementById("realtime-hf-token").value.trim();
 
   setRealtimeDiarizationOutput("Saving real-time diarization settings...");
   setGlobalBusy("Saving real-time diarization settings...");
   try {
+    const payload = {
+      enabled: enabled && provider !== "none",
+      provider: provider,
+      device: device,
+      performance_level: performanceLevel,
+    };
     await fetchJson("/api/settings/diarization/realtime", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        enabled: enabled && provider !== "none",
-        provider: provider,
-        device: device,
-        hf_token: hfToken || null,
-        performance_level: performanceLevel,
-      }),
+      body: JSON.stringify(payload),
     });
     setRealtimeDiarizationOutput("Real-time diarization settings saved.");
   } catch (error) {
@@ -581,21 +582,20 @@ async function saveBatchDiarizationSettings() {
   const provider = document.getElementById("batch-diarization-provider").value;
   const model = document.getElementById("batch-diarization-model").value;
   const device = document.getElementById("batch-diarization-device").value;
-  const hfToken = document.getElementById("batch-hf-token").value.trim();
 
   setBatchDiarizationOutput("Saving batch diarization settings...");
   setGlobalBusy("Saving batch diarization settings...");
   try {
+    const payload = {
+      enabled: enabled && provider !== "none",
+      provider: provider,
+      model: model,
+      device: device,
+    };
     await fetchJson("/api/settings/diarization/batch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        enabled: enabled && provider !== "none",
-        provider: provider,
-        model: model,
-        device: device,
-        hf_token: hfToken || null,
-      }),
+      body: JSON.stringify(payload),
     });
     setBatchDiarizationOutput("Batch diarization settings saved.");
   } catch (error) {
@@ -723,7 +723,6 @@ async function loadRealtimeDiarizationSettings() {
     document.getElementById("realtime-diarization-provider").value = data.provider || "none";
     document.getElementById("realtime-diarization-device").value = data.device || "cpu";
     document.getElementById("realtime-performance-level").value = data.performance_level ?? 0.5;
-    document.getElementById("realtime-hf-token").value = data.hf_token || "";
     
     updateRealtimeDiarizationUI();
   } catch (error) {
@@ -742,7 +741,6 @@ async function loadBatchDiarizationSettings() {
     document.getElementById("batch-diarization-provider").value = data.provider || "none";
     document.getElementById("batch-diarization-model").value = data.model || "pyannote/speaker-diarization-3.1";
     document.getElementById("batch-diarization-device").value = data.device || "cpu";
-    document.getElementById("batch-hf-token").value = data.hf_token || "";
     
     updateBatchDiarizationUI();
   } catch (error) {
@@ -752,20 +750,57 @@ async function loadBatchDiarizationSettings() {
 
 // Legacy function - now loads both settings
 async function loadDiarizationSettings() {
+  await loadHfTokenSettings();
   await loadRealtimeDiarizationSettings();
   await loadBatchDiarizationSettings();
 }
 
+async function loadHfTokenSettings() {
+  try {
+    const data = await fetchJson("/api/settings/hf-token");
+    document.getElementById("batch-hf-token").value = data.hf_token || "";
+  } catch (error) {
+    setGlobalError(`Failed to load HuggingFace token: ${error.message}`);
+  }
+}
+
+async function saveBatchHfToken() {
+  const hfToken = document.getElementById("batch-hf-token").value.trim();
+  setGlobalBusy("Saving HuggingFace token...");
+  try {
+    await fetchJson("/api/settings/hf-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hf_token: hfToken }),
+    });
+    setHfTokenOutput("HuggingFace token saved.");
+  } catch (error) {
+    setHfTokenOutput(`Failed to save token: ${error.message}`);
+    setGlobalError("HuggingFace token save failed.");
+  } finally {
+    setGlobalBusy("");
+  }
+}
+
 async function testDiarizationAccess() {
-  setBatchDiarizationOutput("Testing HuggingFace access...");
+  const hfToken = document.getElementById("batch-hf-token").value.trim();
+  setHfTokenOutput("Testing HuggingFace access...");
   setGlobalBusy("Testing HuggingFace access...");
   try {
+    if (hfToken) {
+      await fetchJson("/api/settings/hf-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hf_token: hfToken }),
+      });
+    }
     const result = await fetchJson("/api/settings/diarization/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hf_token: hfToken || null }),
     });
     if (result.status === "ok") {
-      setBatchDiarizationOutput("All models accessible. You're ready to use diarization.");
+      setHfTokenOutput("All models accessible. You're ready to use diarization.");
     } else {
       let msg = result.message || "Test failed";
       if (result.models) {
@@ -775,10 +810,10 @@ async function testDiarizationAccess() {
           .join("\n");
         if (issues) msg += "\n" + issues;
       }
-      setBatchDiarizationOutput(msg);
+      setHfTokenOutput(msg);
     }
   } catch (error) {
-    setBatchDiarizationOutput(`Test failed: ${error.message}`);
+    setHfTokenOutput(`Test failed: ${error.message}`);
   } finally {
     setGlobalBusy("");
   }
@@ -979,9 +1014,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   document
     .getElementById("realtime-performance-level")
     .addEventListener("input", () => scheduleSave(saveRealtimeDiarizationSettings, 500));
-  document
-    .getElementById("realtime-hf-token")
-    .addEventListener("input", () => scheduleSave(saveRealtimeDiarizationSettings, 800));
 
   // Batch diarization event listeners
   document
@@ -1004,7 +1036,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     .addEventListener("change", () => scheduleSave(saveBatchDiarizationSettings));
   document
     .getElementById("batch-hf-token")
-    .addEventListener("input", () => scheduleSave(saveBatchDiarizationSettings, 800));
+    .addEventListener("input", () => scheduleSave(saveBatchHfToken, 800));
   document
     .getElementById("test-diarization-access")
     .addEventListener("click", testDiarizationAccess);

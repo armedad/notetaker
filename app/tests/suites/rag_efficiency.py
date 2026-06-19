@@ -22,7 +22,7 @@ class RAGEfficiencySuite(TestSuite):
     description = "Verify RAG system efficiency and token usage"
     
     def __init__(self, *args, **kwargs):
-        self.base_url = "http://127.0.0.1:8787"
+        self.base_url = "http://127.0.0.1:6684"
         super().__init__(*args, **kwargs)
     
     def _register_tests(self):

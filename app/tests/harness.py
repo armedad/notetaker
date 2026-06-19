@@ -28,12 +28,17 @@ class TestHarness:
         from app.tests.suites.transcription_flow import TranscriptionFlowSuite
         from app.tests.suites.rag_efficiency import RAGEfficiencySuite
 
+        from app.tests.suites.health_smoke import HealthSmokeSuite
+        from app.tests.suites.export_markdown import ExportMarkdownSuite
+
         self.suites["auto-title"] = AutoTitleSuite
         self.suites["smart-summary"] = SmartSummarySuite
         self.suites["debug-ui"] = DebugUISuite
         self.suites["diarization"] = DiarizationSuite
         self.suites["transcription-flow"] = TranscriptionFlowSuite
         self.suites["rag-efficiency"] = RAGEfficiencySuite
+        self.suites["health-smoke"] = HealthSmokeSuite
+        self.suites["export-markdown"] = ExportMarkdownSuite
 
     def get_available_suites(self) -> list[dict]:
         """Return info about all available suites."""

@@ -50,14 +50,6 @@ def create_test_debug_router(
         Returns:
             Dict with 'aggregate' stats and 'recent' query records
         """
-        # #region agent log
-        import time as _time
-        import json as _json
-        _log_path = ctx.debug_log_path
-        result = rag_metrics.test_to_dict()
-        with open(_log_path, "a") as _f:
-            _f.write(_json.dumps({"location":"debug.py:get_rag_metrics","message":"rag_metrics_called","data":{"total_queries": result.get("aggregate", {}).get("total_queries", 0), "recent_count": len(result.get("recent", []))},"timestamp":int(_time.time()*1000),"runId":"debug-api","hypothesisId":"H3-H4"})+"\n")
-        # #endregion
         return result
     
     @router.post("/rag-metrics/reset")

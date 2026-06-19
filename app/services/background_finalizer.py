@@ -234,12 +234,6 @@ class BackgroundFinalizer:
         from app.services.transcription_pipeline import TranscriptionPipeline
         from app.services.transcription.whisper_local import FasterWhisperProvider, WhisperConfig
         
-        # #region agent log
-        _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
-        import json as _json
-        with open(_logpath, "a") as _f:
-            _f.write(_json.dumps({"location": "background_finalizer.py:_run_transcription_stage:enter", "message": "transcription_stage_enter", "hypothesisId": "H1", "data": {"meeting_id": meeting_id, "audio_path": audio_path}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-        # #endregion
         
         self._meeting_store.publish_finalization_status(meeting_id, "Transcription...", 0.0)
         self._meeting_store.publish_status_log(meeting_id, "transcription", "started", {"audio_path": audio_path})
@@ -266,18 +260,10 @@ class BackgroundFinalizer:
             _logger.info("_run_transcription_stage: meeting=%s model=%s device=%s compute=%s",
                 meeting_id, model_size, device, compute_type)
             
-            # #region agent log
-            with open(_logpath, "a") as _f:
-                _f.write(_json.dumps({"location": "background_finalizer.py:_run_transcription_stage:before_provider", "message": "creating_whisper_provider", "hypothesisId": "H1", "data": {"meeting_id": meeting_id, "model_size": model_size, "device": device, "compute_type": compute_type}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-            # #endregion
             
             whisper_config = WhisperConfig(model_size=model_size, device=device, compute_type=compute_type)
             provider = FasterWhisperProvider(config=whisper_config, diarization=None)
             
-            # #region agent log
-            with open(_logpath, "a") as _f:
-                _f.write(_json.dumps({"location": "background_finalizer.py:_run_transcription_stage:after_provider", "message": "provider_created_starting_pipeline", "hypothesisId": "H1", "data": {"meeting_id": meeting_id}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-            # #endregion
             
             pipeline = TranscriptionPipeline(
                 provider=provider,
@@ -286,10 +272,6 @@ class BackgroundFinalizer:
                 summarization_service=self._summarization,
             )
             
-            # #region agent log
-            with open(_logpath, "a") as _f:
-                _f.write(_json.dumps({"location": "background_finalizer.py:_run_transcription_stage:before_transcribe", "message": "calling_transcribe_and_format", "hypothesisId": "H1", "data": {"meeting_id": meeting_id, "audio_path": audio_path}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-            # #endregion
             
             # Pipeline handles audio format conversion internally
             segments, language = pipeline.transcribe_and_format(audio_path)
@@ -317,12 +299,6 @@ class BackgroundFinalizer:
         from app.services.transcription_pipeline import apply_diarization
         from app.services.audio_utils import load_audio_for_pyannote
         
-        # #region agent log
-        _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
-        import json as _json
-        with open(_logpath, "a") as _f:
-            _f.write(_json.dumps({"location": "background_finalizer.py:_run_diarization_stage:enter", "message": "diarization_stage_enter", "hypothesisId": "H2", "data": {"meeting_id": meeting_id, "audio_path": audio_path, "diarization_enabled": self._diarization.is_enabled() if self._diarization else False}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-        # #endregion
         
         self._meeting_store.publish_finalization_status(meeting_id, "Diarization...", 0.1)
         self._meeting_store.publish_status_log(meeting_id, "diarization", "started", {"audio_path": audio_path})
@@ -338,18 +314,8 @@ class BackgroundFinalizer:
             # the file path remaining valid throughout processing.
             audio_dict = load_audio_for_pyannote(audio_path)
             diarization_segments = self._diarization.run(audio_dict)
-            # #region agent log
-            _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
-            import json as _json
-            with open(_logpath, "a") as _f:
-                _f.write(_json.dumps({"location": "background_finalizer.py:284", "message": "diarization_result", "hypothesisId": "H_DIAR", "data": {"meeting_id": meeting_id, "diarization_segments_count": len(diarization_segments) if diarization_segments else 0, "unique_speakers": list(set(s.get("speaker") for s in (diarization_segments or []))), "sample_segments": (diarization_segments or [])[:5]}}) + "\n")
-            # #endregion
             if diarization_segments:
                 updated_segments = apply_diarization(segments, diarization_segments)
-                # #region agent log
-                with open(_logpath, "a") as _f:
-                    _f.write(_json.dumps({"location": "background_finalizer.py:290", "message": "updated_segments_before_store", "hypothesisId": "H_DIAR", "data": {"meeting_id": meeting_id, "updated_segments_count": len(updated_segments), "unique_speakers_in_updated": list(set(s.get("speaker") for s in updated_segments)), "sample": [{"start": s.get("start"), "speaker": s.get("speaker")} for s in updated_segments[:5]]}}) + "\n")
-                # #endregion
                 self._meeting_store.update_transcript_speakers(meeting_id, updated_segments)
             self._meeting_store.mark_finalization_stage(meeting_id, "diarization")
             self._meeting_store.publish_status_log(meeting_id, "diarization", "completed",

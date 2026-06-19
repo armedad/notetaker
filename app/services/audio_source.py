@@ -113,10 +113,6 @@ class LiveAudioSource(AudioDataSource):
         # Always try to get from queue - don't early-exit when stopped
         # The queue may still have buffered audio to process
         chunk = self._audio_service.get_live_chunk(timeout=timeout_sec)
-        # #region agent log
-        _dbg_logger.debug("GET_CHUNK_RESULT: chunk_len=%d chunk_is_none=%s stopped=%s capture_stopped=%s", 
-                         len(chunk) if chunk else 0, chunk is None, self._stopped, self._audio_service.is_capture_stopped())
-        # #endregion
         return chunk
     
     def get_metadata(self) -> AudioMetadata:
@@ -156,9 +152,6 @@ class LiveAudioSource(AudioDataSource):
         stopped = self.is_stopped()
         has_buffered = self._audio_service.has_buffered_audio()
         result = stopped and not has_buffered
-        # #region agent log
-        _dbg_logger.debug("IS_COMPLETE: stopped=%s has_buffered=%s result=%s", stopped, has_buffered, result)
-        # #endregion
         # Debug: first few calls only
         if not hasattr(self, '_is_complete_call_count'):
             self._is_complete_call_count = 0
@@ -188,9 +181,6 @@ class LiveAudioSource(AudioDataSource):
             Concatenated remaining audio bytes.
         """
         remaining = self._audio_service.drain_live_queue()
-        # #region agent log
-        _dbg_logger.debug("DRAINED: bytes=%d", len(remaining))
-        # #endregion
         return remaining
 
 

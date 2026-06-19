@@ -88,7 +88,14 @@ class TranscriptionFlowSuite(TestSuite):
                         self.logger.info(f"Using configured test file: {self.context['audio_path']}")
 
         if not self.context["audio_path"]:
-            self.logger.warning("No test audio file configured. Some tests may skip.")
+            from app.tests.fixture_paths import speech_wav_path
+
+            fallback = speech_wav_path()
+            if fallback:
+                self.context["audio_path"] = fallback
+                self.logger.info(f"Using harness fixture audio: {fallback}")
+            else:
+                self.logger.warning("No test audio file configured. Some tests may skip.")
 
     async def teardown(self):
         """Clean up: stop any running transcription."""

@@ -49,20 +49,6 @@ class PyannoteProvider(DiarizationProvider):
                 audio. Using the dict format avoids temp file creation when
                 processing compressed formats like Opus.
         """
-        # #region agent log
-        if isinstance(audio_source, str):
-            _dbg_logger.debug("PYANNOTE_DIARIZE_ENTER: audio_path=%s model=%s device=%s",
-                            audio_source, self._config.model, self._config.device)
-        else:
-            _dbg_logger.debug("PYANNOTE_DIARIZE_ENTER: in_memory_audio model=%s device=%s",
-                            self._config.model, self._config.device)
-        _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
-        import json as _json
-        import os as _os
-        _audio_info = audio_source if isinstance(audio_source, str) else "in_memory_dict"
-        with open(_logpath, "a") as _f:
-            _f.write(_json.dumps({"location": "pyannote_provider.py:diarize:enter", "message": "pyannote_diarize_enter", "hypothesisId": "H2", "data": {"audio_source": _audio_info, "model": self._config.model, "device": self._config.device, "HF_HUB_OFFLINE": _os.environ.get("HF_HUB_OFFLINE", "not_set")}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-        # #endregion
         if not self._config.hf_token:
             raise RuntimeError("Missing Hugging Face token for diarization")
         try:
@@ -76,40 +62,18 @@ class PyannoteProvider(DiarizationProvider):
                 self._config.model,
                 self._config.device,
             )
-            # #region agent log
-            _dbg_logger.debug("PYANNOTE_MODEL_LOAD_START: model=%s device=%s", self._config.model, self._config.device)
-            import time as _pytime
-            _model_load_t0 = _pytime.perf_counter()
-            # #endregion
             original_torch_load = _patch_torch_load_for_pyannote()
             # HF_HUB_OFFLINE is set globally at boot (main.py).
             # No per-call override needed — the settings UI handles downloads.
             try:
-                # #region agent log
-                with open(_logpath, "a") as _f:
-                    _f.write(_json.dumps({"location": "pyannote_provider.py:before_from_pretrained", "message": "about_to_call_Pipeline_from_pretrained", "hypothesisId": "H2", "data": {"model": self._config.model, "HF_HUB_OFFLINE": _os.environ.get("HF_HUB_OFFLINE", "not_set")}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-                # #endregion
                 self._pipeline = Pipeline.from_pretrained(
                     self._config.model,
                     use_auth_token=self._config.hf_token,
                 )
                 import torch as _torch
                 _dev = _torch.device(self._config.device)
-                # #region agent log
-                self._logger.debug("pipeline.to device: config_device=%s torch_device=%s", self._config.device, str(_dev))
-                _dbg_logger.debug("PYANNOTE_PIPELINE_TO_DEVICE: device=%s", str(_dev))
-                # #endregion
                 self._pipeline.to(_dev)
-                # #region agent log
-                _model_load_elapsed = _pytime.perf_counter() - _model_load_t0
-                _dbg_logger.debug("PYANNOTE_MODEL_LOAD_DONE: model=%s elapsed_sec=%.2f", self._config.model, _model_load_elapsed)
-                # #endregion
             except Exception as exc:
-                # #region agent log
-                _dbg_logger.debug("PYANNOTE_MODEL_LOAD_ERROR: exc_type=%s exc=%s", type(exc).__name__, str(exc)[:500])
-                with open(_logpath, "a") as _f:
-                    _f.write(_json.dumps({"location": "pyannote_provider.py:from_pretrained_exception", "message": "Pipeline_from_pretrained_failed", "hypothesisId": "H2", "data": {"exc_type": type(exc).__name__, "exc_str": str(exc)[:500], "model": self._config.model}, "timestamp": int(__import__('time').time()*1000)}) + "\n")
-                # #endregion
                 error_str = str(exc).lower()
                 if "403" in error_str or "forbidden" in error_str or "gated" in error_str:
                     model_url = f"https://huggingface.co/{self._config.model}"
@@ -125,34 +89,8 @@ class PyannoteProvider(DiarizationProvider):
                 raise
             finally:
                 _restore_torch_load(original_torch_load)
-        else:
-            # #region agent log
-            _dbg_logger.debug("PYANNOTE_MODEL_CACHED: model=%s", self._config.model)
-            # #endregion
 
-        # #region agent log
-        import time as _tpy, os as _ospy
-        _t0 = _tpy.time()
-        if isinstance(audio_source, str):
-            _audio_size_mb = round(_ospy.path.getsize(audio_source)/1024/1024,2) if _ospy.path.isfile(audio_source) else None
-            self._logger.debug("PIPELINE_CALL_START: audio_path=%s audio_size_mb=%s", _ospy.path.basename(audio_source), _audio_size_mb)
-            _dbg_logger.debug("PYANNOTE_PIPELINE_RUN_START: audio_path=%s audio_size_mb=%s", audio_source, _audio_size_mb)
-        else:
-            _waveform = audio_source.get("waveform")
-            _n_samples = _waveform.shape[-1] if _waveform is not None else 0
-            _sr = audio_source.get("sample_rate", 16000)
-            _duration_sec = _n_samples / _sr if _sr else 0
-            self._logger.debug("PIPELINE_CALL_START: in_memory_audio duration_sec=%.1f", _duration_sec)
-            _dbg_logger.debug("PYANNOTE_PIPELINE_RUN_START: in_memory_audio samples=%d sr=%d duration_sec=%.1f", _n_samples, _sr, _duration_sec)
-        # #endregion
         diarization = self._pipeline(audio_source)
-        # #region agent log
-        _diar_elapsed = _tpy.time() - _t0
-        _dbg_logger.debug("PYANNOTE_PIPELINE_RUN_DONE: elapsed_sec=%.2f", _diar_elapsed)
-        # #endregion
-        # #region agent log
-        self._logger.debug("PIPELINE_CALL_DONE: elapsed_s=%s", round(_tpy.time()-_t0,1))
-        # #endregion
         segments: list[dict] = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
             segments.append(

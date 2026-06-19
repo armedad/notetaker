@@ -13,14 +13,6 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from app.services.active_meeting_tracker import ActiveMeetingTracker
 
-# #region agent log
-_dbg_logger = logging.getLogger("notetaker.debug")
-
-
-def _dbg_ndjson(*, location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
-    """Shim for legacy debug calls - logs to standard server log."""
-    _dbg_logger.debug("%s: %s data=%s", location, message, data)
-# #endregion
 
 
 _MEETINGS_FOLDER_README = """\
@@ -295,29 +287,9 @@ class MeetingStore:
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(meeting, f, indent=2)
         os.replace(temp_path, path)
-        # #region agent log
-        _dbg_ndjson(
-            location="app/services/meeting_store.py:_write_meeting_file",
-            message="meeting file written",
-            data={
-                "meeting_id": meeting.get("id"),
-                "path_name": os.path.basename(path),
-                "status": meeting.get("status"),
-            },
-            run_id="pre-fix",
-            hypothesis_id="H4",
-        )
-        # #endregion
 
     def list_meetings(self) -> list[dict]:
         with self._lock:
-            # #region agent log
-            try:
-                paths = self._list_meeting_paths()
-                _dbg_logger.debug("list_meetings paths: meetings_dir=%s path_count=%d", self._meetings_dir, len(paths))
-            except Exception as exc:
-                _dbg_logger.debug("list_meetings paths error: exc_type=%s exc=%s", type(exc).__name__, str(exc)[:300])
-            # #endregion
             meetings: list[dict] = []
             for path in self._list_meeting_paths():
                 meeting = self._read_meeting_file(path)
@@ -347,21 +319,6 @@ class MeetingStore:
                 if updated:
                     self._write_meeting_file(path, meeting)
                 meetings.append(meeting)
-            # #region agent log
-            try:
-                _dbg_ndjson(
-                    location="app/services/meeting_store.py:list_meetings",
-                    message="list_meetings result",
-                    data={
-                        "meeting_count": len(meetings),
-                        "meeting_ids": [m.get("id") for m in meetings[:20]],
-                    },
-                    run_id="pre-fix",
-                    hypothesis_id="H2",
-                )
-            except Exception:
-                pass
-            # #endregion
             return sorted(meetings, key=lambda m: m.get("created_at") or "", reverse=True)
 
     def get_storage_path(self) -> str:
@@ -493,19 +450,6 @@ class MeetingStore:
     def get_meeting(self, meeting_id: str) -> Optional[dict]:
         with self._lock:
             path = self._find_meeting_path(meeting_id)
-            # #region agent log
-            _dbg_ndjson(
-                location="app/services/meeting_store.py:get_meeting",
-                message="get_meeting path lookup",
-                data={
-                    "meeting_id": meeting_id,
-                    "path_found": bool(path),
-                    "path_name": os.path.basename(path) if path else None,
-                },
-                run_id="pre-fix",
-                hypothesis_id="H2",
-            )
-            # #endregion
             if not path:
                 return None
             meeting = self._read_meeting_file(path)
@@ -613,6 +557,62 @@ class MeetingStore:
             self._write_meeting_file(path, meeting)
             self._logger.info("File meeting created: id=%s audio=%s session_id=%s", meeting_id, audio_path, meeting["session_id"])
             self.publish_event("meeting_started", meeting_id)
+            self.regenerate_folder_docs()
+            return meeting
+
+    def create_from_recording(
+        self, recording: dict, status: str = "in_progress"
+    ) -> Optional[dict]:
+        """Create or update a meeting tied to a mic recording session."""
+        recording_id = recording.get("recording_id")
+        if not recording_id:
+            return None
+        with self._lock:
+            path = self._find_meeting_path(recording_id)
+            if path:
+                meeting = self._read_meeting_file(path)
+                if not meeting:
+                    return None
+                if recording.get("file_path"):
+                    meeting["audio_path"] = recording.get("file_path")
+                meeting["samplerate"] = recording.get("samplerate") or meeting.get("samplerate")
+                meeting["channels"] = recording.get("channels") or meeting.get("channels")
+                meeting["status"] = status
+                if status == "completed":
+                    meeting["ended_at"] = datetime.utcnow().isoformat()
+                self._write_meeting_file(path, meeting)
+                self.publish_event("meeting_updated", recording_id)
+                self.regenerate_folder_docs()
+                return meeting
+
+            created_at = datetime.utcnow().isoformat()
+            meeting = {
+                "schema_version": 1,
+                "id": recording_id,
+                "title": f"Meeting {created_at}",
+                "title_source": "default",
+                "title_generated_at": None,
+                "created_at": created_at,
+                "audio_path": recording.get("file_path"),
+                "recording_id": recording_id,
+                "session_id": recording_id,
+                "samplerate": recording.get("samplerate"),
+                "channels": recording.get("channels"),
+                "status": status,
+                "ended_at": None if status != "completed" else datetime.utcnow().isoformat(),
+                "attendees": [],
+                "transcript": None,
+                "summary": None,
+                "summary_state": self._default_summary_state(),
+                "manual_notes": "",
+                "manual_summary": "",
+                "user_notes": [],
+                "user_notes_draft": None,
+            }
+            path = self._meeting_path_for_new(created_at, recording_id)
+            self._write_meeting_file(path, meeting)
+            self._logger.info("Recording meeting created: id=%s", recording_id)
+            self.publish_event("meeting_started", recording_id)
             self.regenerate_folder_docs()
             return meeting
 
@@ -772,116 +772,35 @@ class MeetingStore:
         provider_override: Optional[str] = None,
         force: bool = False,
     ) -> Optional[dict]:
-        # #region agent log
-        _dbg_ndjson(
-            location="meeting_store.py:maybe_auto_title",
-            message="maybe_auto_title_enter",
-            data={"meeting_id": meeting_id, "force": force, "summary_len": len(summary_text) if summary_text else 0},
-            run_id="bugs-debug",
-            hypothesis_id="H1b",
-        )
-        # #endregion
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
-                # #region agent log
-                _dbg_ndjson(
-                    location="meeting_store.py:maybe_auto_title",
-                    message="maybe_auto_title_path_not_found",
-                    data={"meeting_id": meeting_id},
-                    run_id="bugs-debug",
-                    hypothesis_id="H1b",
-                )
-                # #endregion
                 return None
             meeting = self._read_meeting_file(path)
             if not meeting:
                 return None
             self._ensure_title_fields(meeting)
             if meeting.get("title_source") == "manual":
-                # #region agent log
-                _dbg_ndjson(
-                    location="meeting_store.py:maybe_auto_title",
-                    message="maybe_auto_title_skip_manual",
-                    data={"meeting_id": meeting_id, "current_title": meeting.get("title", "")[:50]},
-                    run_id="bugs-debug",
-                    hypothesis_id="H1b",
-                )
-                # #endregion
                 return meeting
             # Only generate once (unless forced).
             if meeting.get("title_generated_at") and not force:
-                # #region agent log
-                _dbg_ndjson(
-                    location="meeting_store.py:maybe_auto_title",
-                    message="maybe_auto_title_skip_already_generated",
-                    data={"meeting_id": meeting_id, "title_generated_at": meeting.get("title_generated_at")},
-                    run_id="bugs-debug",
-                    hypothesis_id="H1b",
-                )
-                # #endregion
                 return meeting
             if not force:
                 try:
                     if not summarization_service.is_meaningful_summary(
                         summary_text, provider_override=provider_override
                     ):
-                        # #region agent log
-                        _dbg_ndjson(
-                            location="meeting_store.py:maybe_auto_title",
-                            message="maybe_auto_title_skip_not_meaningful",
-                            data={"meeting_id": meeting_id},
-                            run_id="bugs-debug",
-                            hypothesis_id="H1c",
-                        )
-                        # #endregion
                         return meeting
                 except Exception as exc:
                     self._logger.warning("Meaningful summary check failed: %s", exc)
-                    # #region agent log
-                    _dbg_ndjson(
-                        location="meeting_store.py:maybe_auto_title",
-                        message="maybe_auto_title_meaningful_check_error",
-                        data={"meeting_id": meeting_id, "exc_type": type(exc).__name__, "exc": str(exc)[:300]},
-                        run_id="bugs-debug",
-                        hypothesis_id="H1c",
-                    )
-                    # #endregion
                     return meeting
-            # #region agent log
-            _dbg_ndjson(
-                location="meeting_store.py:maybe_auto_title",
-                message="maybe_auto_title_calling_generate",
-                data={"meeting_id": meeting_id, "summary_len": len(summary_text) if summary_text else 0},
-                run_id="bugs-debug",
-                hypothesis_id="H1b",
-            )
-            # #endregion
             try:
                 title = summarization_service.generate_title(
                     summary_text, provider_override=provider_override
                 )
             except Exception as exc:
-                # #region agent log
-                _dbg_ndjson(
-                    location="meeting_store.py:maybe_auto_title",
-                    message="maybe_auto_title_generate_error",
-                    data={"meeting_id": meeting_id, "exc_type": type(exc).__name__, "exc": str(exc)[:500]},
-                    run_id="bugs-debug",
-                    hypothesis_id="H1b",
-                )
-                # #endregion
                 self._logger.warning("generate_title failed: %s", exc)
                 return meeting
-            # #region agent log
-            _dbg_ndjson(
-                location="meeting_store.py:maybe_auto_title",
-                message="maybe_auto_title_title_generated",
-                data={"meeting_id": meeting_id, "new_title": title[:100] if title else None},
-                run_id="bugs-debug",
-                hypothesis_id="H1b",
-            )
-            # #endregion
             meeting["title"] = title
             meeting["title_source"] = "auto"
             meeting["title_generated_at"] = datetime.utcnow().isoformat()
@@ -914,19 +833,6 @@ class MeetingStore:
 
     def update_attendees(self, meeting_id: str, attendees: list[dict]) -> Optional[dict]:
         with self._lock:
-            # #region agent log
-            _dbg_ndjson(
-                location="meeting_store.py:update_attendees",
-                message="update_attendees called",
-                data={
-                    "meeting_id": meeting_id,
-                    "attendees_count": len(attendees),
-                    "attendee_ids": [a.get("id") for a in attendees[:5]],
-                },
-                run_id="attendee-debug",
-                hypothesis_id="H3",
-            )
-            # #endregion
             path = self._find_meeting_path(meeting_id)
             if not path:
                 return None
@@ -935,15 +841,6 @@ class MeetingStore:
                 return None
             meeting["attendees"] = attendees
             self._write_meeting_file(path, meeting)
-            # #region agent log
-            _dbg_ndjson(
-                location="meeting_store.py:update_attendees:event",
-                message="publishing attendees_updated event",
-                data={"meeting_id": meeting_id, "attendees_count": len(attendees)},
-                run_id="attendee-debug",
-                hypothesis_id="H3",
-            )
-            # #endregion
             self.publish_event("attendees_updated", meeting_id, {"attendees": attendees})
             return meeting
 
@@ -951,27 +848,9 @@ class MeetingStore:
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
-                # #region agent log
-                _dbg_ndjson(
-                    location="app/services/meeting_store.py:update_status",
-                    message="update_status path not found",
-                    data={"meeting_id": meeting_id, "new_status": status},
-                    run_id="pre-fix",
-                    hypothesis_id="STATUS1",
-                )
-                # #endregion
                 return None
             meeting = self._read_meeting_file(path)
             if not meeting:
-                # #region agent log
-                _dbg_ndjson(
-                    location="app/services/meeting_store.py:update_status",
-                    message="update_status meeting read empty",
-                    data={"meeting_id": meeting_id, "new_status": status, "path": os.path.basename(path)},
-                    run_id="pre-fix",
-                    hypothesis_id="STATUS1",
-                )
-                # #endregion
                 return None
             prev_status = meeting.get("status")
             prev_ended_at = meeting.get("ended_at")
@@ -981,22 +860,6 @@ class MeetingStore:
             if status == "completed":
                 meeting["ended_at"] = datetime.utcnow().isoformat()
             self._write_meeting_file(path, meeting)
-            # #region agent log
-            _dbg_ndjson(
-                location="app/services/meeting_store.py:update_status",
-                message="update_status wrote",
-                data={
-                    "meeting_id": meeting_id,
-                    "path": os.path.basename(path),
-                    "prev_status": prev_status,
-                    "new_status": status,
-                    "prev_ended_at": prev_ended_at,
-                    "new_ended_at": meeting.get("ended_at"),
-                },
-                run_id="pre-fix",
-                hypothesis_id="STATUS1",
-            )
-            # #endregion
             self.publish_event(
                 "status_updated",
                 meeting_id,
@@ -1009,23 +872,10 @@ class MeetingStore:
         
         Used after audio compression (e.g., WAV -> Opus) to point to the new file.
         """
-        # #region agent log
-        import json as _json_uap; import time as _time_uap
-        try:
-            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
-                _f.write(_json_uap.dumps({"location":"meeting_store.py:update_audio_path:entry","message":"update_audio_path called","data":{"meeting_id":meeting_id,"new_audio_path":audio_path},"timestamp":int(_time_uap.time()*1000),"hypothesisId":"B"})+"\n")
-        except: pass
-        # #endregion
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
                 self._logger.warning("update_audio_path: meeting not found: %s", meeting_id)
-                # #region agent log
-                try:
-                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
-                        _f.write(_json_uap.dumps({"location":"meeting_store.py:update_audio_path:not_found","message":"Meeting not found","data":{"meeting_id":meeting_id},"timestamp":int(_time_uap.time()*1000),"hypothesisId":"B"})+"\n")
-                except: pass
-                # #endregion
                 return None
             meeting = self._read_meeting_file(path)
             if not meeting:
@@ -1033,12 +883,6 @@ class MeetingStore:
             old_path = meeting.get("audio_path")
             meeting["audio_path"] = audio_path
             self._write_meeting_file(path, meeting)
-            # #region agent log
-            try:
-                with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f:
-                    _f.write(_json_uap.dumps({"location":"meeting_store.py:update_audio_path:success","message":"audio_path updated and written","data":{"meeting_id":meeting_id,"old_path":old_path,"new_path":audio_path},"timestamp":int(_time_uap.time()*1000),"hypothesisId":"B"})+"\n")
-            except: pass
-            # #endregion
             self._logger.info(
                 "Audio path updated: meeting=%s old=%s new=%s",
                 meeting_id,
@@ -1134,14 +978,7 @@ class MeetingStore:
                 
                 # Build map of new speaker labels by segment start time
                 segment_map = {s["start"]: s.get("speaker") for s in segments}
-                
-                # #region agent log
-                _logpath = "/Users/chee/zapier ai project/.cursor/debug.log"
-                import json as _json
-                with open(_logpath, "a") as _f:
-                    _f.write(_json.dumps({"location": "meeting_store.py:1033", "message": "segment_map_built", "hypothesisId": "H3,H5", "data": {"segment_map_size": len(segment_map), "sample_entries": list(segment_map.items())[:5], "input_segments_count": len(segments), "input_segments_sample": [{"start": s.get("start"), "speaker": s.get("speaker")} for s in segments[:3]]}}) + "\n")
-                # #endregion
-                
+
                 # Collect time ranges for old speakers before updating
                 old_speaker_times: dict[str, list[tuple[float, float]]] = {}
                 for seg in existing_segments:
@@ -1153,11 +990,6 @@ class MeetingStore:
                             (seg.get("start", 0), seg.get("end", seg.get("start", 0)))
                         )
                 
-                # #region agent log
-                with open(_logpath, "a") as _f:
-                    _f.write(_json.dumps({"location": "meeting_store.py:1050", "message": "old_speaker_times_collected", "hypothesisId": "H2", "data": {"old_speaker_ids": list(old_speaker_times.keys()), "existing_segments_count": len(existing_segments), "sample_seg": [{"start": s.get("start"), "speaker": s.get("speaker"), "speaker_id": s.get("speaker_id")} for s in existing_segments[:3]]}}) + "\n")
-                # #endregion
-                
                 # Update segment speaker labels
                 for seg in existing_segments:
                     if seg["start"] in segment_map:
@@ -1168,20 +1000,10 @@ class MeetingStore:
                 existing_attendees = meeting.get("attendees", [])
                 user_edited = [a for a in existing_attendees if a.get("name_source") == "manual"]
                 
-                # #region agent log
-                with open(_logpath, "a") as _f:
-                    _f.write(_json.dumps({"location": "meeting_store.py:1065", "message": "user_edited_filtered", "hypothesisId": "H1", "data": {"existing_attendees_count": len(existing_attendees), "existing_attendees": [{"id": a.get("id"), "name": a.get("name"), "name_source": a.get("name_source")} for a in existing_attendees], "user_edited_count": len(user_edited), "user_edited": [{"id": a.get("id"), "name": a.get("name")} for a in user_edited]}}) + "\n")
-                # #endregion
-                
                 # Get new speaker labels from the updated segments
                 new_speaker_labels = sorted(
                     {seg.get("speaker") for seg in existing_segments if seg.get("speaker")}
                 )
-                
-                # #region agent log
-                with open(_logpath, "a") as _f:
-                    _f.write(_json.dumps({"location": "meeting_store.py:1075", "message": "new_speaker_labels_extracted", "hypothesisId": "H3", "data": {"new_speaker_labels": new_speaker_labels, "segments_with_speaker": sum(1 for s in existing_segments if s.get("speaker"))}}) + "\n")
-                # #endregion
                 
                 # Collect time ranges for new speakers
                 new_speaker_times: dict[str, list[tuple[float, float]]] = {}
@@ -1199,17 +1021,8 @@ class MeetingStore:
                     user_edited, old_speaker_times, new_speaker_labels, new_speaker_times
                 )
                 
-                # #region agent log
-                with open(_logpath, "a") as _f:
-                    _f.write(_json.dumps({"location": "meeting_store.py:1095", "message": "speaker_mapping_result", "hypothesisId": "H4", "data": {"speaker_mapping": {k: {"id": v.get("id"), "name": v.get("name")} for k, v in speaker_mapping.items()}, "new_speaker_times_keys": list(new_speaker_times.keys())}}) + "\n")
-                # #endregion
-                
                 # If diarization produced no speaker labels, preserve existing attendees
                 if not new_speaker_labels:
-                    # #region agent log
-                    with open(_logpath, "a") as _f:
-                        _f.write(_json.dumps({"location": "meeting_store.py:1105", "message": "no_new_speakers_preserving_existing", "hypothesisId": "H_PRESERVE", "data": {"preserving_count": len(existing_attendees)}}) + "\n")
-                    # #endregion
                     # No new speakers from diarization - keep existing attendees unchanged
                     normalized_segments = []
                     for seg in existing_segments:
@@ -1264,27 +1077,6 @@ class MeetingStore:
                 meeting["attendees"] = attendees
                 meeting["transcript"]["segments"] = normalized_segments
                 
-                # #region agent log
-                with open(_logpath, "a") as _f:
-                    _f.write(_json.dumps({"location": "meeting_store.py:1145", "message": "final_attendees", "hypothesisId": "H1,H3,H4", "data": {"final_attendees_count": len(attendees), "final_attendees": [{"id": a.get("id"), "name": a.get("name"), "name_source": a.get("name_source")} for a in attendees]}}) + "\n")
-                # #endregion
-                
-                # #region agent log
-                _dbg_ndjson(
-                    location="meeting_store.py:update_transcript_speakers",
-                    message="attendees_assigned",
-                    data={
-                        "meeting_id": meeting_id,
-                        "existing_attendees_count": len(existing_attendees),
-                        "user_edited_count": len(user_edited),
-                        "new_attendees_count": len(attendees),
-                        "mappings": {k: v.get("name") for k, v in speaker_mapping.items()},
-                        "attendee_ids": [a.get("id") for a in attendees[:5]],
-                    },
-                    run_id="post-fix",
-                    hypothesis_id="H1",
-                )
-                # #endregion
                 
                 self._write_meeting_file(path, meeting)
                 # Emit full transcript update after diarization
@@ -1495,20 +1287,6 @@ class MeetingStore:
             source: Optional source of the name ("manual", "llm", etc.)
             confidence: Optional confidence level ("high", "medium", "low")
         """
-        # #region agent log
-        _dbg_ndjson(
-            location="meeting_store.py:update_attendee_name",
-            message="update_attendee_name called",
-            data={
-                "meeting_id": meeting_id,
-                "attendee_id": attendee_id,
-                "name": name,
-                "source": source,
-            },
-            run_id="attendee-debug",
-            hypothesis_id="H3",
-        )
-        # #endregion
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
@@ -1564,15 +1342,6 @@ class MeetingStore:
         with self._lock:
             path = self._find_meeting_path(meeting_id)
             if not path:
-                # #region agent log
-                _dbg_ndjson(
-                    location="app/services/meeting_store.py:delete_meeting",
-                    message="delete_meeting path missing",
-                    data={"meeting_id": meeting_id},
-                    run_id="pre-fix",
-                    hypothesis_id="H1",
-                )
-                # #endregion
                 return False
             try:
                 # Read meeting to get audio_path before deleting
@@ -1590,53 +1359,16 @@ class MeetingStore:
                     except OSError as audio_exc:
                         self._logger.warning("Failed to delete audio file: %s error=%s", audio_path, audio_exc)
                 
-                # #region agent log
-                _dbg_ndjson(
-                    location="app/services/meeting_store.py:delete_meeting",
-                    message="delete_meeting success",
-                    data={"meeting_id": meeting_id, "path_name": os.path.basename(path), "audio_deleted": bool(audio_path)},
-                    run_id="pre-fix",
-                    hypothesis_id="H1",
-                )
-                # #endregion
                 self.regenerate_folder_docs()
                 return True
             except OSError as exc:
                 self._logger.warning("Failed to delete meeting file: %s error=%s", path, exc)
-                # #region agent log
-                _dbg_ndjson(
-                    location="app/services/meeting_store.py:delete_meeting",
-                    message="delete_meeting error",
-                    data={
-                        "meeting_id": meeting_id,
-                        "path_name": os.path.basename(path),
-                        "exc_type": type(exc).__name__,
-                        "exc": str(exc)[:300],
-                    },
-                    run_id="pre-fix",
-                    hypothesis_id="H1",
-                )
-                # #endregion
                 return False
 
     def append_live_segment(
         self, meeting_id: str, segment: dict, language: Optional[str]
     ) -> Optional[dict]:
         with self._lock:
-            # #region agent log
-            _dbg_ndjson(
-                location="meeting_store.py:append_live_segment:entry",
-                message="append_live_segment called",
-                data={
-                    "meeting_id": meeting_id,
-                    "segment_speaker": segment.get("speaker"),
-                    "segment_speaker_id": segment.get("speaker_id"),
-                    "segment_text_preview": (segment.get("text", "") or "")[:50],
-                },
-                run_id="attendee-debug",
-                hypothesis_id="H1,H2",
-            )
-            # #endregion
             self._trace_log(
                 "meeting_append_live_segment_enter",
                 meeting_id=meeting_id,
@@ -1663,21 +1395,6 @@ class MeetingStore:
             
             # Create/update attendee for every segment (real-time diarization)
             speaker_label = segment.get("speaker")
-            # #region agent log
-            _dbg_ndjson(
-                location="meeting_store.py:append_live_segment:speaker_check",
-                message="segment speaker label",
-                data={
-                    "meeting_id": meeting_id,
-                    "speaker_label": speaker_label,
-                    "has_speaker": bool(speaker_label),
-                    "segment_start": segment.get("start"),
-                    "text_preview": (segment.get("text") or "")[:40],
-                },
-                run_id="rt-attendee-debug",
-                hypothesis_id="H_NOSPEAKER",
-            )
-            # #endregion
             if not speaker_label:
                 # Segment has no speaker label — assign to an "Unknown" attendee
                 speaker_label = "unknown"
@@ -1688,22 +1405,6 @@ class MeetingStore:
                     att.get("label") == speaker_label or att.get("id") == speaker_label
                     for att in existing_attendees
                 )
-                # #region agent log
-                _dbg_ndjson(
-                    location="meeting_store.py:append_live_segment:attendee_check",
-                    message="attendee existence check",
-                    data={
-                        "meeting_id": meeting_id,
-                        "speaker_label": speaker_label,
-                        "attendee_exists": attendee_exists,
-                        "existing_ids": [a.get("id") for a in existing_attendees],
-                        "existing_labels": [a.get("label") for a in existing_attendees],
-                        "segment_start": segment.get("start"),
-                    },
-                    run_id="rt-attendee-debug",
-                    hypothesis_id="H_CREATION",
-                )
-                # #endregion
                 if not attendee_exists:
                     # Create new attendee for this speaker
                     new_attendee = {
@@ -1713,20 +1414,6 @@ class MeetingStore:
                     }
                     existing_attendees.append(new_attendee)
                     meeting["attendees"] = existing_attendees
-                    # #region agent log
-                    _dbg_ndjson(
-                        location="meeting_store.py:append_live_segment:attendee_created",
-                        message="created attendee from real-time diarization",
-                        data={
-                            "meeting_id": meeting_id,
-                            "speaker_label": speaker_label,
-                            "attendee_id": new_attendee["id"],
-                            "total_attendees": len(existing_attendees),
-                        },
-                        run_id="rt-attendee-fix",
-                        hypothesis_id="H1",
-                    )
-                    # #endregion
                     # Emit attendees_updated event for real-time UI update
                     self.publish_event("attendees_updated", meeting_id, {"attendees": existing_attendees})
             

@@ -45,7 +45,7 @@ The installer will automatically install:
 
 Step 3: Start the Server
 ------------------------
-  1. Double-click "start.bat" in the notetaker folder
+  1. Double-click "notetaker.bat" in the notetaker folder
   2. Wait for the startup message
 
 Step 4: Open the Web Interface

@@ -38,9 +38,6 @@ from app.services.debug_logging import dbg
 from app.services.debug import debug_log
 from app.services.ndjson_debug import dbg as nd_dbg
 
-# #region agent log
-_dbg_logger = logging.getLogger("notetaker.debug")
-# #endregion
 
 class SimulateTranscribeRequest(BaseModel):
     source: str = Field("file", description="Audio source: 'mic' or 'file'")
@@ -118,21 +115,6 @@ def create_transcription_router(
         payload = " ".join(f"{k}={fields[k]!r}" for k in sorted(fields.keys()))
         trace_logger.info("TRACE stage=%s ts=%s %s", stage, datetime.utcnow().isoformat(), payload)
 
-    def dbg_rt(location: str, message: str, data: dict, run_id: str, hypothesis_id: str) -> None:
-        # #region agent log
-        try:
-            dbg(
-                logging.getLogger("notetaker.debug"),
-                location=location,
-                message=message,
-                data=data,
-                run_id=run_id,
-                hypothesis_id=hypothesis_id,
-            )
-        except Exception:
-            pass
-        # #endregion
-
     transcription_config = config.get("transcription", {})
     provider_name = transcription_config.get("provider", "faster-whisper")
     if provider_name != "faster-whisper":
@@ -161,13 +143,7 @@ def create_transcription_router(
 
     def get_provider(model_size: str, device: str, compute_type: str) -> FasterWhisperProvider:
         key = (model_size, device, compute_type)
-        # #region agent log
-        _dbg_logger.debug("GET_PROVIDER: key=%s cached=%s", key, key in provider_cache)
-        # #endregion
         if key not in provider_cache:
-            # #region agent log
-            _dbg_logger.debug("GET_PROVIDER_CREATE: creating new FasterWhisperProvider for %s", key)
-            # #endregion
             provider_cache[key] = FasterWhisperProvider(
                 WhisperConfig(
                     model_size=model_size,
@@ -176,20 +152,11 @@ def create_transcription_router(
                 ),
                 diarization_service,
             )
-            # #region agent log
-            _dbg_logger.debug("GET_PROVIDER_CREATED: %s", key)
-            # #endregion
         return provider_cache[key]
 
     def get_pipeline(model_size: str, device: str, compute_type: str) -> TranscriptionPipeline:
         """Get a transcription pipeline with the specified provider configuration."""
-        # #region agent log
-        _dbg_logger.debug("GET_PIPELINE_START: model=%s device=%s compute=%s", model_size, device, compute_type)
-        # #endregion
         provider = get_provider(model_size, device, compute_type)
-        # #region agent log
-        _dbg_logger.debug("GET_PIPELINE_GOT_PROVIDER: model=%s", model_size)
-        # #endregion
         return TranscriptionPipeline(
             provider=provider,
             diarization_service=diarization_service,
@@ -223,9 +190,6 @@ def create_transcription_router(
         segments: list[dict] = []
         language = None
         skip_live_transcription = (model_size == "none")
-        # #region agent log
-        _dbg_logger.debug("THREAD_ENTER: meeting_id=%s model_size=%s audio_source_type=%s skip_live=%s audio_offset=%f", meeting_id, model_size, type(audio_source).__name__, skip_live_transcription, audio_offset)
-        # #endregion
         
         # Debug: visible console output for resume troubleshooting
         print(f"[RESUME-DBG] Thread ENTERED: meeting_id={meeting_id} model_size={model_size} audio_offset={audio_offset}")
@@ -241,10 +205,6 @@ def create_transcription_router(
             
             # Skip pipeline creation if live transcription is disabled
             pipeline = None if skip_live_transcription else get_pipeline(model_size, live_device, live_compute)
-            # #region agent log
-            _dbg_logger.debug("pipeline_created: meeting_id=%s samplerate=%d channels=%d bytes_per_second=%d chunk_seconds=%f", 
-                             meeting_id, samplerate, channels, bytes_per_second, chunk_seconds)
-            # #endregion
             
             # Create per-session real-time diarization (only if live transcription is enabled)
             session_rt_diarization = None
@@ -264,35 +224,12 @@ def create_transcription_router(
             buffer = bytearray()
             offset_seconds = audio_offset  # Initialize with resume offset (0.0 for new recordings)
             
-            # #region agent log
-            _dbg_logger.debug("transcription_started: meeting_id=%s samplerate=%d channels=%d bytes_per_second=%d chunk_seconds=%f buffer_threshold=%f", 
-                             meeting_id, samplerate, channels, bytes_per_second, chunk_seconds, bytes_per_second * chunk_seconds)
-            chunk_count = 0
-            _t_buffer_start = time.time()
-            process_count = 0
-            last_segment_end = 0.0
-            loop_iter = 0
-            _dbg_logger.debug("LOOP_ENTER: meeting_id=%s is_complete_before=%s", meeting_id, audio_source.is_complete())
-            # #endregion
             # Debug: check if loop will even run
             print(f"[RESUME-DBG] Before loop: is_complete={audio_source.is_complete()} is_stopped={audio_source.is_stopped()}")
             while not audio_source.is_complete():
-                # #region agent log
-                loop_iter += 1
-                if loop_iter <= 10 or loop_iter % 50 == 0:
-                    _dbg_logger.debug("LOOP_ITER: iter=%d is_complete=%s buffer_len=%d", loop_iter, audio_source.is_complete(), len(buffer))
-                # #endregion
                 chunk = audio_source.get_chunk(timeout_sec=0.5)
                 if chunk:
                     buffer.extend(chunk)
-                    # #region agent log
-                    chunk_count += 1
-                    if chunk_count <= 5:
-                        _dbg_logger.debug("CHUNK_RECEIVED: chunk_count=%d chunk_len=%d buffer_len=%d threshold=%f", 
-                                         chunk_count, len(chunk), len(buffer), bytes_per_second * chunk_seconds)
-                        # Debug: visible output for first few chunks
-                        print(f"[RESUME-DBG] Chunk received: count={chunk_count} len={len(chunk)} buffer={len(buffer)}")
-                    # #endregion
                 
                 # Process when we have enough audio
                 if len(buffer) >= bytes_per_second * chunk_seconds:
@@ -306,45 +243,11 @@ def create_transcription_router(
                     temp_path = None
                     try:
                         temp_path, temp_duration = _write_temp_wav(audio_bytes, samplerate, channels)
-                        # #region agent log
-                        _dbg_logger.debug("processing_chunk: buffer_len=%d offset_seconds=%f temp_duration=%f expected_duration=%f", 
-                                         len(audio_bytes), offset_seconds, temp_duration, len(audio_bytes) / bytes_per_second)
-                        # #endregion
                         
-                        # #region agent log
-                        _t_buffer_ready = time.time()
-                        _buffer_fill_ms = round((_t_buffer_ready - _t_buffer_start) * 1000)
-                        try:
-                            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_lat:
-                                _f_lat.write(json.dumps({"location":"transcription.py:buffer_ready","message":"buffer_threshold_reached","data":{"meeting_id":meeting_id,"buffer_fill_ms":_buffer_fill_ms,"buffer_bytes":len(audio_bytes),"chunk_seconds":chunk_seconds},"timestamp":int(time.time()*1000),"hypothesisId":"H1"})+"\n")
-                        except Exception: pass
-                        _t_buffer_start = time.time()
-                        # #endregion
                         # Transcribe chunk
-                        # #region agent log
-                        _t_whisper_start = time.time()
-                        # #endregion
                         chunk_segments, chunk_language, chunk_duration = pipeline.transcribe_chunk(
                             temp_path, offset_seconds
                         )
-                        # #region agent log
-                        _t_whisper_end = time.time()
-                        _whisper_ms = round((_t_whisper_end - _t_whisper_start) * 1000)
-                        process_count += 1
-                        first_seg_start = chunk_segments[0].get("start") if chunk_segments else None
-                        last_seg_end_in_chunk = max((s.get("end", 0) for s in chunk_segments), default=0) if chunk_segments else 0
-                        gap_from_previous = first_seg_start - last_segment_end if (first_seg_start is not None and last_segment_end > 0) else 0
-                        actual_chunk_duration = len(audio_bytes) / bytes_per_second
-                        _dbg_logger.debug("chunk_transcribed: process_count=%d offset=%f whisper_dur=%f actual_dur=%f num_segs=%d first_start=%s last_end=%f gap=%f",
-                                         process_count, offset_seconds, chunk_duration, actual_chunk_duration, len(chunk_segments),
-                                         first_seg_start, last_seg_end_in_chunk, gap_from_previous)
-                        if chunk_segments:
-                            last_segment_end = last_seg_end_in_chunk
-                        try:
-                            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_lat:
-                                _f_lat.write(json.dumps({"location":"transcription.py:whisper_done","message":"whisper_transcribe_chunk_done","data":{"meeting_id":meeting_id,"process_count":process_count,"whisper_ms":_whisper_ms,"num_segments":len(chunk_segments),"chunk_audio_seconds":actual_chunk_duration,"offset":offset_seconds},"timestamp":int(time.time()*1000),"hypothesisId":"H1"})+"\n")
-                        except Exception: pass
-                        # #endregion
                         
                         if chunk_language and not language:
                             language = chunk_language
@@ -352,56 +255,22 @@ def create_transcription_router(
                         
                         # Feed audio to real-time diarization
                         new_rt_annotations = []
-                        # #region agent log
-                        _t_diar_start = time.time()
-                        # #endregion
                         if rt_diarization_active and session_rt_diarization.is_active():
                             new_rt_annotations = session_rt_diarization.feed_audio(audio_bytes)
-                        # #region agent log
-                        _t_diar_end = time.time()
-                        _diar_ms = round((_t_diar_end - _t_diar_start) * 1000)
-                        try:
-                            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_lat:
-                                _f_lat.write(json.dumps({"location":"transcription.py:rt_diarization","message":"rt_diarization_feed_done","data":{"meeting_id":meeting_id,"diar_ms":_diar_ms,"rt_active":rt_diarization_active,"annotations":len(new_rt_annotations)},"timestamp":int(time.time()*1000),"hypothesisId":"H3"})+"\n")
-                        except Exception: pass
-                        # #endregion
                         
                         # Process each segment
-                        # #region agent log
-                        _t_publish_start = time.time()
-                        _seg_timings = []
-                        # #endregion
                         for segment in chunk_segments:
                             # Try to get speaker from real-time diarization
                             if rt_diarization_active and session_rt_diarization.is_active():
                                 speaker = session_rt_diarization.get_speaker_at(segment["start"])
-                                # #region agent log
-                                _dbg_logger.debug("get_speaker_at_result: seg_start=%f seg_end=%f speaker=%s rt_active=%s",
-                                                 segment["start"], segment["end"], speaker, session_rt_diarization.is_active())
-                                # #endregion
                                 if speaker:
                                     segment["speaker"] = speaker
                             
                             segments.append(segment)
-                            # #region agent log
-                            _t_seg_start = time.time()
-                            # #endregion
                             # Debug: segment being saved
                             print(f"[RESUME-DBG] Segment produced: start={segment.get('start'):.1f} text={segment.get('text', '')[:50]}")
                             meeting_store.append_live_segment(meeting_id, segment, language or chunk_language)
-                            # #region agent log
-                            _seg_timings.append(round((time.time() - _t_seg_start) * 1000))
-                            # #endregion
                         
-                        # #region agent log
-                        _t_publish_end = time.time()
-                        _publish_ms = round((_t_publish_end - _t_publish_start) * 1000)
-                        _total_pipeline_ms = round((_t_publish_end - _t_whisper_start) * 1000)
-                        try:
-                            with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_lat:
-                                _f_lat.write(json.dumps({"location":"transcription.py:segments_published","message":"all_segments_published","data":{"meeting_id":meeting_id,"process_count":process_count,"whisper_ms":_whisper_ms,"diar_ms":_diar_ms,"publish_ms":_publish_ms,"total_pipeline_ms":_total_pipeline_ms,"num_segments":len(chunk_segments),"per_segment_ms":_seg_timings},"timestamp":int(time.time()*1000),"hypothesisId":"H1,H2"})+"\n")
-                        except Exception: pass
-                        # #endregion
                         
                         # Reconcile: if new diarization annotations cover previously-
                         # stored segments with a different speaker, update them.
@@ -469,19 +338,10 @@ def create_transcription_router(
             
             # Transition to finalizing state in the tracker
             active_tracker.transition(meeting_id, MeetingState.FINALIZING)
-            # #region agent log
-            _dbg_logger.debug("POST_LOOP_FINALIZING: meeting_id=%s", meeting_id)
-            # #endregion
             
             # Wait for audio compression/concatenation before finalization reads audio_path.
             # WAV→Opus compression runs async; without this wait, finalization may read
             # the stale .wav path after the file has already been deleted.
-            # #region agent log
-            try:
-                with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_res:
-                    _f_res.write(json.dumps({"location":"transcription.py:before_wait_check","message":"About to check is_resumed_meeting","data":{"meeting_id":meeting_id,"is_resumed_meeting":is_resumed_meeting,"audio_offset":audio_offset},"timestamp":int(time.time()*1000),"hypothesisId":"A"})+"\n")
-            except: pass
-            # #endregion
             # Wait for audio compression/concatenation to complete before finalization.
             # For WAV recordings, compression to Opus runs async; we must wait so
             # the meeting's audio_path is updated before diarization tries to read it.
@@ -490,12 +350,6 @@ def create_transcription_router(
                     logger.info("Resumed meeting: waiting for audio concatenation to complete...")
                 else:
                     logger.info("Waiting for audio compression to complete...")
-                # #region agent log
-                try:
-                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_res:
-                        _f_res.write(json.dumps({"location":"transcription.py:before_wait","message":"Calling wait_for_compression","data":{"meeting_id":meeting_id,"is_resumed":is_resumed_meeting},"timestamp":int(time.time()*1000),"hypothesisId":"A"})+"\n")
-                except: pass
-                # #endregion
                 meeting_store.publish_finalization_status(
                     meeting_id,
                     "Processing audio..." if not is_resumed_meeting else "Combining audio files...",
@@ -503,12 +357,6 @@ def create_transcription_router(
                 )
                 # Short wait for Opus; diarization uses WAV — do not block minutes on compression
                 combined_audio_path = audio_service.wait_for_compression(timeout=15)
-                # #region agent log
-                try:
-                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_res:
-                        _f_res.write(json.dumps({"location":"transcription.py:after_wait","message":"wait_for_compression returned","data":{"meeting_id":meeting_id,"combined_audio_path":combined_audio_path},"timestamp":int(time.time()*1000),"hypothesisId":"A"})+"\n")
-                except: pass
-                # #endregion
                 if combined_audio_path:
                     logger.info("Audio concatenation complete: %s", combined_audio_path)
                     print(f"[RESUME-DBG] Audio concatenation complete: {combined_audio_path}")
@@ -518,25 +366,10 @@ def create_transcription_router(
             
             try:
                 meeting = meeting_store.get_meeting(meeting_id)
-                # #region agent log
-                _dbg_logger.debug("GOT_MEETING: meeting_id=%s has_meeting=%s", meeting_id, bool(meeting))
-                import time as _t_fin; import json as _j_fin
-                try:
-                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_fin:
-                        _f_fin.write(_j_fin.dumps({"location":"transcription.py:_run_transcription","message":"FINALIZATION_PHASE_ENTERED","data":{"meeting_id":meeting_id,"has_meeting":bool(meeting),"has_segments":bool(meeting and (meeting.get("transcript") or {}).get("segments"))},"timestamp":int(_t_fin.time()*1000),"hypothesisId":"C"})+"\n")
-                except Exception: pass
-                # #endregion
                 if meeting:
                     transcript = meeting.get("transcript") or {}
                     disk_segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
                     audio_path = meeting.get("audio_path")
-                    # #region agent log
-                    _dbg_logger.debug("MEETING_DATA: meeting_id=%s num_segments=%d has_audio_path=%s", meeting_id, len(disk_segments), bool(audio_path))
-                    try:
-                        with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_fin:
-                            _f_fin.write(_j_fin.dumps({"location":"transcription.py:finalization_audio_path","message":"Audio path for finalization","data":{"meeting_id":meeting_id,"audio_path":audio_path,"audio_exists":os.path.isfile(audio_path) if audio_path else False,"num_segments":len(disk_segments)},"timestamp":int(_t_fin.time()*1000),"hypothesisId":"B,C,E"})+"\n")
-                    except: pass
-                    # #endregion
                     
                     # Debug: show which audio file will be used for finalization
                     print(f"[RESUME-DBG] Finalization using audio_path: {audio_path} (exists={os.path.isfile(audio_path) if audio_path else False})")
@@ -544,10 +377,6 @@ def create_transcription_router(
                     if disk_segments:
                         # Re-transcribe with final model if configured and different
                         final_model = final_default_size
-                        # #region agent log
-                        _dbg_logger.debug("RETRANSCRIBE_CHECK: meeting_id=%s final_model=%s live_model=%s audio_path=%s audio_exists=%s",
-                                         meeting_id, final_model, model_size, audio_path, os.path.isfile(audio_path) if audio_path else False)
-                        # #endregion
                         if (
                             retranscribe_on_stop
                             and final_model
@@ -556,12 +385,6 @@ def create_transcription_router(
                             and audio_path
                             and os.path.isfile(audio_path)
                         ):
-                            # #region agent log
-                            try:
-                                with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_rt:
-                                    _f_rt.write(json.dumps({"location":"transcription.py:retranscription:start","message":"Starting re-transcription","data":{"meeting_id":meeting_id,"audio_path":audio_path,"final_model":final_model,"live_model":model_size,"segments_before":len(disk_segments)},"timestamp":int(time.time()*1000),"hypothesisId":"E"})+"\n")
-                            except: pass
-                            # #endregion
                             meeting_store.publish_finalization_status(
                                 meeting_id,
                                 f"Re-transcribing with {final_model} model...",
@@ -597,21 +420,9 @@ def create_transcription_router(
 
                                 debug_log('TRANSCRIPTION', 'Re-transcription finished: segments=%d language=%s elapsed=%.2fs',
                                           len(new_segments) if new_segments else 0, new_language, retrans_elapsed)
-                                # #region agent log
-                                try:
-                                    with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_rt:
-                                        _f_rt.write(json.dumps({"location":"transcription.py:retranscription:result","message":"Re-transcription result","data":{"meeting_id":meeting_id,"new_segments_count":len(new_segments) if new_segments else 0,"new_language":new_language,"elapsed":retrans_elapsed},"timestamp":int(time.time()*1000),"hypothesisId":"E"})+"\n")
-                                except: pass
-                                # #endregion
                                 if new_segments:
                                     disk_segments = new_segments
                                     meeting_store.replace_transcript_segments(meeting_id, disk_segments, new_language)
-                                    # #region agent log
-                                    try:
-                                        with open("/Users/chee/zapier ai project/.cursor/debug.log", "a") as _f_rt:
-                                            _f_rt.write(json.dumps({"location":"transcription.py:retranscription:replaced","message":"Segments replaced","data":{"meeting_id":meeting_id,"new_count":len(disk_segments),"language":new_language},"timestamp":int(time.time()*1000),"hypothesisId":"E"})+"\n")
-                                    except: pass
-                                    # #endregion
                                     logger.info(
                                         "Re-transcription complete: meeting_id=%s segments=%d elapsed=%.2fs",
                                         meeting_id, len(disk_segments), retrans_elapsed,
@@ -653,10 +464,6 @@ def create_transcription_router(
                                     {"reason": "Audio file not available", "audio_path": audio_path},
                                 )
 
-                        # #region agent log
-                        _dbg_logger.debug("FINAL_PIPELINE_GET: meeting_id=%s model=%s device=%s compute=%s",
-                                         meeting_id, final_model if final_model != "none" else model_size, final_device, final_compute)
-                        # #endregion
                         # Transcription is done (re-transcribed, skipped, or used live segments)
                         meeting_store.mark_finalization_stage(meeting_id, "transcription")
 
@@ -664,15 +471,9 @@ def create_transcription_router(
                             final_model if final_model != "none" else model_size,
                             final_device, final_compute,
                         )
-                        # #region agent log
-                        _dbg_logger.debug("FINALIZE_START: meeting_id=%s num_segments=%d has_audio_path=%s", meeting_id, len(disk_segments), bool(audio_path))
-                        # #endregion
                         final_pipeline.finalize_meeting_with_diarization(
                             meeting_id, disk_segments, audio_path
                         )
-                        # #region agent log
-                        _dbg_logger.debug("FINALIZE_COMPLETE: meeting_id=%s", meeting_id)
-                        # #endregion
                         logger.info("Meeting finalized: meeting_id=%s segments=%d", meeting_id, len(disk_segments))
                     else:
                         for stage in ("transcription", "diarization", "speaker_names", "summary"):
@@ -688,10 +489,6 @@ def create_transcription_router(
                 
         except Exception as exc:
             logger.exception("Transcription error: meeting_id=%s error=%s", meeting_id, exc)
-            # #region agent log
-            import traceback as _tb_run
-            _dbg_logger.debug("THREAD_CRASH: meeting_id=%s exc_type=%s exc_str=%s", meeting_id, type(exc).__name__, str(exc)[:500])
-            # #endregion
             # Publish error event for frontend notification
             try:
                 meeting_store.publish_event("transcription_error", meeting_id, {
@@ -901,9 +698,6 @@ def create_transcription_router(
         Both modes continue processing already-buffered audio in background.
         Returns immediately with status='stopping'.
         """
-        # #region agent log
-        _dbg_logger.debug("stop called: meeting_id=%s transcription_jobs=%d", meeting_id, len(transcription_jobs))
-        # #endregion
         
         # Unified job lookup from registry
         with transcription_jobs_lock:
@@ -917,9 +711,6 @@ def create_transcription_router(
                 audio_source.stop()
                 logger.info("AudioDataSource.stop() called: meeting_id=%s", meeting_id)
             
-            # #region agent log
-            _dbg_logger.debug("unified stop completed: meeting_id=%s had_audio_source=%s", meeting_id, audio_source is not None)
-            # #endregion
             
             logger.info("Stopped transcription: meeting_id=%s", meeting_id)
             return {

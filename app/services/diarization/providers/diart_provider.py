@@ -382,17 +382,6 @@ class DiartProvider:
             if waveform is None:
                 return []
             
-            # #region agent log
-            # Track buffer processing for debugging
-            buffer_duration = waveform.shape[-1] / 16000.0  # samples / sample_rate
-            nd_dbg(
-                "app/services/diarization/providers/diart_provider.py:_process_buffer",
-                "diart_process_buffer_start",
-                {"buffer_duration_s": round(buffer_duration, 3), "waveform_shape": list(waveform.shape)},
-                run_id="pre-fix",
-                hypothesis_id="H4",
-            )
-            # #endregion
             
             # Process through the full pipeline (segmentation -> embedding -> clustering)
             # Diart's __call__ expects Sequence[SlidingWindowFeature], not raw arrays
@@ -423,23 +412,6 @@ class DiartProvider:
                 total_samples = waveform_np.shape[0]
                 all_annotations = []
                 
-                # #region agent log
-                nd_dbg(
-                    "app/services/diarization/providers/diart_provider.py:_process_buffer",
-                    "diart_waveform_converted",
-                    {
-                        "waveform_type": type(waveform_np).__name__,
-                        "waveform_shape": list(waveform_np.shape),
-                        "dtype": str(waveform_np.dtype),
-                        "chunk_duration": chunk_duration,
-                        "chunk_samples": chunk_samples,
-                        "total_samples": total_samples,
-                        "num_chunks": (total_samples + chunk_samples - 1) // chunk_samples,
-                    },
-                    run_id="pre-fix",
-                    hypothesis_id="H4",
-                )
-                # #endregion
                 
                 # Process each chunk
                 chunk_idx = 0
@@ -478,21 +450,6 @@ class DiartProvider:
                                         "speaker": speaker,
                                     })
                     except Exception as chunk_exc:
-                        # #region agent log
-                        import traceback
-                        nd_dbg(
-                            "app/services/diarization/providers/diart_provider.py:_process_buffer",
-                            "diart_chunk_error",
-                            {
-                                "chunk_idx": chunk_idx,
-                                "exc_type": type(chunk_exc).__name__,
-                                "exc_str": str(chunk_exc)[:600],
-                                "traceback": traceback.format_exc()[-1000:],
-                            },
-                            run_id="pre-fix",
-                            hypothesis_id="H4",
-                        )
-                        # #endregion
                         self._logger.warning("Chunk %d processing failed: %s", chunk_idx, chunk_exc)
                     
                     chunk_idx += 1
@@ -500,38 +457,10 @@ class DiartProvider:
                 # Update cumulative offset for next buffer
                 self._cumulative_offset += buffer_duration
                 
-                # #region agent log
-                nd_dbg(
-                    "app/services/diarization/providers/diart_provider.py:_process_buffer",
-                    "diart_process_buffer_ok",
-                    {
-                        "returned_annotations": len(all_annotations),
-                        "speakers": list(set(a["speaker"] for a in all_annotations)) if all_annotations else [],
-                        "cumulative_offset": round(self._cumulative_offset, 3),
-                        "chunks_processed": chunk_idx,
-                    },
-                    run_id="pre-fix",
-                    hypothesis_id="H4",
-                )
-                # #endregion
                 
                 return all_annotations
                 
             except Exception as pipeline_exc:
-                # #region agent log
-                import traceback
-                nd_dbg(
-                    "app/services/diarization/providers/diart_provider.py:_process_buffer",
-                    "diart_pipeline_call_error",
-                    {
-                        "exc_type": type(pipeline_exc).__name__,
-                        "exc_str": str(pipeline_exc)[:800],
-                        "traceback": traceback.format_exc()[-1500:],
-                    },
-                    run_id="pre-fix",
-                    hypothesis_id="H4",
-                )
-                # #endregion
                 self._logger.warning("Diart pipeline call failed: %s", pipeline_exc)
                 return []
             

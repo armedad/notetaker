@@ -100,6 +100,10 @@ class DebugSettingsRequest(BaseModel):
     flags: dict = {}
 
 
+class HfTokenRequest(BaseModel):
+    hf_token: Optional[str] = None
+
+
 def create_settings_router(ctx) -> APIRouter:
     router = APIRouter()
     config_path = ctx.config_path
@@ -129,6 +133,30 @@ def create_settings_router(ctx) -> APIRouter:
         except Exception:
             return False
         return bool(torch.cuda.is_available())
+
+    def _hf_token_from_config() -> str:
+        """Resolve the HF token from diarization config (batch → realtime → legacy)."""
+        if not os.path.exists(config_path):
+            return ""
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        diar = data.get("diarization", {})
+        return (
+            diar.get("batch", {}).get("hf_token")
+            or diar.get("realtime", {}).get("hf_token")
+            or diar.get("hf_token")
+            or ""
+        )
+
+    def _sync_hf_token(diarization: dict, token: str) -> dict:
+        """Write token to legacy + split diarization sections."""
+        diarization = dict(diarization)
+        diarization["hf_token"] = token
+        if "batch" in diarization and isinstance(diarization["batch"], dict):
+            diarization["batch"] = {**diarization["batch"], "hf_token": token}
+        if "realtime" in diarization and isinstance(diarization["realtime"], dict):
+            diarization["realtime"] = {**diarization["realtime"], "hf_token": token}
+        return diarization
 
     @router.get("/api/settings/diarization")
     def get_diarization_settings() -> dict:
@@ -172,6 +200,8 @@ def create_settings_router(ctx) -> APIRouter:
         # Check for new split format
         if "realtime" in diarization:
             result = diarization["realtime"].copy()
+            if not result.get("hf_token"):
+                result["hf_token"] = diarization.get("hf_token", "")
         else:
             # Legacy format - extract realtime-relevant settings
             # Real-time is only enabled if provider is diart
@@ -211,6 +241,10 @@ def create_settings_router(ctx) -> APIRouter:
             diarization = {"batch": batch_settings}
         
         diarization["realtime"] = payload.model_dump()
+        if not payload.hf_token:
+            existing = diarization.get("realtime", {}).get("hf_token") or diarization.get("hf_token", "")
+            if existing:
+                diarization["realtime"]["hf_token"] = existing
         data["diarization"] = diarization
         
         with open(config_path, "w", encoding="utf-8") as config_file:
@@ -237,6 +271,8 @@ def create_settings_router(ctx) -> APIRouter:
         # Check for new split format
         if "batch" in diarization:
             result = diarization["batch"].copy()
+            if not result.get("hf_token"):
+                result["hf_token"] = diarization.get("hf_token", "")
         else:
             # Legacy format - extract batch-relevant settings
             # Batch is enabled for non-diart providers
@@ -277,6 +313,12 @@ def create_settings_router(ctx) -> APIRouter:
             diarization = {"realtime": realtime_settings}
         
         diarization["batch"] = payload.model_dump()
+        if not payload.hf_token:
+            existing = diarization.get("batch", {}).get("hf_token") or diarization.get("hf_token", "")
+            if existing:
+                diarization["batch"]["hf_token"] = existing
+        elif payload.hf_token:
+            diarization = _sync_hf_token(diarization, payload.hf_token.strip())
         data["diarization"] = diarization
         
         with open(config_path, "w", encoding="utf-8") as config_file:
@@ -284,32 +326,27 @@ def create_settings_router(ctx) -> APIRouter:
         return {"status": "ok"}
 
     @router.post("/api/settings/diarization/test")
-    def test_diarization_access() -> dict:
+    def test_diarization_access(payload: Optional[HfTokenRequest] = None) -> dict:
         """Test if HuggingFace token has access to pyannote models."""
-        if not os.path.exists(config_path):
-            return {"status": "error", "message": "No configuration found"}
-        
-        with open(config_path, "r", encoding="utf-8") as config_file:
-            data = json.load(config_file)
-        
-        diarization = data.get("diarization", {})
-        
-        # Find HF token from new split format or legacy format
         hf_token = ""
-        if "batch" in diarization:
-            hf_token = diarization["batch"].get("hf_token", "")
-        if not hf_token and "realtime" in diarization:
-            hf_token = diarization["realtime"].get("hf_token", "")
+        if payload and payload.hf_token:
+            hf_token = payload.hf_token.strip()
         if not hf_token:
-            hf_token = diarization.get("hf_token", "")
-        
+            hf_token = _hf_token_from_config()
+
         if not hf_token:
             return {
                 "status": "error",
-                "message": "HuggingFace token not configured. Get one at https://huggingface.co/settings/tokens"
+                "message": "HuggingFace token not configured. Get one at https://huggingface.co/settings/tokens",
             }
-        
-        # Test access to the required models
+
+        if not os.path.exists(config_path):
+            return {"status": "error", "message": "No configuration found"}
+
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            data = json.load(config_file)
+
+        diarization = data.get("diarization", {})
         models_to_check = [
             "pyannote/speaker-diarization-3.1",
             "pyannote/segmentation-3.0",
@@ -719,19 +756,22 @@ def create_settings_router(ctx) -> APIRouter:
     class HfGlobalRequest(BaseModel):
         auto_download: bool
 
-    def _hf_token_from_config() -> str:
-        """Resolve the HF token from diarization config (batch → realtime → legacy)."""
-        if not os.path.exists(config_path):
-            return ""
-        with open(config_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        diar = data.get("diarization", {})
-        return (
-            diar.get("batch", {}).get("hf_token")
-            or diar.get("realtime", {}).get("hf_token")
-            or diar.get("hf_token")
-            or ""
-        )
+    @router.get("/api/settings/hf-token")
+    def get_hf_token() -> dict:
+        return {"hf_token": _hf_token_from_config()}
+
+    @router.post("/api/settings/hf-token")
+    def set_hf_token(payload: HfTokenRequest) -> dict:
+        token = (payload.hf_token or "").strip()
+        data = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        diarization = _sync_hf_token(data.get("diarization", {}), token)
+        data["diarization"] = diarization
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return {"status": "ok", "hf_token": token}
 
     @router.get("/api/settings/hf-models")
     def get_hf_models() -> dict:

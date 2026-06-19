@@ -12,7 +12,7 @@ Maintainer context: **Chee Chew** — see `\\CC\home\cursor\chee\digital-twin\` 
 - **Live STT:** chunks every `transcription.live_chunk_seconds` (default 5s) during recording — unlike `voice-dictation`, which batches STT after stop
 - **Start (macOS):** `./notetaker.sh` from a **deployed** copy (not the git tree — launcher exits if `.git` exists). Upstream `deploy.sh` rsyncs to `~/projects/notetaker` but only when `SRC_DIR` matches `*/coding/notetaker` — from `\\cc\apps\notetaker` use direct dev serve instead (below).
 - **Dev serve (from git tree):** `uvicorn run:app --host 127.0.0.1 --port 6684` (after `install.sh` / venv + deps)
-- **Start (Windows):** `start.bat` after `install.bat` (admin)
+- **Start (Windows):** `notetaker.bat` after `install.bat` (admin)
 
 ## Shared Python venv (Windows)
 
@@ -30,17 +30,35 @@ Install writes `.notetaker_venv` with the resolved path. Do not use broken `X:\n
 
 ## Paths
 
-Same repo as `\\cc\apps\notetaker` — also **`X:\notetaker`** (`\\cc\apps` is mounted as drive **X:**).
+Git repo root: **`X:\notetaker`**. This tree is a **worktree** at **`X:\notetaker-dev`** (`\\cc\apps\notetaker-dev`).
+
+## Git worktrees (Windows)
+
+| Worktree | Path | Branch | Role |
+|----------|------|--------|------|
+| **prod** | `X:\notetaker` | `main` | stable / deploy-aligned |
+| **dev** (this tree) | `X:\notetaker-dev` | `notetaker-dev` | parallel feature work |
+
+```powershell
+git -C X:\notetaker worktree list
+git -c safe.directory=//cc/apps/notetaker-dev -C X:\notetaker-dev status
+```
+
+Each worktree has its own `data/` (gitignored). Shared venv: `X:\.env` via `.notetaker_venv`.
+
+**This instance:** `.\notetaker.ps1 -Debug` → http://127.0.0.1:6685. Prod on `X:\notetaker` uses 6684.
+
+Add more worktrees: `git -C X:\notetaker worktree add X:\notetaker-<issue> -b <branch>`.
 
 ## Dev / git
 
-Prefer **`X:\notetaker`** for git on Windows (avoids many UNC “dubious ownership” issues):
+Prefer **`X:\notetaker-dev`** for active development. Use `safe.directory` for the dev worktree:
 
 ```powershell
-git -C X:\notetaker status
+git -c safe.directory=//cc/apps/notetaker-dev -C X:\notetaker-dev status
 ```
 
-If you must use UNC: `git -c safe.directory=//cc/apps/notetaker -C "\\cc\apps\notetaker" status`, or add that path to global `safe.directory` once.
+Or once: `git config --global --add safe.directory '//cc/apps/notetaker-dev'`
 
 ## Key modules
 
