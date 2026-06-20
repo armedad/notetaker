@@ -122,14 +122,43 @@ def list_models() -> list[dict]:
     return out
 
 
+def set_hf_hub_offline(offline: bool) -> None:
+    """Sync HF_HUB_OFFLINE env var and huggingface_hub.constants (read at import)."""
+    if offline:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            import huggingface_hub.constants as hf_constants
+
+            hf_constants.HF_HUB_OFFLINE = True
+        except Exception:
+            pass
+    else:
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        try:
+            import huggingface_hub.constants as hf_constants
+
+            hf_constants.HF_HUB_OFFLINE = False
+        except Exception:
+            pass
+
+
+def _hf_hub_offline_enabled() -> bool:
+    try:
+        import huggingface_hub.constants as hf_constants
+
+        return bool(hf_constants.HF_HUB_OFFLINE)
+    except Exception:
+        return os.environ.get("HF_HUB_OFFLINE", "1") == "1"
+
+
 def _with_network(fn, *args, **kwargs):
-    """Run *fn* with HF_HUB_OFFLINE temporarily cleared."""
-    prev = os.environ.pop("HF_HUB_OFFLINE", None)
+    """Run *fn* with HuggingFace Hub network access, then restore offline mode."""
+    restore_offline = _hf_hub_offline_enabled()
+    set_hf_hub_offline(False)
     try:
         return fn(*args, **kwargs)
     finally:
-        # Always restore offline mode (boot default is "1").
-        os.environ["HF_HUB_OFFLINE"] = prev if prev is not None else "1"
+        set_hf_hub_offline(restore_offline)
 
 
 def check_for_update(model_id: str, hf_token: Optional[str] = None) -> dict:
