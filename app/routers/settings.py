@@ -800,10 +800,14 @@ def create_settings_router(ctx) -> APIRouter:
             json.dump(data, f, indent=2)
 
         if payload.auto_download:
-            os.environ.pop("HF_HUB_OFFLINE", None)
+            from app.services.hf_model_manager import set_hf_hub_offline
+
+            set_hf_hub_offline(False)
             _logger.info("HF auto-download enabled — HF_HUB_OFFLINE cleared")
         else:
-            os.environ["HF_HUB_OFFLINE"] = "1"
+            from app.services.hf_model_manager import set_hf_hub_offline
+
+            set_hf_hub_offline(True)
             _logger.info("HF auto-download disabled — HF_HUB_OFFLINE=1")
 
         return {"status": "ok", "auto_download": payload.auto_download}
