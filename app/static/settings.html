@@ -135,9 +135,12 @@
             <section class="panel">
               <h2>Server</h2>
               <p class="panel-description">
-                Stop the Notetaker server process. Restart with <code>start.bat</code> or your usual launcher.
+                Stop exits the server and launcher. Restart re-runs
+                <code>notetaker.bat</code> from the top (requires launch via
+                <code>notetaker.bat</code> / <code>notetaker.ps1</code>).
               </p>
               <div class="actions">
+                <button id="restart-server-btn" type="button" class="secondary">Restart server</button>
                 <button id="stop-server-btn" type="button" class="danger">Stop server</button>
               </div>
               <div class="output" id="stop-server-output"></div>
@@ -622,6 +625,6 @@
 
     <script src="/static/notifications.js"></script>
     <script src="/static/debug-flags.js"></script>
-    <script src="/static/settings.js?v=7"></script>
+    <script src="/static/settings.js?v=9"></script>
   </body>
 </html>

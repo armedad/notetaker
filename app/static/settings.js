@@ -962,16 +962,55 @@ function initSettingsTabs() {
   }
 }
 
+async function waitForServerOffline(timeoutMs = 15000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      await fetch("/api/health", {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+    } catch (_) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+async function waitForServerOnline(options = {}) {
+  const intervalMs = options.intervalMs ?? 750;
+  const timeoutMs = options.timeoutMs ?? 120000;
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await fetch("/api/health", {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      if (response.ok) {
+        return true;
+      }
+    } catch (_) {
+      // Server still down during restart.
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
 async function stopServer() {
   if (
     !confirm(
-      "Stop the Notetaker server?\n\nAny in-progress recording will be interrupted. Restart with start.bat or your usual launcher."
+      "Stop the Notetaker server?\n\nAny in-progress recording will be interrupted. The launcher window will close."
     )
   ) {
     return;
   }
 
   const btn = document.getElementById("stop-server-btn");
+  const restartBtn = document.getElementById("restart-server-btn");
   const output = document.getElementById("stop-server-output");
   if (output) {
     output.textContent = "";
@@ -979,6 +1018,9 @@ async function stopServer() {
   if (btn) {
     btn.disabled = true;
     btn.textContent = "Stopping…";
+  }
+  if (restartBtn) {
+    restartBtn.disabled = true;
   }
 
   try {
@@ -1009,6 +1051,79 @@ async function stopServer() {
     if (btn) {
       btn.disabled = false;
       btn.textContent = "Stop server";
+    }
+    if (restartBtn) {
+      restartBtn.disabled = false;
+    }
+  }
+}
+
+async function restartServer() {
+  if (
+    !confirm(
+      "Restart the Notetaker server?\n\nAny in-progress recording will be interrupted. The launcher will start fresh from the top."
+    )
+  ) {
+    return;
+  }
+
+  const btn = document.getElementById("restart-server-btn");
+  const stopBtn = document.getElementById("stop-server-btn");
+  const output = document.getElementById("stop-server-output");
+  if (output) {
+    output.textContent = "";
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Restarting…";
+  }
+  if (stopBtn) {
+    stopBtn.disabled = true;
+  }
+
+  try {
+    const response = await fetch("/api/local/restart", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      const detail =
+        typeof err.detail === "string"
+          ? err.detail
+          : Array.isArray(err.detail)
+            ? err.detail.map((d) => d.msg || d).join("; ")
+            : response.statusText;
+      throw new Error(detail || "Restart server is not available for this launch.");
+    }
+    if (output) {
+      output.textContent = "Server is restarting…";
+    }
+
+    await waitForServerOffline();
+    if (output) {
+      output.textContent = "Waiting for server to come back…";
+    }
+
+    const online = await waitForServerOnline();
+    if (online) {
+      window.location.reload();
+      return;
+    }
+    throw new Error("Timed out waiting for server to restart.");
+  } catch (error) {
+    setGlobalError(error.message || String(error));
+    if (output) {
+      output.textContent = error.message || String(error);
+    }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Restart server";
+    }
+    if (stopBtn) {
+      stopBtn.disabled = false;
     }
   }
 }
@@ -1334,6 +1449,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  document.getElementById("restart-server-btn")?.addEventListener("click", restartServer);
   document.getElementById("stop-server-btn")?.addEventListener("click", stopServer);
 
   await refreshVersion();
