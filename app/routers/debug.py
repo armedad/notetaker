@@ -50,7 +50,7 @@ def create_test_debug_router(
         Returns:
             Dict with 'aggregate' stats and 'recent' query records
         """
-        return result
+        return rag_metrics.test_to_dict()
     
     @router.post("/rag-metrics/reset")
     def reset_rag_metrics() -> dict:
