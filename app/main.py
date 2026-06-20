@@ -244,7 +244,7 @@ def create_app() -> FastAPI:
     logger.info("Boot: testing router mounted")
 
     app.include_router(local_shutdown_router, prefix="/api")
-    logger.info("Boot: local shutdown router mounted at /api/local/shutdown")
+    logger.info("Boot: local shutdown router mounted at /api/local/shutdown and /api/local/restart")
 
     class NoCacheMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
