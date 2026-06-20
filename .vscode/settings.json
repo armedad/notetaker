@@ -1,0 +1,14 @@
+{
+  // Workspace-only — applies when this notetaker folder is open in Cursor, not globally.
+  "workbench.colorCustomizations": {
+    "[Cursor Dark High Contrast]": {
+      "editor.background": "#0c1018",
+      "editorGroupHeader.tabsBackground": "#080b12",
+      "sideBar.background": "#080b12",
+      "activityBar.background": "#080b12",
+      "panel.background": "#0c1018",
+      "terminal.background": "#0c1018",
+      "titleBar.activeBackground": "#080b12"
+    }
+  }
+}
