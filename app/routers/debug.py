@@ -50,7 +50,7 @@ def create_test_debug_router(
         Returns:
             Dict with 'aggregate' stats and 'recent' query records
         """
-        return result
+        return rag_metrics.test_to_dict()
     
     @router.post("/rag-metrics/reset")
     def reset_rag_metrics() -> dict:
@@ -184,17 +184,13 @@ def create_test_debug_router(
     
     @router.post("/restart-finalization")
     def restart_finalization() -> dict:
-        """Wake up the background finalizer to process pending meetings.
-        
-        Returns:
-            Dict with status and current pending count
-        """
+        """Enqueue all meetings that still need finalization."""
         if background_finalizer is None:
             raise HTTPException(
                 status_code=503,
                 detail="Background finalizer not available",
             )
-        
+
         status = background_finalizer.get_status()
         if status.get("active"):
             return {
@@ -203,12 +199,12 @@ def create_test_debug_router(
                 "current_meeting_id": status.get("current_meeting_id"),
                 "current_stage": status.get("current_stage"),
             }
-        
-        background_finalizer.wake()
+
+        enqueued = background_finalizer.enqueue_all_pending()
         return {
             "status": "ok",
             "message": "Finalization restarted",
-            "pending_count": status.get("pending_count", 0),
+            "pending_count": enqueued,
         }
     
     # -------------------------------------------------------------------------
