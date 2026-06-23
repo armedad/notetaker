@@ -14,6 +14,13 @@ import numpy as np
 
 from app.services.file_read_service import FileReadService
 from app.services.ndjson_debug import dbg as nd_dbg
+from app.services.audio_devices import (
+    describe_device,
+    list_input_devices,
+    log_dropdown_devices,
+    resolve_input_device_index,
+    resolve_system_input_device_index,
+)
 
 if TYPE_CHECKING:
     from app.services.meeting_store import MeetingStore
@@ -46,6 +53,7 @@ class AudioCaptureService:
         self._first_callback_logged = False
         self._live_enabled = False
         self._config = {
+            "use_system_device": True,
             "device_index": None,
             "samplerate": 48000,
             "channels": 2,
@@ -61,18 +69,29 @@ class AudioCaptureService:
         self._paused_at: Optional[datetime] = None
 
     def list_devices(self) -> list[dict]:
-        self._logger.debug("Listing audio input devices")
-        devices = sd.query_devices()
-        return [
-            {
-                "index": idx,
-                "name": device["name"],
-                "max_input_channels": device["max_input_channels"],
-                "default_samplerate": device["default_samplerate"],
-            }
-            for idx, device in enumerate(devices)
-            if device["max_input_channels"] > 0
-        ]
+        self._logger.debug("Listing curated audio input devices")
+        devices = list_input_devices()
+        try:
+            system_default = self.get_system_default_device()
+        except Exception as exc:
+            self._logger.debug("System default device unavailable: %s", exc)
+            system_default = None
+        log_dropdown_devices(devices, system_default=system_default)
+        return devices
+
+    def get_system_default_device(self) -> dict:
+        """Describe the OS default input device (for settings preview)."""
+        return describe_device(resolve_system_input_device_index())
+
+    def resolve_device_index(self, device_index: int | None = None) -> int:
+        """Resolve explicit index or system default from config."""
+        with self._lock:
+            if device_index is not None:
+                return resolve_input_device_index(device_index)
+            if self._config.get("use_system_device", True):
+                return resolve_system_input_device_index()
+            stored = self._config.get("device_index")
+            return resolve_input_device_index(stored)
 
     def get_device(self, device_index: int) -> dict:
         device_info = sd.query_devices(device_index)
@@ -189,8 +208,6 @@ class AudioCaptureService:
             self._logger.debug("Live tap enabled")
             self._live_enabled = True
             self._capture_stopped.clear()
-            # Debug: visible output
-            print(f"[RESUME-DBG] enable_live_tap() called: _live_enabled={self._live_enabled} capture_stopped_was={was_stopped}")
 
     def disable_live_tap(self) -> None:
         with self._lock:
@@ -254,21 +271,28 @@ class AudioCaptureService:
 
     def start_recording(
         self,
-        device_index: int,
+        device_index: Optional[int] = None,
         samplerate: int = 48000,
         channels: int = 2,
     ) -> dict:
         with self._lock:
+            resolved_index = self.resolve_device_index(device_index)
             nd_dbg(
                 "app/services/audio_capture.py:start_recording",
                 "mic_start_enter",
-                {"device_index": device_index, "samplerate": samplerate, "channels": channels},
+                {
+                    "device_index": device_index,
+                    "resolved_index": resolved_index,
+                    "samplerate": samplerate,
+                    "channels": channels,
+                },
                 run_id="pre-fix",
                 hypothesis_id="M1",
             )
             self._logger.debug(
-                "Start request: device=%s samplerate=%s channels=%s",
+                "Start request: device=%s (resolved=%s) samplerate=%s channels=%s",
                 device_index,
+                resolved_index,
                 samplerate,
                 channels,
             )
@@ -287,9 +311,9 @@ class AudioCaptureService:
                 raise RuntimeError("Recording already in progress")
 
             try:
-                device_info = sd.query_devices(device_index)
+                device_info = sd.query_devices(resolved_index)
             except Exception as exc:
-                self._logger.exception("Invalid audio device index: %s", device_index)
+                self._logger.exception("Invalid audio device index: %s", resolved_index)
                 nd_dbg(
                     "app/services/audio_capture.py:start_recording",
                     "mic_device_query_error",
@@ -328,7 +352,7 @@ class AudioCaptureService:
                 device_info.get("default_samplerate"),
             )
 
-            sd.default.device = device_index
+            sd.default.device = resolved_index
             sd.default.samplerate = samplerate
             sd.default.channels = channels
 
@@ -365,7 +389,7 @@ class AudioCaptureService:
             self._logger.info(
                 "Recording start: id=%s device=%s samplerate=%s channels=%s file=%s (direct_opus=%s)",
                 recording_id,
-                device_index,
+                resolved_index,
                 samplerate,
                 channels,
                 file_path,
@@ -397,7 +421,7 @@ class AudioCaptureService:
                     hypothesis_id="M2",
                 )
                 self._stream = sd.RawInputStream(
-                    device=device_index,
+                    device=resolved_index,
                     samplerate=samplerate,
                     channels=channels,
                     dtype="int16",
@@ -439,13 +463,19 @@ class AudioCaptureService:
 
     def update_config(
         self,
-        device_index: Optional[int],
-        samplerate: Optional[int],
-        channels: Optional[int],
+        device_index: Optional[int] = None,
+        samplerate: Optional[int] = None,
+        channels: Optional[int] = None,
+        use_system_device: Optional[bool] = None,
     ) -> None:
         with self._lock:
+            if use_system_device is not None:
+                self._config["use_system_device"] = use_system_device
+                if use_system_device:
+                    self._config["device_index"] = None
             if device_index is not None:
                 self._config["device_index"] = device_index
+                self._config["use_system_device"] = False
             if samplerate is not None:
                 self._config["samplerate"] = samplerate
             if channels is not None:

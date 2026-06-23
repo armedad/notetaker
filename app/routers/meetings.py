@@ -473,12 +473,7 @@ If you cannot determine the name, respond with:
 
     @router.post("/api/meetings/{meeting_id}/retry-finalization")
     def retry_finalization(meeting_id: str, payload: RetryFinalizationRequest = None) -> dict:
-        """Re-run finalization stages for a meeting.
-        
-        If specific stages are provided, runs them immediately in a background
-        thread (not queued). If no stages specified, clears failed stages and
-        wakes the background finalizer queue.
-        """
+        """Re-run finalization stages for a meeting via the sequential queue."""
         from app.services.background_finalizer import get_background_finalizer
         
         meeting = meeting_store.get_meeting(meeting_id)
@@ -504,44 +499,29 @@ If you cannot determine the name, respond with:
                     )
         
         bg_finalizer = get_background_finalizer()
-        
-        # If specific stages requested, run them immediately (not queued)
-        if stages_to_retry and bg_finalizer:
-            # Force stages to pending first
-            updated = meeting_store.force_retry_stages(meeting_id, stages_to_retry)
-            if not updated:
-                raise HTTPException(status_code=500, detail="Failed to update stages")
-            
-            # Run all requested stages in a single thread, serially in dependency order
-            # This ensures stages that depend on each other run correctly
-            bg_finalizer.run_stages_now(meeting_id, stages_to_retry)
-            
-            logger.info(
-                "Started immediate re-run: meeting_id=%s stages=%s",
-                meeting_id, stages_to_retry
-            )
-            
-            return {
-                "status": "started",
-                "meeting_id": meeting_id,
-                "stages_started": stages_to_retry,
-            }
+
+        if stages_to_retry:
+            stages = stages_to_retry
         else:
-            # No specific stages - re-run ALL finalization stages
-            all_stages = ["transcription", "diarization", "speaker_names"]
-            updated = meeting_store.force_retry_stages(meeting_id, all_stages)
-            if not updated:
-                raise HTTPException(status_code=500, detail="Failed to update stages")
-            
-            if bg_finalizer:
-                bg_finalizer.run_stages_now(meeting_id, all_stages)
-                logger.info("Started re-finalization of all stages for meeting %s", meeting_id)
-            
-            return {
-                "status": "started",
-                "meeting_id": meeting_id,
-                "stages_started": all_stages,
-            }
+            stages = ["transcription", "diarization", "speaker_names"]
+
+        updated = meeting_store.force_retry_stages(meeting_id, stages)
+        if not updated:
+            raise HTTPException(status_code=500, detail="Failed to update stages")
+
+        if bg_finalizer:
+            bg_finalizer.enqueue(meeting_id, reason="retry_finalization")
+            logger.info(
+                "Enqueued re-finalization: meeting_id=%s stages=%s",
+                meeting_id,
+                stages,
+            )
+
+        return {
+            "status": "started",
+            "meeting_id": meeting_id,
+            "stages_started": stages,
+        }
 
     @router.post("/api/meetings/{meeting_id}/auto-fix-finalization")
     def auto_fix_finalization(meeting_id: str) -> StreamingResponse:

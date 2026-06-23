@@ -118,10 +118,15 @@
                 <h2>Audio Devices</h2>
                 <button id="refresh-devices" class="secondary">Refresh</button>
               </div>
+              <p class="panel-description">
+                Choose where Notetaker records from. <strong>Use system settings</strong> follows the
+                default microphone in Windows Sound settings.
+              </p>
               <div class="row-setting">
                 <label for="device-select">Input device</label>
                 <select id="device-select"></select>
               </div>
+              <p id="system-device-hint" class="panel-description muted" style="display:none"></p>
               <div class="row-setting">
                 <label for="samplerate">Sample rate</label>
                 <input id="samplerate" type="number" value="48000" min="8000" step="1000" />
