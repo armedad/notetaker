@@ -22,9 +22,14 @@
         <span class="status error inline" id="global-error"></span>
         <span class="status inline" id="global-busy"></span>
         <div class="header-actions">
-          <div class="file-name-box hidden" id="file-name-box">
-            <span id="test-audio-status">No file</span>
-            <input id="test-audio-upload" type="file" class="file-input-hidden" accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.flac,.wma,.webm,.mp4" />
+          <div class="header-input-slot">
+            <div class="file-name-box hidden" id="file-name-box">
+              <span id="test-audio-status">No file</span>
+              <input id="test-audio-upload" type="file" class="file-input-hidden" accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.flac,.wma,.webm,.mp4" />
+            </div>
+            <div class="device-input-box hidden" id="device-input-box">
+              <select id="header-device-select" class="header-device-select" title="Input microphone"></select>
+            </div>
           </div>
           <select id="recording-source" class="header-select"></select>
           <button id="go-to-meeting" class="secondary" style="display:none">Go to meeting</button>
@@ -88,6 +93,6 @@
 
     <script src="/static/notifications.js"></script>
     <script src="/static/components/chat/chat-ui.js?v=1"></script>
-    <script src="/static/app.js?v=176"></script>
+    <script src="/static/app.js?v=177"></script>
   </body>
 </html>
