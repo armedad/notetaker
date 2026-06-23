@@ -1855,6 +1855,9 @@ body.meeting-layout {
 .grid-panel .output.transcript {
   font-family: inherit;
   white-space: pre-wrap;
+  flex: 1;
+  min-height: 0;
+  max-height: none;
 }
 
 /* Transcript live-scroll button */
