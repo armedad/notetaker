@@ -334,10 +334,12 @@ def create_settings_router(ctx) -> APIRouter:
         if not hf_token:
             hf_token = _hf_token_from_config()
 
-        if not hf_token:
+        from app.services.diarization.validation import hf_token_error_message, is_valid_hf_token
+
+        if not is_valid_hf_token(hf_token):
             return {
                 "status": "error",
-                "message": "HuggingFace token not configured. Get one at https://huggingface.co/settings/tokens",
+                "message": hf_token_error_message(),
             }
 
         if not os.path.exists(config_path):
