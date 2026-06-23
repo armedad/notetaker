@@ -10,6 +10,10 @@ from app.services.diarization.providers.base import (
     RealtimeDiarizationConfig,
     parse_diarization_config,
 )
+from app.services.diarization.validation import (
+    check_diarization_prerequisites,
+    format_diarization_start_error,
+)
 from app.services.diarization.providers.null_provider import NullProvider
 from app.services.diarization.providers.pyannote_provider import PyannoteProvider
 from app.services.diarization.providers.whisperx_provider import WhisperXProvider
@@ -111,6 +115,13 @@ class DiarizationService:
         if not self._config.enabled:
             return []
 
+        preflight_error = check_diarization_prerequisites(
+            self._config.hf_token,
+            self._config.device,
+        )
+        if preflight_error:
+            raise DiarizationError(preflight_error)
+
         is_path = isinstance(audio_source, str)
         _dbg(
             "app/services/diarization/__init__.py:run",
@@ -149,4 +160,4 @@ class DiarizationService:
                 hypothesis_id="H1",
             )
             self._logger.exception("Diarization failed: %s", exc)
-            raise
+            raise DiarizationError(format_diarization_start_error(exc)) from exc

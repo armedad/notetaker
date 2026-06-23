@@ -285,10 +285,12 @@ class BackgroundFinalizer:
                 {"segments_count": len(diarization_segments) if diarization_segments else 0})
             self._meeting_store.publish_event("meeting_updated", meeting_id)
         except Exception as exc:
-            error_detail = f"{type(exc).__name__}: {str(exc)}"
+            from app.services.diarization import DiarizationError
+            from app.services.diarization.validation import format_diarization_start_error
+            error_detail = format_diarization_start_error(exc)
             self._meeting_store.mark_finalization_stage_failed(meeting_id, "diarization", error_detail)
             self._meeting_store.publish_status_log(meeting_id, "diarization", "failed", {"error": error_detail})
-            raise
+            raise DiarizationError(error_detail) from exc
     
     def _run_speaker_names_stage(self, meeting_id: str, segments: list) -> None:
         """Run speaker names identification stage."""

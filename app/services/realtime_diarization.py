@@ -47,6 +47,12 @@ class RealtimeDiarizationService:
         self._annotations: list[dict] = []
         self._total_audio_duration: float = 0.0
         self._dbg_feed_count: int = 0
+        self._last_error: Optional[str] = None
+    
+    @property
+    def last_error(self) -> Optional[str]:
+        """Human-readable reason start() returned False, if any."""
+        return self._last_error
     
     def is_active(self) -> bool:
         """Check if real-time diarization is currently active."""
@@ -75,6 +81,7 @@ class RealtimeDiarizationService:
             True if started successfully, False otherwise
         """
         with self._lock:
+            self._last_error = None
             nd_dbg(
                 "app/services/realtime_diarization.py:start",
                 "rt_start_enter",
@@ -132,6 +139,19 @@ class RealtimeDiarizationService:
             try:
                 from app.services.diarization.providers.diart_provider import DiartProvider
                 from app.services.diarization.providers.base import DiarizationConfig, RealtimeDiarizationConfig
+                from app.services.diarization.validation import (
+                    check_diarization_prerequisites,
+                    format_diarization_start_error,
+                )
+
+                preflight_error = check_diarization_prerequisites(
+                    getattr(self._config, "hf_token", None),
+                    getattr(self._config, "device", "cpu") or "cpu",
+                )
+                if preflight_error:
+                    self._last_error = preflight_error
+                    self._logger.error("Real-time diarization preflight failed: %s", preflight_error)
+                    return False
                 
                 # Convert RealtimeDiarizationConfig to legacy DiarizationConfig for the provider
                 if hasattr(self._config, "performance_level") and not hasattr(self._config, "model"):
@@ -174,6 +194,7 @@ class RealtimeDiarizationService:
                 return True
                 
             except Exception as exc:
+                self._last_error = format_diarization_start_error(exc)
                 self._logger.exception("Failed to start real-time diarization: %s", exc)
                 nd_dbg(
                     "app/services/realtime_diarization.py:start",

@@ -726,6 +726,14 @@ function handleMeetingEvent(event) {
         setGlobalError(`Transcription error: ${event.data.message}`);
       }
       break;
+
+    case "diarization_error":
+      debugError("Diarization error event", event.data);
+      if (event.data?.message) {
+        setTranscriptStatus(`Diarization error: ${event.data.message}`);
+        NotificationCenter.error(`Diarization error: ${event.data.message}`, 15000);
+      }
+      break;
       
     case "meeting_updated":
       // General meeting update - do a full refresh

@@ -699,6 +699,9 @@ function startMeetingsEventStream() {
           errors,
         });
       }
+    } else if (payload.type === "diarization_error") {
+      const msg = payload.data?.message || "Diarization failed to start.";
+      NotificationCenter.error(`Diarization error: ${msg}`, 15000);
     }
     
     // Handle audio level events for real-time meter (skip refreshMeetings for these high-frequency events)

@@ -213,6 +213,16 @@ def create_transcription_router(
             if not skip_live_transcription:
                 session_rt_diarization = RealtimeDiarizationService(realtime_diar_cfg)
                 rt_diarization_active = session_rt_diarization.start(samplerate, channels)
+                if session_rt_diarization.is_enabled() and not rt_diarization_active:
+                    diar_error = (
+                        session_rt_diarization.last_error
+                        or "Real-time diarization failed to start."
+                    )
+                    logger.error("Real-time diarization failed: %s", diar_error)
+                    meeting_store.publish_event("diarization_error", meeting_id, {"message": diar_error})
+                    meeting_store.publish_status_log(
+                        meeting_id, "diarization", "failed", {"error": diar_error}
+                    )
             
             logger.info(
                 "Transcription thread started: meeting_id=%s samplerate=%s channels=%s rt_diar=%s live_transcription=%s audio_offset=%s",
