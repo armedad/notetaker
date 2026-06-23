@@ -14,12 +14,19 @@ from app.services.active_meeting_tracker import get_tracker, MeetingState
 
 
 class StartRecordingRequest(BaseModel):
-    device_index: int = Field(..., description="Input device index from /api/audio/devices")
+    device_index: Optional[int] = Field(
+        None,
+        description="Input device index; omit to use system default",
+    )
     samplerate: int = Field(48000, description="Sample rate in Hz")
     channels: int = Field(2, description="Number of input channels (<= device max)")
 
 
 class AudioConfigRequest(BaseModel):
+    use_system_device: Optional[bool] = Field(
+        None,
+        description="When true, use the OS default input device",
+    )
     device_index: Optional[int] = Field(
         None, description="Input device index from /api/audio/devices"
     )
@@ -48,8 +55,29 @@ def create_recording_router(
             json.dump(data, config_file, indent=2)
 
     @router.get("/api/audio/devices")
-    def list_devices() -> list[dict]:
-        return audio_service.list_devices()
+    def list_devices() -> dict:
+        devices = audio_service.list_devices()
+        try:
+            system_default = audio_service.get_system_default_device()
+        except Exception:
+            system_default = None
+        return {"devices": devices, "system_default": system_default}
+
+    def _merged_audio_settings(stored: dict, live: dict) -> dict:
+        use_system = stored.get("use_system_device")
+        if use_system is None:
+            # Legacy configs: explicit device_index means a fixed device.
+            use_system = stored.get("device_index") is None and live.get("device_index") is None
+        merged = {
+            "use_system_device": bool(use_system),
+            "device_index": stored.get("device_index", live.get("device_index")),
+            "samplerate": stored.get("samplerate", live.get("samplerate")),
+            "channels": stored.get("channels", live.get("channels")),
+            "source": stored.get("source", "device"),
+        }
+        if merged["use_system_device"]:
+            merged["device_index"] = None
+        return merged
 
     @router.get("/api/recording/status")
     def recording_status() -> dict:
@@ -135,17 +163,17 @@ def create_recording_router(
         config = load_config()
         stored = config.get("audio", {})
         live = audio_service.get_config()
-        merged = {
-            "device_index": stored.get("device_index", live.get("device_index")),
-            "samplerate": stored.get("samplerate", live.get("samplerate")),
-            "channels": stored.get("channels", live.get("channels")),
-            "source": stored.get("source", "device"),
-        }
+        merged = _merged_audio_settings(stored, live)
         audio_service.update_config(
             device_index=merged.get("device_index"),
             samplerate=merged.get("samplerate"),
             channels=merged.get("channels"),
+            use_system_device=merged.get("use_system_device"),
         )
+        try:
+            merged["system_default"] = audio_service.get_system_default_device()
+        except Exception:
+            merged["system_default"] = None
         return merged
 
     @router.post("/api/settings/audio")
@@ -153,8 +181,13 @@ def create_recording_router(
         logger.debug("set_audio_settings received: %s", payload.model_dump())
         data = load_config()
         audio_config = data.get("audio", {})
+        if payload.use_system_device is not None:
+            audio_config["use_system_device"] = payload.use_system_device
+            if payload.use_system_device:
+                audio_config["device_index"] = None
         if payload.device_index is not None:
             audio_config["device_index"] = payload.device_index
+            audio_config["use_system_device"] = False
         if payload.samplerate is not None:
             audio_config["samplerate"] = payload.samplerate
         if payload.channels is not None:
@@ -167,6 +200,7 @@ def create_recording_router(
             device_index=audio_config.get("device_index"),
             samplerate=audio_config.get("samplerate"),
             channels=audio_config.get("channels"),
+            use_system_device=audio_config.get("use_system_device"),
         )
         return {"status": "ok"}
 
