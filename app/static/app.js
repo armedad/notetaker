@@ -1,5 +1,6 @@
 const state = {
   devices: [],
+  systemDefault: null,
   recording: false,
   lastRecordingPath: null,
   liveController: null,
@@ -27,6 +28,8 @@ const state = {
   // Finalization tracking: meetingId -> { stageText, startedAt }
   finalizingMeetings: {},
 };
+
+const SYSTEM_DEVICE_VALUE = "system";
 
 // --- Multi-select helper functions ---
 function toggleMeetingSelection(meetingId) {
@@ -720,42 +723,46 @@ function startMeetingsEventStream() {
 }
 
 function renderDevices() {
-  const select = document.getElementById("device-select");
-  if (!select) {
-    return;
-  }
-  select.innerHTML = "";
-  state.devices.forEach((device) => {
-    const option = document.createElement("option");
-    option.value = device.index;
-    const label = device.display_name || device.name;
-    option.textContent = `${label} (${device.max_input_channels} ch)`;
-    select.appendChild(option);
-  });
+  const optionData = [
+    { value: SYSTEM_DEVICE_VALUE, text: "Use system settings" },
+    ...state.devices.map((device) => ({
+      value: String(device.index),
+      text: device.display_name || device.name,
+    })),
+  ];
 
-  if (state.devices.length > 0) {
+  for (const selectId of ["device-select", "header-device-select"]) {
+    const select = document.getElementById(selectId);
+    if (!select) {
+      continue;
+    }
+    const previous = select.value;
+    select.innerHTML = "";
+    optionData.forEach(({ value, text }) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      select.appendChild(option);
+    });
+    if (previous && select.querySelector(`option[value="${previous}"]`)) {
+      select.value = previous;
+    }
+  }
+
+  const settingsChannels = document.getElementById("channels");
+  if (settingsChannels && state.devices.length > 0) {
     const initial = state.devices[0];
-    document.getElementById("channels").value = Math.min(
-      2,
-      initial.max_input_channels
-    );
+    settingsChannels.value = Math.min(2, initial.max_input_channels);
   }
 }
 
 async function refreshDevices() {
-  const select = document.getElementById("device-select");
-  if (!select) {
-    return;
-  }
-  setOutput("Loading devices...");
   setGlobalBusy("Loading devices...");
   setGlobalError("");
   try {
     const data = await fetchJson("/api/audio/devices");
-    state.devices = (data.devices || data).map((device) => ({
-      ...device,
-      channels: Math.min(2, device.max_input_channels),
-    }));
+    state.devices = data.devices || [];
+    state.systemDefault = data.system_default || null;
     renderDevices();
     setOutput(`Loaded ${state.devices.length} devices.`);
   } catch (error) {
@@ -767,20 +774,30 @@ async function refreshDevices() {
 }
 
 async function loadAudioSettings() {
-  const select = document.getElementById("device-select");
-  if (!select) {
-    return;
-  }
   try {
     const data = await fetchJson("/api/settings/audio");
-    if (data.device_index !== null && data.device_index !== undefined) {
-      select.value = data.device_index;
+    state.systemDefault = data.system_default || state.systemDefault;
+    let selectValue = SYSTEM_DEVICE_VALUE;
+    if (data.use_system_device) {
+      selectValue = SYSTEM_DEVICE_VALUE;
+    } else if (data.device_index !== null && data.device_index !== undefined) {
+      selectValue = String(data.device_index);
     }
-    if (data.samplerate) {
-      document.getElementById("samplerate").value = data.samplerate;
+    for (const selectId of ["device-select", "header-device-select"]) {
+      const select = document.getElementById(selectId);
+      if (!select) {
+        continue;
+      }
+      const exists = Array.from(select.options).some((opt) => opt.value === selectValue);
+      select.value = exists ? selectValue : SYSTEM_DEVICE_VALUE;
     }
-    if (data.channels) {
-      document.getElementById("channels").value = data.channels;
+    const samplerateEl = document.getElementById("samplerate");
+    if (samplerateEl && data.samplerate) {
+      samplerateEl.value = data.samplerate;
+    }
+    const channelsEl = document.getElementById("channels");
+    if (channelsEl && data.channels) {
+      channelsEl.value = data.channels;
     }
   } catch (error) {
     setGlobalError("Audio settings load failed.");
@@ -1119,15 +1136,29 @@ async function stopFileRecording() {
 async function loadAudioSource() {
   try {
     const data = await fetchJson("/api/settings/audio");
-    state.recordingSource = data.source || "device";
+    state.recordingSource = data.source === "file" ? "file" : "device";
     renderRecordingSources();
-    const select = document.getElementById("recording-source");
-    if (select) {
-      select.value = state.recordingSource;
-    }
-    updateFileSourceVisibility();
+    updateSourceInputVisibility();
   } catch (error) {
     debugError("Audio source load failed", error);
+  }
+}
+
+async function saveHeaderDeviceSelection(selectValue) {
+  const useSystemDevice = selectValue === SYSTEM_DEVICE_VALUE;
+  const deviceIndex = useSystemDevice ? null : Number(selectValue);
+  await fetchJson("/api/settings/audio", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      source: "device",
+      use_system_device: useSystemDevice,
+      device_index: deviceIndex,
+    }),
+  });
+  const settingsSelect = document.getElementById("device-select");
+  if (settingsSelect) {
+    settingsSelect.value = selectValue;
   }
 }
 
@@ -1141,36 +1172,23 @@ function renderRecordingSources() {
   deviceOption.value = "device";
   deviceOption.textContent = "Microphone";
   select.appendChild(deviceOption);
-  state.devices.forEach((device) => {
-    const option = document.createElement("option");
-    option.value = `device:${device.index}`;
-    option.textContent = device.name;
-    select.appendChild(option);
-  });
   const fileOption = document.createElement("option");
   fileOption.value = "file";
   fileOption.textContent = "File";
   select.appendChild(fileOption);
 
-  if (state.recordingSource === "file") {
-    select.value = "file";
-  } else if (state.recordingSource === "device") {
-    select.value = "device";
-  } else if (state.recordingSource?.startsWith("device:")) {
-    select.value = state.recordingSource;
-  }
+  select.value = state.recordingSource === "file" ? "file" : "device";
 }
 
-function updateFileSourceVisibility() {
+function updateSourceInputVisibility() {
   const fileNameBox = document.getElementById("file-name-box");
-  if (!fileNameBox) {
-    return;
+  const deviceInputBox = document.getElementById("device-input-box");
+  const isFile = state.recordingSource === "file";
+  if (fileNameBox) {
+    fileNameBox.classList.toggle("hidden", !isFile);
   }
-  // Use visibility class instead of display:none to prevent layout shift
-  if (state.recordingSource === "file") {
-    fileNameBox.classList.remove("hidden");
-  } else {
-    fileNameBox.classList.add("hidden");
+  if (deviceInputBox) {
+    deviceInputBox.classList.toggle("hidden", isFile);
   }
 }
 
@@ -1919,15 +1937,26 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (value === "file") {
         state.recordingSource = "file";
         await saveAudioSource("file", null);
-      } else if (value.startsWith("device:")) {
-        const deviceIndex = Number(value.split(":")[1]);
-        state.recordingSource = `device:${deviceIndex}`;
-        await saveAudioSource("device", deviceIndex);
       } else {
         state.recordingSource = "device";
+        const headerSelect = document.getElementById("header-device-select");
+        const selectValue = headerSelect ? headerSelect.value : SYSTEM_DEVICE_VALUE;
+        await saveHeaderDeviceSelection(selectValue);
+      }
+      updateSourceInputVisibility();
+    });
+  }
+  const headerDeviceSelect = document.getElementById("header-device-select");
+  if (headerDeviceSelect) {
+    headerDeviceSelect.addEventListener("change", async () => {
+      const selectValue = headerDeviceSelect.value;
+      state.recordingSource = "device";
+      await saveHeaderDeviceSelection(selectValue);
+      const sourceSelectEl = document.getElementById("recording-source");
+      if (sourceSelectEl && sourceSelectEl.value !== "device") {
+        sourceSelectEl.value = "device";
         await saveAudioSource("device", null);
       }
-      updateFileSourceVisibility();
     });
   }
   const menuSettingsButton = document.getElementById("menu-settings");
