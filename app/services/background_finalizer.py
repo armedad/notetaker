@@ -1,9 +1,8 @@
 """
 Background finalizer service that processes meetings with incomplete finalization.
 
-This service runs as a daemon thread and periodically sweeps through meetings
-that need finalization (e.g., after server restart). It processes one meeting
-at a time to avoid CPU overload.
+Event-driven: meetings are enqueued when transcription completes, on retry, or
+at boot. A single worker thread processes the queue sequentially (no polling).
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import threading
 import time
 from typing import TYPE_CHECKING, Optional
@@ -39,15 +39,17 @@ def set_background_finalizer(instance: "BackgroundFinalizer") -> None:
     _background_finalizer = instance
 
 
+_BOOT_DELAY_SECONDS = 3.0
+_QUEUE_STOP_SENTINEL = object()
+
+
 class BackgroundFinalizer:
     """Background service that finalizes meetings with incomplete stages.
-    
-    Runs a sweep loop that:
-    - Finds meetings needing finalization
-    - Processes one meeting at a time
-    - Waits between meetings to avoid CPU overload
+
+    Meetings are enqueued explicitly (transcription complete, retry, boot sweep).
+    One worker thread drains the queue sequentially.
     """
-    
+
     def __init__(
         self,
         meeting_store: "MeetingStore",
@@ -59,26 +61,28 @@ class BackgroundFinalizer:
         idle_check_interval: float = 300.0,
     ) -> None:
         """Initialize the background finalizer.
-        
+
         Args:
             meeting_store: Meeting store instance
             summarization_service: Summarization service for summary/title generation
             diarization_service: Diarization service for speaker analysis
             config_path: Path to config.json for reading transcription settings
             delay_between_meetings: Seconds to wait between finalizing meetings
-            idle_check_interval: Seconds to wait before checking again when no work
+            idle_check_interval: Deprecated (unused); kept for call-site compatibility
         """
         self._meeting_store = meeting_store
         self._summarization = summarization_service
         self._diarization = diarization_service
         self._config_path = config_path
         self._delay_between_meetings = delay_between_meetings
-        self._idle_check_interval = idle_check_interval
-        
+        _ = idle_check_interval  # no longer used — finalization is event-driven
+
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._wake_event = threading.Event()
+        self._work_queue: queue.Queue = queue.Queue()
+        self._queued_ids: set[str] = set()
+        self._queue_lock = threading.Lock()
         
         # Track current work for status reporting (also tracked in global tracker)
         self._current_meeting_id: Optional[str] = None
@@ -119,7 +123,7 @@ class BackgroundFinalizer:
         self._running = True
         self._stop_event.clear()
         self._thread = threading.Thread(
-            target=self._sweep_loop,
+            target=self._worker_loop,
             name="BackgroundFinalizer",
             daemon=True,
         )
@@ -133,101 +137,60 @@ class BackgroundFinalizer:
         
         self._running = False
         self._stop_event.set()
-        self._wake_event.set()
+        self._work_queue.put(_QUEUE_STOP_SENTINEL)
         if self._thread:
             self._thread.join(timeout=5.0)
         _logger.info("BackgroundFinalizer stopped")
-    
-    def run_stages_now(self, meeting_id: str, stages: list[str]) -> None:
-        """Run multiple stages immediately in a new thread (not queued).
-        
-        Stages are run serially in dependency order within a single thread.
-        Uses per-meeting locking to prevent concurrent stage execution
-        (e.g., if background finalizer is also working on this meeting).
-        
-        Args:
-            meeting_id: The meeting ID
-            stages: List of stage keys ('transcription', 'diarization', 'speaker_names')
-        """
-        import threading
-        
-        # Define the correct dependency order
-        STAGE_ORDER = ["transcription", "diarization", "speaker_names"]
-        
-        # Sort requested stages by dependency order
-        ordered_stages = [s for s in STAGE_ORDER if s in stages]
-        
-        def _run():
-            meeting_lock = self._get_meeting_lock(meeting_id)
-            
-            # Acquire meeting lock to serialize with background finalizer
-            # and other manual requests for the same meeting
-            with meeting_lock:
-                _logger.info(
-                    "run_stages_now: acquired lock for meeting %s, running stages %s",
-                    meeting_id, ordered_stages
-                )
-                
-                # Determine trigger label based on stages
-                if len(ordered_stages) == 5:
-                    trigger = "manual_all"
-                    trigger_label = "Manual Re-finalization (All)"
-                elif len(ordered_stages) == 1:
-                    trigger = f"manual_{ordered_stages[0]}"
-                    trigger_label = f"Manual {ordered_stages[0].replace('_', ' ').title()}"
-                else:
-                    trigger = "manual_partial"
-                    trigger_label = f"Manual ({', '.join(ordered_stages)})"
-                
-                # Publish finalization group header
-                self._meeting_store.publish_status_log(
-                    meeting_id, "finalization", "started",
-                    data={"stages": ordered_stages, "label": trigger_label},
-                    trigger=trigger
-                )
-                
-                for stage in ordered_stages:
-                    # Refresh meeting data before each stage
-                    meeting = self._meeting_store.get_meeting(meeting_id)
-                    if not meeting:
-                        _logger.warning("run_stages_now: meeting %s not found", meeting_id)
-                        return
-                    
-                    audio_path = meeting.get("audio_path")
-                    transcript = meeting.get("transcript", {})
-                    segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
-                    
-                    try:
-                        if stage == "transcription":
-                            self._run_transcription_stage(meeting_id, audio_path)
-                        elif stage == "diarization":
-                            self._run_diarization_stage(meeting_id, audio_path, segments)
-                        elif stage == "speaker_names":
-                            self._run_speaker_names_stage(meeting_id, segments)
-                        else:
-                            _logger.warning("run_stages_now: unknown stage %s", stage)
-                    except Exception as exc:
-                        _logger.exception(
-                            "run_stages_now failed: meeting=%s stage=%s error=%s",
-                            meeting_id, stage, exc
-                        )
-                        # Continue to next stage even if one fails
-                
-                # Publish finalization group completion
-                self._meeting_store.publish_status_log(
-                    meeting_id, "finalization", "completed",
-                    data={"stages": ordered_stages},
-                    trigger=trigger
-                )
-                _logger.info("run_stages_now: completed for meeting %s", meeting_id)
-        
-        thread = threading.Thread(
-            target=_run,
-            name=f"manual-finalize-{meeting_id[:8]}",
-            daemon=True,
+
+    def enqueue(self, meeting_id: str, *, reason: str = "auto") -> bool:
+        """Queue a meeting for finalization if it has pending stages."""
+        if not meeting_id:
+            return False
+
+        meeting = self._meeting_store.get_meeting(meeting_id)
+        if not meeting or not self._meeting_store.needs_finalization(meeting):
+            return False
+
+        active = self._tracker.get_state(meeting_id)
+        if active and active.state == MeetingState.RECORDING:
+            _logger.debug(
+                "BackgroundFinalizer: not enqueueing %s — still recording",
+                meeting_id,
+            )
+            return False
+
+        with self._queue_lock:
+            if meeting_id in self._queued_ids:
+                return True
+            self._queued_ids.add(meeting_id)
+
+        self._work_queue.put(meeting_id)
+        _logger.info(
+            "BackgroundFinalizer: enqueued meeting %s (reason=%s)",
+            meeting_id,
+            reason,
         )
-        thread.start()
-        _logger.info("run_stages_now: started thread for meeting %s stages %s", meeting_id, ordered_stages)
+        return True
+
+    def enqueue_all_pending(self) -> int:
+        """Scan disk and enqueue every meeting that needs finalization."""
+        count = 0
+        try:
+            for meeting in self._meeting_store.list_meetings_needing_finalization():
+                meeting_id = meeting.get("id")
+                if meeting_id and self.enqueue(meeting_id, reason="scan"):
+                    count += 1
+        except Exception as exc:
+            _logger.warning(
+                "BackgroundFinalizer: enqueue_all_pending failed: %s",
+                exc,
+            )
+        return count
+
+    def run_stages_now(self, meeting_id: str, stages: list[str]) -> None:
+        """Queue a meeting after stages were forced to pending (manual retry)."""
+        _ = stages
+        self.enqueue(meeting_id, reason="manual_retry")
     
     def _run_transcription_stage(self, meeting_id: str, audio_path: str) -> None:
         """Run transcription stage using final model from config."""
@@ -344,102 +307,67 @@ class BackgroundFinalizer:
             raise
     
     def wake(self) -> None:
-        """Wake the finalizer to process pending meetings immediately."""
-        self._wake_event.set()
-    
+        """Enqueue all pending meetings (compat alias for debug/settings restart)."""
+        self.enqueue_all_pending()
+
     def get_status(self) -> dict:
-        """Get current status of the background finalizer.
-        
-        Returns:
-            Dict with:
-                - running: bool - whether the service is running
-                - active: bool - whether currently processing a meeting
-                - current_meeting_id: str or None
-                - current_stage: str or None
-                - pending_count: int - number of meetings waiting to be finalized
-        """
+        """Get current status of the background finalizer."""
         with self._lock:
-            pending = []
-            try:
-                pending = self._meeting_store.list_meetings_needing_finalization()
-            except Exception:
-                pass
-            
+            with self._queue_lock:
+                queued_count = len(self._queued_ids)
             return {
                 "running": self._running,
                 "active": self._current_meeting_id is not None,
                 "current_meeting_id": self._current_meeting_id,
                 "current_stage": self._current_stage,
-                "pending_count": len(pending),
+                "pending_count": queued_count + (1 if self._current_meeting_id else 0),
             }
-    
-    def _sweep_loop(self) -> None:
-        """Main loop that sweeps for and processes incomplete meetings."""
-        _logger.info("BackgroundFinalizer sweep loop started")
-        
-        # Initial delay to let the server fully start
-        self._stop_event.wait(10.0)
-        
+
+    def _enqueue_all_pending_at_boot(self) -> None:
+        """One-time boot scan: enqueue meetings left incomplete from a prior run."""
+        count = self.enqueue_all_pending()
+        _logger.info(
+            "BackgroundFinalizer: boot sweep enqueued %d meeting(s)",
+            count,
+        )
+
+    def _worker_loop(self) -> None:
+        """Process enqueued meetings sequentially (blocks on queue — no polling)."""
+        _logger.info("BackgroundFinalizer worker started")
+        self._stop_event.wait(_BOOT_DELAY_SECONDS)
+        if not self._stop_event.is_set():
+            self._enqueue_all_pending_at_boot()
+
         while not self._stop_event.is_set():
             try:
-                meeting = self._find_next_incomplete()
-                if meeting:
-                    meeting_id = meeting.get("id")
-                    _logger.info(
-                        "BackgroundFinalizer processing meeting: %s",
-                        meeting_id,
-                    )
-                    self._finalize_meeting(meeting)
-                    _logger.info(
-                        "BackgroundFinalizer completed meeting: %s",
-                        meeting_id,
-                    )
-                    # Wait before processing next meeting (but can be woken)
-                    self._wake_event.clear()
-                    self._wake_event.wait(self._delay_between_meetings)
-                    if self._stop_event.is_set():
-                        break
-                else:
-                    # No meetings need finalization, wait and check again
-                    _logger.debug(
-                        "BackgroundFinalizer: no meetings need finalization, "
-                        "sleeping %ds",
-                        self._idle_check_interval,
-                    )
-                    self._wake_event.clear()
-                    self._wake_event.wait(self._idle_check_interval)
-                    if self._stop_event.is_set():
-                        break
+                item = self._work_queue.get()
+            except Exception:
+                continue
+
+            if item is _QUEUE_STOP_SENTINEL:
+                break
+
+            meeting_id = str(item)
+            with self._queue_lock:
+                self._queued_ids.discard(meeting_id)
+
+            meeting = self._meeting_store.get_meeting(meeting_id)
+            if not meeting or not self._meeting_store.needs_finalization(meeting):
+                continue
+
+            _logger.info("BackgroundFinalizer processing meeting: %s", meeting_id)
+            try:
+                self._finalize_meeting(meeting)
             except Exception as exc:
                 _logger.exception(
-                    "BackgroundFinalizer sweep loop error: %s",
+                    "BackgroundFinalizer worker error for %s: %s",
+                    meeting_id,
                     exc,
                 )
-                # Wait before retrying on error
-                self._wake_event.clear()
-                self._wake_event.wait(60.0)
-    
-    def _find_next_incomplete(self) -> Optional[dict]:
-        """Find the oldest meeting that needs finalization.
-        
-        Skips meetings that are already being processed (recording or finalizing).
-        
-        Returns:
-            Meeting dict or None if no meetings need finalization
-        """
-        try:
-            meetings = self._meeting_store.list_meetings_needing_finalization()
-            for meeting in meetings:
-                meeting_id = meeting.get("id")
-                if meeting_id and not self._tracker.is_active(meeting_id):
-                    return meeting
-            return None
-        except Exception as exc:
-            _logger.warning(
-                "BackgroundFinalizer: error finding incomplete meetings: %s",
-                exc,
-            )
-        return None
+            _logger.info("BackgroundFinalizer completed meeting: %s", meeting_id)
+
+            if self._delay_between_meetings > 0 and not self._stop_event.is_set():
+                self._stop_event.wait(self._delay_between_meetings)
     
     def _set_current_work(self, meeting_id: Optional[str], stage: Optional[str]) -> None:
         """Update current work tracking."""
@@ -466,9 +394,27 @@ class BackgroundFinalizer:
         meeting_id = meeting.get("id")
         if not meeting_id:
             return
-        
+
+        pending_stages: list[str] = []
+
         # Register with global tracker (acts as mutex)
-        if not self._tracker.register(
+        existing = self._tracker.get_state(meeting_id)
+        if existing:
+            if existing.state == MeetingState.FINALIZING:
+                if not self._tracker.transition(
+                    meeting_id,
+                    MeetingState.BACKGROUND_FINALIZING,
+                    stage="starting",
+                ):
+                    return
+            else:
+                _logger.info(
+                    "BackgroundFinalizer: skipping %s - already active in tracker (%s)",
+                    meeting_id,
+                    existing.state.value,
+                )
+                return
+        elif not self._tracker.register(
             meeting_id,
             MeetingState.BACKGROUND_FINALIZING,
             stage="starting",
@@ -491,6 +437,12 @@ class BackgroundFinalizer:
         )
         
         try:
+            meeting = self._meeting_store.get_meeting(meeting_id)
+            if not meeting:
+                return
+            if meeting.get("status") not in ("completed", "processing"):
+                self._meeting_store.update_status(meeting_id, "processing")
+
             audio_path = meeting.get("audio_path")
             finalization = meeting.get("finalization", {})
             # Migrate old format if needed
@@ -588,7 +540,8 @@ class BackgroundFinalizer:
                 )
             
             # Stage 2: Speaker name identification
-            if needs_speaker_names and diarization_segments:
+            has_speaker_labels = any(seg.get("speaker") for seg in segments)
+            if needs_speaker_names and (diarization_segments or has_speaker_labels):
                 self._set_current_work(meeting_id, "speaker_names")
                 self._meeting_store.publish_finalization_status(
                     meeting_id, "Speaker Names...", 0.3
@@ -630,6 +583,10 @@ class BackgroundFinalizer:
             if meeting:
                 transcript = meeting.get("transcript", {})
                 segments = transcript.get("segments", []) if isinstance(transcript, dict) else []
+                existing_attendees = meeting.get("attendees", [])
+                has_speakers = any(seg.get("speaker") for seg in segments)
+                if has_speakers and not existing_attendees:
+                    self._meeting_store.update_transcript_speakers(meeting_id, segments)
                 transcript_text = "\n".join(
                     seg.get("text", "") for seg in segments if isinstance(seg, dict)
                 )

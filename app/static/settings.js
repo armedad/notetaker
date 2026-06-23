@@ -1,5 +1,6 @@
 const state = {
   devices: [],
+  systemDefault: null,
   modelOptions: {
     openai: [],
     anthropic: [],
@@ -409,22 +410,51 @@ function setProviderStatus(provider, success) {
   status.classList.toggle("error", !success);
 }
 
+const SYSTEM_DEVICE_VALUE = "system";
+
 function renderDevices() {
   const select = document.getElementById("device-select");
   select.innerHTML = "";
+
+  const systemOption = document.createElement("option");
+  systemOption.value = SYSTEM_DEVICE_VALUE;
+  systemOption.textContent = "Use system settings";
+  select.appendChild(systemOption);
+
   state.devices.forEach((device) => {
     const option = document.createElement("option");
-    option.value = device.index;
-    option.textContent = `${device.index} — ${device.name} (${device.max_input_channels} ch)`;
+    option.value = String(device.index);
+    const label = device.display_name || device.name;
+    option.textContent = label;
     select.appendChild(option);
   });
+
+  updateSystemDeviceHint();
+}
+
+function updateSystemDeviceHint() {
+  const hint = document.getElementById("system-device-hint");
+  const select = document.getElementById("device-select");
+  if (!hint || !select) return;
+
+  if (select.value === SYSTEM_DEVICE_VALUE) {
+    const name = state.systemDefault?.display_name || state.systemDefault?.name;
+    hint.textContent = name
+      ? `Currently: ${name} (Windows default input)`
+      : "Uses the default input device from Windows Sound settings.";
+    hint.style.display = "block";
+  } else {
+    hint.style.display = "none";
+  }
 }
 
 async function refreshDevices() {
   setGlobalBusy("Loading devices...");
   setGlobalError("");
   try {
-    state.devices = await fetchJson("/api/audio/devices");
+    const data = await fetchJson("/api/audio/devices");
+    state.devices = data.devices || [];
+    state.systemDefault = data.system_default || null;
     renderDevices();
   } catch (error) {
     setGlobalError(`Device refresh failed: ${error.message}`);
@@ -436,8 +466,14 @@ async function refreshDevices() {
 async function loadAudioSettings() {
   try {
     const data = await fetchJson("/api/settings/audio");
-    if (data.device_index !== null && data.device_index !== undefined) {
-      document.getElementById("device-select").value = data.device_index;
+    state.systemDefault = data.system_default || state.systemDefault;
+    const select = document.getElementById("device-select");
+    if (data.use_system_device) {
+      select.value = SYSTEM_DEVICE_VALUE;
+    } else if (data.device_index !== null && data.device_index !== undefined) {
+      const value = String(data.device_index);
+      const exists = Array.from(select.options).some((opt) => opt.value === value);
+      select.value = exists ? value : SYSTEM_DEVICE_VALUE;
     }
     if (data.samplerate) {
       document.getElementById("samplerate").value = data.samplerate;
@@ -445,6 +481,7 @@ async function loadAudioSettings() {
     if (data.channels) {
       document.getElementById("channels").value = data.channels;
     }
+    updateSystemDeviceHint();
   } catch (error) {
     setGlobalError(`Failed to load audio settings: ${error.message}`);
   }
@@ -527,7 +564,9 @@ async function loadTranscriptionSettings() {
 }
 
 async function saveAudioSettings() {
-  const deviceIndex = Number(document.getElementById("device-select").value);
+  const selectValue = document.getElementById("device-select").value;
+  const useSystemDevice = selectValue === SYSTEM_DEVICE_VALUE;
+  const deviceIndex = useSystemDevice ? null : Number(selectValue);
   const samplerate = Number(document.getElementById("samplerate").value);
   const channels = Number(document.getElementById("channels").value);
   setGlobalBusy("Saving audio settings...");
@@ -536,11 +575,13 @@ async function saveAudioSettings() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        use_system_device: useSystemDevice,
         device_index: deviceIndex,
         samplerate,
         channels,
       }),
     });
+    updateSystemDeviceHint();
   } catch (error) {
     setGlobalError(`Failed to save audio settings: ${error.message}`);
   } finally {
@@ -1154,7 +1195,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   document
     .getElementById("device-select")
-    .addEventListener("change", () => scheduleSave(saveAudioSettings));
+    .addEventListener("change", () => {
+      updateSystemDeviceHint();
+      scheduleSave(saveAudioSettings);
+    });
   document
     .getElementById("samplerate")
     .addEventListener("change", () => scheduleSave(saveAudioSettings));

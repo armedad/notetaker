@@ -18,6 +18,7 @@ from app.services.audio_capture import AudioCaptureService
 from app.services.audio_source import AudioDataSource, LiveAudioSource, AudioMetadata
 from app.services.meeting_store import MeetingStore
 from app.services.active_meeting_tracker import get_tracker, MeetingState
+from app.services.background_finalizer import get_background_finalizer
 from app.services.diarization import DiarizationService
 from app.services.diarization.providers.base import (
     DiarizationConfig,
@@ -467,14 +468,22 @@ def create_transcription_router(
                         # Transcription is done (re-transcribed, skipped, or used live segments)
                         meeting_store.mark_finalization_stage(meeting_id, "transcription")
 
-                        final_pipeline = get_pipeline(
-                            final_model if final_model != "none" else model_size,
-                            final_device, final_compute,
-                        )
-                        final_pipeline.finalize_meeting_with_diarization(
-                            meeting_id, disk_segments, audio_path
-                        )
-                        logger.info("Meeting finalized: meeting_id=%s segments=%d", meeting_id, len(disk_segments))
+                        bg_finalizer = get_background_finalizer()
+                        if bg_finalizer:
+                            bg_finalizer.enqueue(
+                                meeting_id,
+                                reason="transcription_complete",
+                            )
+                            logger.info(
+                                "Meeting enqueued for finalization: meeting_id=%s segments=%d",
+                                meeting_id,
+                                len(disk_segments),
+                            )
+                        else:
+                            logger.warning(
+                                "BackgroundFinalizer unavailable; meeting %s left with pending stages",
+                                meeting_id,
+                            )
                     else:
                         for stage in ("transcription", "diarization", "speaker_names", "summary"):
                             meeting_store.mark_finalization_stage(meeting_id, stage)
@@ -521,19 +530,24 @@ def create_transcription_router(
         source = payload.source
 
         # --- Start audio capture (only branch between mic and file) ---
+        recording_started = False
         if source == "mic":
-            if payload.device_index is None:
-                raise HTTPException(status_code=400, detail="device_index required for mic mode")
             try:
                 result = audio_service.start_recording(
                     device_index=payload.device_index,
                     samplerate=payload.samplerate,
                     channels=payload.channels,
                 )
+                recording_started = True
+                audio_service.enable_live_tap()
             except Exception as exc:
+                if recording_started:
+                    try:
+                        audio_service.stop_recording()
+                    except Exception as stop_exc:
+                        logger.warning("Rollback after failed mic start: %s", stop_exc)
                 logger.exception("Failed to start mic recording: %s", exc)
-                raise HTTPException(status_code=400, detail=f"Failed to start recording: {exc}")
-            audio_service.enable_live_tap()
+                raise HTTPException(status_code=400, detail=f"Failed to start recording: {exc}") from exc
             original_audio_path = None
         elif source == "file":
             original_audio_path = payload.audio_path
@@ -558,60 +572,71 @@ def create_transcription_router(
             raise HTTPException(status_code=400, detail=f"Invalid source: {source}. Must be 'mic' or 'file'.")
 
         # --- Everything below is identical for both modes ---
-        recording_id = result["recording_id"]
-        wav_path = result["file_path"]
-        samplerate = result["samplerate"]
-        channels = result["channels"]
+        try:
+            recording_id = result["recording_id"]
+            wav_path = result["file_path"]
+            samplerate = result["samplerate"]
+            channels = result["channels"]
 
-        if payload.meeting_id:
-            meeting = meeting_store.get_meeting(payload.meeting_id)
-            if not meeting:
+            if payload.meeting_id:
+                meeting = meeting_store.get_meeting(payload.meeting_id)
+                if not meeting:
+                    audio_service.stop_recording()
+                    raise HTTPException(status_code=404, detail="Meeting not found")
+            else:
+                meeting = meeting_store.create_file_meeting(
+                    wav_path, samplerate, channels,
+                    session_id=recording_id,
+                )
+
+            meeting_id = meeting.get("id")
+            if not meeting_id:
                 audio_service.stop_recording()
-                raise HTTPException(status_code=404, detail="Meeting not found")
-        else:
-            meeting = meeting_store.create_file_meeting(
-                wav_path, samplerate, channels,
-                session_id=recording_id,
+                raise HTTPException(status_code=500, detail="Failed to create meeting")
+            meeting_store.update_status(meeting_id, "in_progress")
+
+            # Set meeting context for audio level publishing
+            audio_service.set_meeting_context(meeting_id, meeting_store)
+            model_size = payload.model_size or live_default_size
+
+            if not active_tracker.register(
+                meeting_id,
+                MeetingState.RECORDING,
+                audio_source=source,
+                audio_path=wav_path,
+            ):
+                audio_service.stop_recording()
+                return {"status": "already_active", "meeting_id": meeting_id}
+
+            audio_source = LiveAudioSource(audio_service, recording_id)
+
+            thread = threading.Thread(
+                target=_run_transcription,
+                args=(meeting_id, audio_source, model_size),
+                daemon=True,
             )
-
-        meeting_id = meeting.get("id")
-        if not meeting_id:
-            audio_service.stop_recording()
-            raise HTTPException(status_code=500, detail="Failed to create meeting")
-        meeting_store.update_status(meeting_id, "in_progress")
-        
-        # Set meeting context for audio level publishing
-        audio_service.set_meeting_context(meeting_id, meeting_store)
-        model_size = payload.model_size or live_default_size
-
-        if not active_tracker.register(
-            meeting_id,
-            MeetingState.RECORDING,
-            audio_source=source,
-            audio_path=wav_path,
-        ):
-            audio_service.stop_recording()
-            return {"status": "already_active", "meeting_id": meeting_id}
-
-        audio_source = LiveAudioSource(audio_service, recording_id)
-
-        thread = threading.Thread(
-            target=_run_transcription,
-            args=(meeting_id, audio_source, model_size),
-            daemon=True,
-        )
-        transcription_jobs[meeting_id] = {
-            "meeting_id": meeting_id,
-            "audio_source": audio_source,
-            "audio_path": wav_path,
-            "original_audio_path": original_audio_path,
-        }
-        logger.info(
-            "Transcription started: source=%s meeting_id=%s wav=%s",
-            source, meeting_id, wav_path,
-        )
-        thread.start()
-        return {"status": "started", "meeting_id": meeting_id}
+            transcription_jobs[meeting_id] = {
+                "meeting_id": meeting_id,
+                "audio_source": audio_source,
+                "audio_path": wav_path,
+                "original_audio_path": original_audio_path,
+            }
+            logger.info(
+                "Transcription started: source=%s meeting_id=%s wav=%s",
+                source, meeting_id, wav_path,
+            )
+            thread.start()
+            return {"status": "started", "meeting_id": meeting_id}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            if source == "mic" and audio_service.is_recording():
+                try:
+                    audio_service.stop_recording()
+                except Exception as stop_exc:
+                    logger.warning("Rollback after failed transcription setup: %s", stop_exc)
+            logger.exception("Failed to set up transcription: %s", exc)
+            raise HTTPException(status_code=500, detail=f"Failed to start transcription: {exc}") from exc
 
     @router.post("/api/transcribe/simulate/stop")
     def simulate_stop(audio_path: str) -> dict:
@@ -717,6 +742,15 @@ def create_transcription_router(
                 "status": "stopping", 
                 "meeting_id": meeting_id, 
                 "message": "Stop signal sent. Processing of buffered audio continues in background."
+            }
+
+        if audio_service.is_recording():
+            audio_service.stop_recording()
+            logger.info("Stopped orphan recording without transcription job: meeting_id=%s", meeting_id)
+            return {
+                "status": "stopped",
+                "meeting_id": meeting_id,
+                "message": "Recording stopped (no active transcription job).",
             }
         
         return {"status": "not_found", "meeting_id": meeting_id}
@@ -872,9 +906,10 @@ def create_transcription_router(
         
         # Get audio device settings
         audio_config = audio_service.get_config()
-        device_index = audio_config.get("device_index")
-        if device_index is None:
-            raise HTTPException(status_code=400, detail="No audio device configured. Please configure in Settings.")
+        if audio_config.get("use_system_device", True):
+            device_index = None
+        else:
+            device_index = audio_config.get("device_index")
         samplerate = audio_config.get("samplerate", 48000)
         channels = audio_config.get("channels", 2)
         

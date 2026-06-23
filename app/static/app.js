@@ -721,11 +721,15 @@ function startMeetingsEventStream() {
 
 function renderDevices() {
   const select = document.getElementById("device-select");
+  if (!select) {
+    return;
+  }
   select.innerHTML = "";
   state.devices.forEach((device) => {
     const option = document.createElement("option");
     option.value = device.index;
-    option.textContent = `${device.index} — ${device.name} (${device.max_input_channels} ch)`;
+    const label = device.display_name || device.name;
+    option.textContent = `${label} (${device.max_input_channels} ch)`;
     select.appendChild(option);
   });
 
@@ -747,8 +751,8 @@ async function refreshDevices() {
   setGlobalBusy("Loading devices...");
   setGlobalError("");
   try {
-    state.devices = await fetchJson("/api/audio/devices");
-    state.devices = state.devices.map((device) => ({
+    const data = await fetchJson("/api/audio/devices");
+    state.devices = (data.devices || data).map((device) => ({
       ...device,
       channels: Math.min(2, device.max_input_channels),
     }));
@@ -1728,15 +1732,21 @@ async function startRecording() {
       await startFileRecording();
       return;
     }
-    const deviceIndex = Number(audioSettings.device_index);
+    const useSystemDevice = Boolean(audioSettings.use_system_device);
+    const deviceIndex = useSystemDevice ? null : Number(audioSettings.device_index);
     const samplerate = Number(audioSettings.samplerate);
     const channels = Number(audioSettings.channels);
-    if (!state.devices.length) {
-      state.devices = await fetchJson("/api/audio/devices");
+
+    let safeChannels = channels;
+    if (!useSystemDevice && deviceIndex !== null && !Number.isNaN(deviceIndex)) {
+      if (!state.devices.length) {
+        const devicePayload = await fetchJson("/api/audio/devices");
+        state.devices = devicePayload.devices || devicePayload;
+      }
+      const selected = state.devices.find((device) => device.index === deviceIndex);
+      const maxChannels = selected ? selected.max_input_channels : channels;
+      safeChannels = Math.min(channels, maxChannels || channels);
     }
-    const selected = state.devices.find((device) => device.index === deviceIndex);
-    const maxChannels = selected ? selected.max_input_channels : channels;
-    const safeChannels = Math.min(channels, maxChannels || channels);
 
     const data = await fetchJson("/api/transcribe/simulate", {
       method: "POST",
@@ -1761,6 +1771,15 @@ async function startRecording() {
     // #region agent log
     fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:startRecording',message:'startRecording_CATCH',data:{errorMessage:error.message,errorName:error.name,errorStack:error.stack?.substring(0,500)},timestamp:Date.now(),runId:'start-debug',hypothesisId:'H1'})}).catch(()=>{});
     // #endregion
+    try {
+      const recStatus = await fetchJson("/api/recording/status");
+      if (recStatus.recording) {
+        await fetchJson("/api/recording/stop", { method: "POST" });
+        await refreshRecordingStatus();
+      }
+    } catch (_) {
+      // Ignore rollback errors
+    }
     setOutput(`Failed to start: ${error.message}`);
     setStatusError("Start recording failed. Check Console Errors below.");
     setGlobalError("Start recording failed.");
@@ -1823,6 +1842,14 @@ async function stopRecording() {
     fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:stopRecording',message:'STOP_RECORDING_MIC_BRANCH',data:{meetingId:meetingId||null},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
     // #endregion
     if (!meetingId) {
+      const recStatus = await fetchJson("/api/recording/status");
+      if (recStatus.recording) {
+        await fetchJson("/api/recording/stop", { method: "POST" });
+        setOutput("Recording stopped.");
+        await refreshRecordingStatus();
+        await refreshMeetings();
+        return;
+      }
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/4caeca80-116f-4cf5-9fc0-b1212b4dcd92',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:stopRecording',message:'STOP_RECORDING_NO_MEETING_ID',data:{},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
       // #endregion
