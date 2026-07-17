@@ -24,6 +24,7 @@ from app.services.diarization.providers.base import (
     DiarizationConfig,
     BatchDiarizationConfig,
     RealtimeDiarizationConfig,
+    load_diarization_config_from_file,
     parse_diarization_config,
 )
 from app.services.transcription import (
@@ -124,6 +125,17 @@ def create_transcription_router(
     # Parse diarization config (supports both new split format and legacy single format)
     diarization_config = config.get("diarization", {})
     realtime_diar_cfg, batch_diar_cfg = parse_diarization_config(diarization_config)
+    config_path = ctx.config_path
+
+    def reload_diarization_config() -> tuple[RealtimeDiarizationConfig, BatchDiarizationConfig]:
+        """Reload diarization config from disk so Settings changes apply without restart."""
+        nonlocal realtime_diar_cfg, batch_diar_cfg
+        try:
+            realtime_diar_cfg, batch_diar_cfg = load_diarization_config_from_file(config_path)
+            diarization_service.update_config(batch_diar_cfg)
+        except Exception as exc:
+            logger.warning("Failed to reload diarization config from %s: %s", config_path, exc)
+        return realtime_diar_cfg, batch_diar_cfg
     
     # Batch diarization service (for post-transcription diarization)
     diarization_service = DiarizationService(batch_diar_cfg)
@@ -211,7 +223,8 @@ def create_transcription_router(
             session_rt_diarization = None
             rt_diarization_active = False
             if not skip_live_transcription:
-                session_rt_diarization = RealtimeDiarizationService(realtime_diar_cfg)
+                session_rt_cfg, _ = reload_diarization_config()
+                session_rt_diarization = RealtimeDiarizationService(session_rt_cfg)
                 rt_diarization_active = session_rt_diarization.start(samplerate, channels)
                 if session_rt_diarization.is_enabled() and not rt_diarization_active:
                     diar_error = (

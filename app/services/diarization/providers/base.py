@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import os
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
@@ -119,12 +121,15 @@ def parse_diarization_config(config_dict: dict) -> tuple[RealtimeDiarizationConf
     if "realtime" in config_dict or "batch" in config_dict:
         realtime_dict = config_dict.get("realtime", {})
         batch_dict = config_dict.get("batch", {})
+        root_hf_token = config_dict.get("hf_token") or None
+        batch_hf_token = batch_dict.get("hf_token") or root_hf_token
+        realtime_hf_token = realtime_dict.get("hf_token") or root_hf_token or batch_hf_token
         
         realtime_config = RealtimeDiarizationConfig(
             enabled=bool(realtime_dict.get("enabled", False)),
             provider=realtime_dict.get("provider", "none"),
             device=resolve_device(realtime_dict.get("device", "auto")),
-            hf_token=realtime_dict.get("hf_token"),
+            hf_token=realtime_hf_token,
             performance_level=float(realtime_dict.get("performance_level", 0.5)),
         )
         
@@ -133,7 +138,7 @@ def parse_diarization_config(config_dict: dict) -> tuple[RealtimeDiarizationConf
             provider=batch_dict.get("provider", "none"),
             model=batch_dict.get("model", "pyannote/speaker-diarization-3.1"),
             device=resolve_device(batch_dict.get("device", "auto")),
-            hf_token=batch_dict.get("hf_token"),
+            hf_token=batch_hf_token,
         )
         
         return realtime_config, batch_config
@@ -168,6 +173,17 @@ def parse_diarization_config(config_dict: dict) -> tuple[RealtimeDiarizationConf
     )
     
     return realtime_config, batch_config
+
+
+def load_diarization_config_from_file(
+    config_path: str,
+) -> tuple[RealtimeDiarizationConfig, BatchDiarizationConfig]:
+    """Read diarization settings from disk (always current vs boot-time cache)."""
+    if not os.path.exists(config_path):
+        return parse_diarization_config({})
+    with open(config_path, "r", encoding="utf-8") as config_file:
+        data = json.load(config_file)
+    return parse_diarization_config(data.get("diarization", {}))
 
 
 class DiarizationProvider(Protocol):

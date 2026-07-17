@@ -82,6 +82,11 @@ def format_diarization_start_error(exc: Exception) -> str:
     """Map common diarization exceptions to actionable user messages."""
     msg = str(exc)
     lower = msg.lower()
+    if "offline" in lower and ("hub" in lower or "huggingface" in lower):
+        return (
+            "Diarization models are not cached locally and HuggingFace is in offline mode. "
+            "Download pyannote models in Settings → HuggingFace Models, or enable auto-download."
+        )
     if any(
         needle in lower
         for needle in (
@@ -89,12 +94,21 @@ def format_diarization_start_error(exc: Exception) -> str:
             "unauthorized",
             "invalid token",
             "authentication",
+        )
+    ):
+        return hf_token_error_message()
+    if any(
+        needle in lower
+        for needle in (
             "gated repo",
             "cannot access gated",
             "access to model",
         )
     ):
-        return hf_token_error_message()
+        return (
+            "HuggingFace token is valid but pyannote model access was denied. "
+            "Accept the model licenses at huggingface.co for segmentation and embedding models."
+        )
     if "cuda" in lower and any(
         needle in lower
         for needle in ("not available", "no cuda", "cuda error", "no kernel image", "invalid device")
