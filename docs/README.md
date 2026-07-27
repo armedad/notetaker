@@ -23,13 +23,13 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 - **Multi-provider support:** OpenAI, Anthropic, Gemini, Grok, Ollama, LMStudio
 - Interactive attendee list with rename and AI-powered name suggestions
 
-**Try it:** `/Users/chee/projects/notetaker/notetaker.sh` → open http://localhost:6684
+**Try it:** `~/projects/notetaker/notetaker.sh` → open http://localhost:6684
 
-**Logs:** Each server run writes to `/Users/chee/projects/notetaker/logs/server_YYYY-MM-DD_HH-MM-SS.log`
+**Logs:** Each server run writes to `~/projects/notetaker/logs/server_YYYY-MM-DD_HH-MM-SS.log`
 
 **Version:** Stored in `VERSION.txt` (format: `v.major.minor.build`). Increment build number per deploy.
 
-**Launcher logs:** `/Users/chee/projects/notetaker/logs/launcher_YYYY-MM-DD_HH-MM-SS.log`
+**Launcher logs:** `~/projects/notetaker/logs/launcher_YYYY-MM-DD_HH-MM-SS.log`
 
 **Settings > AI Models:** Configure API keys and select which model to use for summarization, titles, and other LLM features. Format: `provider:model_id` (e.g., `openai:gpt-4o`).
 

@@ -8,7 +8,7 @@ Meeting notes are tedious to take manually. Existing tools require cloud connect
 
 ## Target User
 
-Personal tool for Chee. Dev-friendly setup is acceptable.
+Personal/local tool. Dev-friendly setup is acceptable.
 
 ## Core Features (Implemented)
 

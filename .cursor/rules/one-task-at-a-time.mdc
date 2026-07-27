@@ -5,11 +5,11 @@ alwaysApply: true
 
 # One task at a time
 
-Default to **one active feature or bug** per conversation unless Chee explicitly says to switch or start fresh.
+Default to **one active feature or bug** per conversation unless the maintainer explicitly says to switch or start fresh.
 
 ## When a new request looks like a different task
 
-If Chee asks to work on something that is clearly **not** the current in-progress task (different feature, bug, or area), **stop and verify** before starting:
+If the maintainer asks to work on something that is clearly **not** the current in-progress task (different feature, bug, or area), **stop and verify** before starting:
 
 > "We're currently working on [current task]. Did you mean to switch, or was that accidental?"
 
@@ -25,8 +25,8 @@ If Chee asks to work on something that is clearly **not** the current in-progres
 ## What does NOT require verification
 
 - Clarifications, tests, or follow-ups **on the current task**
-- Chee explicitly says "switch to…", "new task", "forget that", or "let's work on X instead"
-- The current task is clearly finished and Chee moves on
+- The maintainer explicitly says "switch to…", "new task", "forget that", or "let's work on X instead"
+- The current task is clearly finished and the maintainer moves on
 - Pure questions or read-only lookups that don't start new implementation work
 
 ## While working

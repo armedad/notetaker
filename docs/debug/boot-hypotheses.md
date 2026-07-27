@@ -1,6 +1,6 @@
 # Boot Hypotheses (Server Not Starting)
 
-Source: review of pending changes in `@coding/notetaker` and deploy logs in `/Users/chee/projects/notetaker/logs`.
+Source: review of pending changes in the git tree and deploy logs in `~/projects/notetaker/logs`.
 
 ## Evidence Snapshot
 
@@ -17,7 +17,7 @@ Source: review of pending changes in `@coding/notetaker` and deploy logs in `/Us
    - Expected behavior: import-time crash before uvicorn starts.
 
 2) **Deploy not updated**
-   - `@coding/notetaker` has fixes, but `/Users/chee/projects/notetaker` may still be running the older code.
+   - The git tree has fixes, but `~/projects/notetaker` may still be running the older code.
    - Expected behavior: same error persists after launch.
 
 3) **Dependency install failure**

@@ -48,7 +48,7 @@ function Resolve-NotetakerVenvPath {
         $line = Get-Content -LiteralPath $marker -TotalCount 1 -ErrorAction SilentlyContinue | Select-Object -First 1
         Add-Candidate ([string]$line)
     }
-    # Shared Chee apps venv: X:\.env == \\cc\apps\.env (same as gauth / voice-dictation)
+    # Shared apps venv: X:\.env (same as gauth / voice-dictation)
     Add-Candidate (Join-Path (Split-Path -Parent $ProjectDir) ".env")
     Add-Candidate (Join-Path $ProjectDir ".venv")
 

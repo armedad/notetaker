@@ -70,7 +70,7 @@ Response:
   "recording": true,
   "recording_id": "uuid",
   "started_at": "2026-02-05T10:23:48.941414",
-  "file_path": "/Users/chee/projects/notetaker/data/recordings/<file>.wav",
+  "file_path": "~/projects/notetaker/data/recordings/<file>.wav",
   "samplerate": 48000,
   "channels": 1,
   "dtype": "int16"
@@ -86,7 +86,7 @@ Response:
   "recording": true,
   "recording_id": "uuid",
   "started_at": "2026-02-05T10:23:48.941414",
-  "file_path": "/Users/chee/projects/notetaker/data/recordings/<file>.wav",
+  "file_path": "~/projects/notetaker/data/recordings/<file>.wav",
   "samplerate": 48000,
   "channels": 1,
   "dtype": "int16"

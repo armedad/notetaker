@@ -2,21 +2,19 @@
 
 Upstream: [armedad/notetaker](https://github.com/armedad/notetaker) — local meeting record, transcribe, diarize (summaries disabled in this fork).
 
-Maintainer context: **maintainer** — see `local\digital-twin\` (VOICE.md, philosophies/communication.md) for user-facing copy Chee would own.
-
 ## This app
 
 - **Stack:** Python FastAPI + static web UI (`app/`), entry `run.py` → `app.main:create_app`
 - **Default URL:** `http://127.0.0.1:6684` (`config.json` → `server.port`)
 - **Data:** `data/meetings/`, `data/recordings/`; config `config.json`
 - **Live STT:** chunks every `transcription.live_chunk_seconds` (default 5s) during recording — unlike `voice-dictation`, which batches STT after stop
-- **Start (macOS):** `./notetaker.sh` from a **deployed** copy (not the git tree — launcher exits if `.git` exists). Upstream `deploy.sh` rsyncs to `~/projects/notetaker` but only when `SRC_DIR` matches `*/coding/notetaker` — from `\\cc\apps\notetaker` use direct dev serve instead (below).
+- **Start (macOS):** `./notetaker.sh` from a **deployed** copy (not the git tree — launcher exits if `.git` exists). Upstream `deploy.sh` rsyncs to `~/projects/notetaker` but only when `SRC_DIR` matches `*/coding/notetaker` — from the shared apps root (`X:\notetaker`) use direct dev serve instead (below).
 - **Dev serve (from git tree):** `uvicorn run:app --host 127.0.0.1 --port 6684` (after `install.sh` / venv + deps)
 - **Start (Windows):** `notetaker.bat` after `install.bat` (admin)
 
 ## Shared Python venv (Windows)
 
-Same as gauth / voice-dictation: **`X:\.env`** (`\\cc\apps\.env`). Set once:
+Same as gauth / voice-dictation: **`X:\.env`** (shared apps venv). Set once:
 
 ```powershell
 $env:CHEEAPPS_VENV = "X:\.env"
@@ -32,7 +30,7 @@ Install writes `.notetaker_venv` with the resolved path. Do not use broken `X:\n
 
 ## Paths
 
-Git repo root: **`X:\notetaker`**. This tree is a **worktree** at **`X:\notetaker-dev`** (`\\cc\apps\notetaker-dev`).
+Git repo root: **`X:\notetaker`**. Dev worktree: **`X:\notetaker-dev`** (sibling under the shared apps root).
 
 ## Git worktrees (Windows)
 
@@ -43,7 +41,7 @@ Git repo root: **`X:\notetaker`**. This tree is a **worktree** at **`X:\notetake
 
 ```powershell
 git -C X:\notetaker worktree list
-git -c safe.directory=//cc/apps/notetaker-dev -C X:\notetaker-dev status
+git -C X:\notetaker-dev status
 ```
 
 Each worktree has its own `data/` (gitignored). Shared venv: `X:\.env` via `.notetaker_venv`.
@@ -56,18 +54,18 @@ Add more worktrees: `git -C X:\notetaker worktree add X:\notetaker-<issue> -b <b
 
 **All agent edits, git commits, and file changes go in `X:\notetaker` only.**
 
-Do not modify `X:\notetaker-dev` or other worktrees unless Chee explicitly asks. The dev worktree exists for Chee's manual parallel runs (port 6685); agents work in prod.
+Do not modify `X:\notetaker-dev` or other worktrees unless the maintainer explicitly asks. The dev worktree exists for manual parallel runs (port 6685); agents work in prod.
 
 ## Git worktrees (Windows)
 
 | Worktree | Path | Branch | Role |
 |----------|------|--------|------|
 | **prod (agent)** | `X:\notetaker` | `main` | stable / deploy-aligned — **default for all agent work** |
-| **dev** | `X:\notetaker-dev` | `notetaker-dev` | Chee-only parallel runs; agents do not edit here |
+| **dev** | `X:\notetaker-dev` | `notetaker-dev` | Manual parallel runs; agents do not edit here |
 
 ```powershell
 git -C X:\notetaker worktree list
-git -c safe.directory=//cc/apps/notetaker-dev -C X:\notetaker-dev status
+git -C X:\notetaker-dev status
 ```
 
 Each worktree has its own `data/` (gitignored). Shared venv: `X:\.env` via `.notetaker_venv`.
@@ -81,10 +79,10 @@ Add more worktrees for isolated issues: `git -C X:\notetaker worktree add X:\not
 Prefer **`X:\notetaker-dev`** for active development. Use `safe.directory` for the dev worktree:
 
 ```powershell
-git -c safe.directory=//cc/apps/notetaker-dev -C X:\notetaker-dev status
+git -C X:\notetaker-dev status
 ```
 
-Or once: `git config --global --add safe.directory '//cc/apps/notetaker-dev'`
+Or once: `git config --global --add safe.directory 'X:/notetaker-dev'`
 
 ## Key modules
 

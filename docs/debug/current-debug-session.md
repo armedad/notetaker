@@ -2,7 +2,7 @@
 
 **Status:** DIAGNOSING
 **Started:** 2026-02-05
-**Drive:** /Users/chee/projects/notetaker
+**Drive:** ~/projects/notetaker
 
 ---
 

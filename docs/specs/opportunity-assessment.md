@@ -6,7 +6,7 @@ Build a local-first meeting notetaker that captures audio, transcribes it, and e
 
 ## Target Customer
 
-Personal tool for Chee. Dev-friendly setup is acceptable. Optimized for one user's workflow.
+Personal/local tool. Dev-friendly setup is acceptable. Optimized for one user's workflow.
 
 ## Success
 

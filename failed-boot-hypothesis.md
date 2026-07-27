@@ -44,7 +44,7 @@ start_pid_writer() {
 
 **How to test:**
 ```bash
-cd /Users/chee/projects/notetaker
+cd ~/projects/notetaker
 source .venv/bin/activate
 python -c "import app.main; print('OK')"
 ```
@@ -76,7 +76,7 @@ from app.services.summarization import SummarizationConfig, SummarizationService
 
 **How to test:**
 ```bash
-cd /Users/chee/projects/notetaker
+cd ~/projects/notetaker
 source .venv/bin/activate
 python -c "
 import sys
@@ -142,7 +142,7 @@ PY
 
 **How to test:**
 ```bash
-cd /Users/chee/projects/notetaker
+cd ~/projects/notetaker
 source .venv/bin/activate
 python -c "
 import time
@@ -178,7 +178,7 @@ This import is inside the `diarize()` method (lazy), BUT `pyannote_provider.py` 
 
 **How to test:**
 ```bash
-cd /Users/chee/projects/notetaker
+cd ~/projects/notetaker
 source .venv/bin/activate
 python -c "
 print('Testing pyannote import...')
@@ -211,17 +211,17 @@ Untracked files:
 **Why it could prevent boot:**
 - `rsync` in `deploy.sh` may not copy untracked files if they were never added to git
 - If `deploy.sh` uses `--exclude-from=.gitignore` or similar, new files might be skipped
-- The deployed `/Users/chee/projects/notetaker` may be missing these critical new modules
+- The deployed `~/projects/notetaker` may be missing these critical new modules
 
 **How to test:**
 ```bash
 # Check if the new files exist in the deployed location
-ls -la /Users/chee/projects/notetaker/app/routers/meetings.py
-ls -la /Users/chee/projects/notetaker/app/routers/settings.py
-ls -la /Users/chee/projects/notetaker/app/services/diarization/__init__.py
-ls -la /Users/chee/projects/notetaker/app/services/llm/__init__.py
-ls -la /Users/chee/projects/notetaker/app/services/meeting_store.py
-ls -la /Users/chee/projects/notetaker/app/services/summarization.py
+ls -la ~/projects/notetaker/app/routers/meetings.py
+ls -la ~/projects/notetaker/app/routers/settings.py
+ls -la ~/projects/notetaker/app/services/diarization/__init__.py
+ls -la ~/projects/notetaker/app/services/llm/__init__.py
+ls -la ~/projects/notetaker/app/services/meeting_store.py
+ls -la ~/projects/notetaker/app/services/summarization.py
 ```
 
 If any of these are missing, `deploy.sh` is not copying all files.
@@ -254,7 +254,7 @@ provider_cache[key] = FasterWhisperProvider(
 
 **How to test:**
 ```bash
-cd /Users/chee/projects/notetaker
+cd ~/projects/notetaker
 rg "FasterWhisperProvider\(" --type py
 ```
 Verify all call sites pass both arguments.
@@ -277,7 +277,7 @@ This requires a `run.py` file at the project root that exposes an `app` object.
 
 **How to test:**
 ```bash
-cd /Users/chee/projects/notetaker
+cd ~/projects/notetaker
 source .venv/bin/activate
 python -c "from run import app; print(type(app))"
 ```
@@ -302,7 +302,7 @@ EXIT_CODE=${PIPESTATUS[0]}
 
 **How to test:**
 ```bash
-cd /Users/chee/projects/notetaker
+cd ~/projects/notetaker
 source .venv/bin/activate
 # Run uvicorn directly without tee/pipes
 python -u -m uvicorn run:app --host 127.0.0.1 --port 6684 --log-level debug
@@ -326,7 +326,7 @@ Watch the raw output. If it crashes with an error, you'll see it directly.
 Run this in the deployed directory to get immediate feedback:
 
 ```bash
-cd /Users/chee/projects/notetaker && source .venv/bin/activate && python -c "
+cd ~/projects/notetaker && source .venv/bin/activate && python -c "
 import sys
 print('Python:', sys.executable)
 print('Version:', sys.version)

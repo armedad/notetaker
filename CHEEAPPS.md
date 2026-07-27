@@ -13,7 +13,7 @@ Apps under `coding/` that share one virtualenv via **`CHEEAPPS_VENV`**:
 
 **Target: Python 3.12** for all new and recreated venvs.
 
-- **Windows (typical):** `X:\.env` on `\\cc\apps`
+- **Windows (typical):** `X:\.env` on the shared apps root
 - **macOS (typical):** `coding/.venv` or `$HOME/venvs/cheeapps-stack`
 
 Install helpers: [`scripts/cheeapps_python.sh`](scripts/cheeapps_python.sh), [`scripts/cheeapps_python.bat`](scripts/cheeapps_python.bat).

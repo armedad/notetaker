@@ -32,16 +32,16 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 
 ## Non-Negotiables (Read First)
 
-- **Source code location:** `/Users/chee/zapier ai project/coding/notetaker` (Cursor workspace)
+- **Source code location:** git tree (development workspace)
 - **Runtime location:** `~/projects/notetaker` (where the app runs)
-- **NEVER** edit files under `~/projects/notetaker` or `/Users/chee/projects/notetaker`
-- **ALWAYS** edit in the workspace and deploy via `./deploy.sh` (run from `coding/notetaker/`)
+- **NEVER** edit files under `~/projects/notetaker` (deploy target only)
+- **ALWAYS** edit in the git tree and deploy via `./deploy.sh`
 - **Runtime logs only:** use `~/projects/notetaker/logs/server_*.log` and `~/projects/notetaker/logs/server_runtime_debug.log`
-- **Do NOT** use `.cursor/debug.log` unless the user explicitly asks
+- **Do NOT** write debug output to IDE-specific log paths unless explicitly requested
 
 ## Pre-Flight Checklist (Must Do Before Any Change)
 
-- Confirm edits are in `/Users/chee/zapier ai project/coding/notetaker`
+- Confirm edits are in the git development tree
 - Confirm deployment uses `./deploy.sh` to `~/projects/notetaker`
 - Confirm logs are read from `~/projects/notetaker/logs/`
 

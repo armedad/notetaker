@@ -1,5 +1,5 @@
 {
-  // Workspace-only — applies when this notetaker folder is open in Cursor, not globally.
+  // Workspace-only — applies when this notetaker folder is open in this editor, not globally.
   "workbench.colorCustomizations": {
     "[Cursor Dark High Contrast]": {
       "editor.background": "#0c1018",

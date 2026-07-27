@@ -61,7 +61,7 @@
 
 **Status:** INVESTIGATING
 **Started:** 2026-02-07
-**Drive:** /Users/chee/projects/notetaker
+**Drive:** ~/projects/notetaker
 
 ---
 

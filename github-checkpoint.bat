@@ -37,7 +37,7 @@ goto join_args
 :joined_args
 set "commit_msg=!commit_msg:~1!"
 
-REM Worktrees on //cc/apps need safe.directory (see AGENTS.md).
+REM Worktrees on UNC shares may need safe.directory (see AGENTS.md).
 for %%I in ("%~dp0.") do set "REPO_DIR=%%~fI"
 set "REPO_SAFE=!REPO_DIR:\=/!"
 set "GIT_CONFIG_COUNT=1"

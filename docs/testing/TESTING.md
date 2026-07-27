@@ -41,7 +41,7 @@ The test harness provides automated end-to-end testing for in-progress features.
 
 ## Phase 0 — Server Skeleton
 
-1. Start the server: `/Users/chee/projects/notetaker/notetaker.sh`
+1. Start the server: `~/projects/notetaker/notetaker.sh`
 2. Open http://localhost:6684  
    Expected: `{"message":"Notetaker API running"}`
 3. Open http://localhost:6684/api/health  
@@ -49,7 +49,7 @@ The test harness provides automated end-to-end testing for in-progress features.
 
 ## Phase 1 — Audio Capture (API)
 
-1. Start the server: `/Users/chee/projects/notetaker/notetaker.sh`
+1. Start the server: `~/projects/notetaker/notetaker.sh`
 2. List devices:
    - `curl -s http://127.0.0.1:6684/api/audio/devices`
    - Find your virtual audio device index (BlackHole or VB-Cable)
@@ -62,16 +62,16 @@ The test harness provides automated end-to-end testing for in-progress features.
 
 ## Phase 3 — Transcription (API)
 
-1. Start the server: `/Users/chee/projects/notetaker/notetaker.sh`
+1. Start the server: `~/projects/notetaker/notetaker.sh`
 2. Record a short clip (Phase 1 steps) to produce a WAV file.
 3. Transcribe:
-   - `curl --max-time 120 -s -X POST http://127.0.0.1:6684/api/transcribe -H "Content-Type: application/json" -d '{"audio_path": "/Users/chee/projects/notetaker/data/recordings/<FILENAME>.wav"}'`
+   - `curl --max-time 120 -s -X POST http://127.0.0.1:6684/api/transcribe -H "Content-Type: application/json" -d '{"audio_path": "~/projects/notetaker/data/recordings/<FILENAME>.wav"}'`
 4. Expected:
    - JSON response with `segments` and timestamps
 
 ## Phase 4 — Live Transcription (Planned)
 
-1. Start the server: `/Users/chee/projects/notetaker/notetaker.sh`
+1. Start the server: `~/projects/notetaker/notetaker.sh`
 2. Start recording with live transcription enabled.
 3. Speak and verify transcript updates within a few seconds.
 4. Stop recording and confirm final transcript completeness.
@@ -96,7 +96,7 @@ The test harness provides automated end-to-end testing for in-progress features.
 
 ## Phase 6 — JSON Meetings (API)
 
-1. Start the server: `/Users/chee/projects/notetaker/notetaker.sh`
+1. Start the server: `~/projects/notetaker/notetaker.sh`
 2. Record a short clip and stop (Phase 1).
 3. Confirm meeting created:
    - `curl -s http://127.0.0.1:6684/api/meetings`
