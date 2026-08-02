@@ -1759,7 +1759,12 @@ async function startRecording() {
     const channels = Number(audioSettings.channels);
 
     let safeChannels = channels;
-    if (!useSystemDevice && deviceIndex !== null && !Number.isNaN(deviceIndex)) {
+    if (useSystemDevice) {
+      const maxChannels = Number(audioSettings.system_default?.max_input_channels);
+      if (Number.isFinite(maxChannels) && maxChannels > 0) {
+        safeChannels = Math.min(channels, maxChannels);
+      }
+    } else if (deviceIndex !== null && !Number.isNaN(deviceIndex)) {
       if (!state.devices.length) {
         const devicePayload = await fetchJson("/api/audio/devices");
         state.devices = devicePayload.devices || devicePayload;

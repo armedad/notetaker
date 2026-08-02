@@ -338,10 +338,15 @@ class AudioCaptureService:
             max_channels = int(device_info.get("max_input_channels", 0))
             if max_channels < 1:
                 raise RuntimeError("Selected device has no input channels")
-            if channels < 1 or channels > max_channels:
-                raise RuntimeError(
-                    f"Invalid channel count for device (max {max_channels})"
+            if channels < 1:
+                raise RuntimeError("Channel count must be at least 1")
+            if channels > max_channels:
+                self._logger.warning(
+                    "Requested %s channel(s) but device max is %s; clamping",
+                    channels,
+                    max_channels,
                 )
+                channels = max_channels
             if samplerate <= 0:
                 samplerate = int(device_info.get("default_samplerate", 48000))
 
