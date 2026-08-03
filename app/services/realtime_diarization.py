@@ -317,6 +317,7 @@ class RealtimeDiarizationService:
             if not self._is_active:
                 return None
             
+            found_speaker = None
             
             # First pass: exact match (timestamp falls within annotation range)
             for ann in self._annotations:

@@ -200,10 +200,14 @@ class DiartProvider:
                 run_id="pre-fix",
                 hypothesis_id="H5",
             )
-            self._logger.error(
-                "Diart not installed. Install with: pip install diart"
-            )
-            raise RuntimeError("Diart not installed") from exc
+            msg = str(exc)
+            if "diart" in msg.lower() or "No module named 'diart'" in msg:
+                self._logger.error(
+                    "Diart not installed. Install with: pip install diart"
+                )
+                raise RuntimeError("Diart not installed") from exc
+            self._logger.error("Diart pipeline import/load failed: %s", exc)
+            raise RuntimeError(f"Diart pipeline failed: {exc}") from exc
         except Exception as exc:
             import traceback
             error_str = str(exc).lower()
@@ -455,6 +459,7 @@ class DiartProvider:
                     chunk_idx += 1
                 
                 # Update cumulative offset for next buffer
+                buffer_duration = total_samples / float(sample_rate)
                 self._cumulative_offset += buffer_duration
                 
                 

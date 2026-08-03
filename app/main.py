@@ -11,8 +11,81 @@ os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 import json
+import inspect
 import logging
 import time
+
+
+def _patch_hf_hub_download_use_auth_token() -> None:
+    """Map deprecated use_auth_token -> token for pyannote.audio 3.3.x.
+
+    huggingface_hub 1.x removed use_auth_token; pyannote still passes it to
+    hf_hub_download, which breaks real-time diarization startup.
+    """
+    try:
+        import huggingface_hub
+        import huggingface_hub.file_download as file_download
+    except ImportError:
+        return
+
+    original = file_download.hf_hub_download
+
+    def hf_hub_download_compat(*args, **kwargs):
+        if "use_auth_token" in kwargs:
+            auth = kwargs.pop("use_auth_token")
+            if kwargs.get("token") is None:
+                kwargs["token"] = auth
+        return original(*args, **kwargs)
+
+    file_download.hf_hub_download = hf_hub_download_compat
+    huggingface_hub.hf_hub_download = hf_hub_download_compat
+
+
+def _patch_speechbrain_lazy_import_windows() -> None:
+    """Fix speechbrain LazyModule inspect.py detection on Windows.
+
+    Upstream only checks endswith('/inspect.py'). On Windows, inspect frames
+    use backslashes, so optional integrations (k2/flair/...) are imported during
+    pytorch_lightning inspect.stack() and crash diart startup.
+    """
+    try:
+        import importlib
+        import warnings
+
+        import speechbrain.utils.importutils as importutils
+    except ImportError:
+        return
+
+    def ensure_module(self, stacklevel: int):
+        importer_frame = None
+        try:
+            importer_frame = inspect.getframeinfo(sys._getframe(stacklevel + 1))
+        except AttributeError:
+            warnings.warn(
+                "Failed to inspect frame to check if we should ignore "
+                "importing a module lazily."
+            )
+        if importer_frame is not None:
+            filename = importer_frame.filename.replace("\\", "/")
+            if filename.endswith("/inspect.py"):
+                raise AttributeError()
+        if self.lazy_module is None:
+            try:
+                if self.package is None:
+                    self.lazy_module = importlib.import_module(self.target)
+                else:
+                    self.lazy_module = importlib.import_module(
+                        f".{self.target}", self.package
+                    )
+            except Exception as exc:
+                raise ImportError(f"Lazy import of {repr(self)} failed") from exc
+        return self.lazy_module
+
+    importutils.LazyModule.ensure_module = ensure_module
+
+
+_patch_hf_hub_download_use_auth_token()
+_patch_speechbrain_lazy_import_windows()
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
