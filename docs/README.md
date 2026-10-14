@@ -47,4 +47,4 @@ Local-first meeting notetaker that records system audio, transcribes with speake
 
 ## License
 
-Personal, non-commercial use is allowed. Credit is required. Modified versions need written permission. See [LICENSE](../LICENSE).
+GNU General Public License v3.0. See [LICENSE](../LICENSE).
